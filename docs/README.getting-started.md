@@ -3,7 +3,7 @@ There are two form factors of SONiC-VPP
  * Single docker container image running subset of functionality of SONiC
  * VM image running full functionality of SONiC
 
-This document explains single container image. Please refer to [README.sonic_vm.md]() on how to run a VM image.
+This document explains single container image. Please refer to [README.sonic_vm.md](README.sonic_vm.md) on how to run a VM image.
 
 The flow goes like this
  * Fullfill the requirements in pre-requisites
@@ -80,5 +80,5 @@ Below are the commands supported by the script
 > Note: *docker ps* will list two containers, one with user specified CONTAINER_NAME and the other will be named "CONTAINER-NAME-nss". The second container is just a helper container to bootstrap the interface ports. It does not have any functional processes in it.
 
 ## Simple SONiC-VPP Router(container) in action
-[Simple topology](README.simple_topo.md) show procedure to run a SONiC-VPP container with virtual interfaces. The same applies to PCI based interfaces except that the interfaces passed are physical interfaces(PCI).
+[Simple topology](README.simple.topo.md) shows procedure to run a SONiC-VPP container with virtual interfaces. The same applies to PCI based interfaces except that the interfaces passed are physical interfaces(PCI).
 
