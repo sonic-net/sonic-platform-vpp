@@ -82,7 +82,7 @@ The built vm image can be found at `build/sonic-buildimage/target/sonic-vpp.img.
 
 ### Testing the qemu VM image
 
-Refer to the [document](docs/README.sonic-vm.md) in docs directory for details. 
+Refer to the [document](docs/README.sonic_vm.md) in docs directory for details. 
 
 
 # Troubleshooting
