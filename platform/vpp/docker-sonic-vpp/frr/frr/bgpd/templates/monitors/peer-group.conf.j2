@@ -1,0 +1,12 @@
+!
+! template: bgpd/templates/BGPMON/peer-group.conf.j2
+!
+  neighbor BGPMON peer-group
+  neighbor BGPMON update-source {{ loopback0_ipv4 | ip }}
+  neighbor BGPMON route-map FROM_BGPMON in
+  neighbor BGPMON route-map TO_BGPMON out
+  neighbor BGPMON send-community
+  neighbor BGPMON maximum-prefix 1
+!
+! end of template: bgpd/templates/BGPMON/peer-group.conf.j2
+!

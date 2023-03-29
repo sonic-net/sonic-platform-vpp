@@ -1,0 +1,41 @@
+FROM docker-config-engine-buster-{{DOCKER_USERNAME}}:{{DOCKER_USERTAG}}
+
+ARG docker_container_name
+
+RUN [ -f /etc/rsyslog.conf ] && sed -ri "s/%syslogtag%/$docker_container_name#%syslogtag%/;" /etc/rsyslog.conf
+
+## Make apt-get non-interactive
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update
+
+RUN apt-get install -f -y libcap2-bin
+
+COPY \
+{% for deb in docker_syncd_vpp_debs.split(' ') -%}
+debs/{{ deb }}{{' '}}
+{%- endfor -%}
+debs/
+
+RUN  VPP_INSTALL_SKIP_SYSCTL=1 dpkg -i \
+{% for deb in docker_syncd_vpp_debs.split(' ') -%}
+debs/{{ deb }}{{' '}}
+{%- endfor %} || apt-get install -f -y
+
+COPY ["start.sh", "/usr/bin/"]
+
+COPY ["supervisord.conf", "/etc/supervisor/conf.d/"]
+COPY ["files/supervisor-proc-exit-listener", "/usr/bin"]
+COPY ["critical_processes", "/etc/supervisor/"]
+
+COPY scripts/vpp_hostif.sh /usr/local/bin/
+COPY scripts/vpp_init.sh /usr/local/bin/
+
+COPY conf/vpp_init.conf /etc/supervisor/conf.d/
+COPY conf/startup.conf.tmpl  /etc/vpp/
+
+## Clean up
+RUN apt-get clean -y; apt-get autoclean -y; apt-get autoremove -y
+RUN rm -rf /debs
+
+ENTRYPOINT ["/usr/local/bin/supervisord"]

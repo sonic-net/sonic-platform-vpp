@@ -1,0 +1,20 @@
+{
+    "DEVICE_METADATA": {
+        "localhost": {
+            "bgp_asn": "65100",
+	    "default_bgp_status": "up",
+            "mac": "{{ system_mac }}",
+            "buffer_model": "traditional",
+	    "type": "LeafRouter"
+        }
+    },
+{% set features = ["swss", "bgp", "teamd", "nat", "database", "lldp", "dhcp_relay", "macsec"] %}
+    "FEATURE": {
+{% for feature in features %}
+        "{{ feature }}": {
+            "state": "enabled"
+        }{% if not loop.last %},{% endif %}
+{% endfor %}
+    }
+}
+

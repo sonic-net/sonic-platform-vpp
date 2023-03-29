@@ -1,0 +1,13 @@
+libsaimetadata-dbg_1.0.0_amd64.deb debug extra
+libsaimetadata-dev_1.0.0_amd64.deb libdevel optional
+libsaimetadata_1.0.0_amd64.deb libs optional
+libsairedis-dbg_1.0.0_amd64.deb debug extra
+libsairedis-dev_1.0.0_amd64.deb libdevel optional
+libsairedis_1.0.0_amd64.deb libs optional
+libsaivpp-dbg_1.0.0_amd64.deb debug extra
+libsaivpp-dev_1.0.0_amd64.deb libdevel optional
+libsaivpp_1.0.0_amd64.deb libs optional
+python-pysairedis_1.0.0_amd64.deb libs optional
+python3-pysairedis_1.0.0_amd64.deb libs optional
+syncd-vpp-dbg_1.0.0_amd64.deb debug extra
+syncd-vpp_1.0.0_amd64.deb net optional

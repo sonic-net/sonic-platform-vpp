@@ -1,34 +1,18 @@
 # Description
-SONiC-VPP is a high performance software data path platform based on SONiC Netowork Operating System.
+SONiC-VPP is a platform under SONIC that supports VPP data plane. For more details about VPP see [What is VPP](https://s3-docs.fd.io/vpp/23.06/) 
 
-# What is SONiC ?
-[SONiC](https://github.com/sonic-net/SONiC/wiki) is an open source project for network routers and switches. The SONiC provisions the data plane layer using SAI API. The data plane layer can be an ASIC or software data plane. Usually the platform specific SDK+SAI library take care of configuring the data plane.
-
-# What is VPP ?
-[VPP](https://fd.io/technology/) is a high performance software data path software which can run on commodity systems(x86, ARM etc.)
-
-# Why SONiC-VPP ?
-SONiC currently lacks a high performance software data path platform which can be used as router or switch in a non-hardware(non-ASIC) system.
-
-SONiC-VPP provide software data path which:
-
-* Is performant 
-* Is feature rich 
-* Is Open sourced and community driven
-* Runs on multiple commodity hardware (x86, ARM, Foundational NICs, SmartNIC / DPUs) 
-* Overcomes the limitations of existing SONiC Virtual Switch 
-
-# SONiC-VPP image build
-
-This repo contains  scripts, Makefiles, configuration file, Docker files etc to build a VPP Sonic image. It also pulls some extra git repos and makes these repos part of SONiC build. In this process it will prompt for user/password while cloning. There are some VPP platform specific Makefile, config files which are applied to the sonic-buildimage repo to fecilitate the successful build of the SONiC-VPP image.
+This repo contains  scripts, Makefiles, configuration file, Docker files etc to build a SONIC-VPP image. It also pulls some extra git repos and makes these repos part of SONiC build. In this process it will prompt for user/password while cloning. There are some VPP platform specific Makefile, config files which are applied to the sonic-buildimage repo to fecilitate the successful build of the SONiC-VPP image.
 
 > Note: The first build takes good amount of time. The SONiC image build has two parts to it, [backend and frontend](https://github.com/sonic-net/sonic-buildimage/blob/master/README.buildsystem.md). The backend consumes a lot of time when the build is done first time. The follow on builds only do the frontend.
 
-## Prerequisites
+**Caveat**- *The documentation for this project is a work in progress and a bit terse. We hope to address this in coming weeks.* 
 
- * Install pip and jinja in host build machine, execute below commands if j2/j2cli is not available:
+# Prerequisites
+ * Linux host machine running ubuntu 18.x or later distribution (Ubuntu 20.x is preferred).
+ * Install the following packages 
 
 ```
+sudo apt-get install -y make automake autoconf
 sudo apt install -y python3-pip
 sudo pip3 install j2cli
 ```
@@ -37,15 +21,22 @@ sudo pip3 install j2cli
     * Add current user to the docker group: `sudo gpasswd -a ${USER} docker`
     * Log out and log back in so that your group membership is re-evaluated
 
-## SONiC VPP image build
-The below command will pull the required repos, setup the vpp platform, configure and then initiate the image build.
+# SONiC VPP image build
+There are two types of sonic-vpp image build targets supported
+ * Single docker container image (*docker-sonic-vpp.gz*) with a subset of SONIC features
+ * Comprehensive SONiC-VPP qemu VM image
+
+## Building a single container image
+
+Issue the command shown below. It will pull the required repos, setup the vpp platform, configure and then initiate the image build.
+
 ```
 make sonic
 ```
 
-If internet access is only through a proxy use below command
+Note- If your internet access is only through a proxy, set the http_proxy and issue the command as suggested below
 ```
-http_proxy=http_proxy_url http_proxy=https_proxy_url no_proxy=localhost,127.0.0.1,other_hosts_or_ipaddresses make sonic
+http_proxy=http_proxy_url https_proxy=https_proxy_url no_proxy=localhost,127.0.0.1,<other_hosts_or_ipaddresses> make sonic
 ```
 
 To use a different label for SONiC build
@@ -53,8 +44,6 @@ To use a different label for SONiC build
 SONIC_CHECKOUT_LABEL=sonic_git_commit_label make sonic
 ```
 > Note: Refer the instructions above on how to pass proxy if internet access is only though proxy
-
-when "git clone" prompts for username and password please enter your CEC used-id and password.
 
 The ./build directory contains all the repos pulled. The ./build/sonic-buildimage/target directory contains the
 sonic vpp targets.
@@ -76,22 +65,27 @@ SONIC_CHECKOUT_LABEL=sonic_git_commit_label make sonic_build
 
 > Note : The nightly build labels can be found [*here*](https://sonic-build.azurewebsites.net/ui/sonic/pipelines/142/builds?branchName=master)
 
-The built image can be found at ./build/sonic-buildimage/target/docker-sonic-vpp.gz.
+The built image can be found at `./build/sonic-buildimage/target/docker-sonic-vpp.gz`.
 
-The built docker-sonic-vpp.gz image needs to be loaded into the local docker before instantiating SONiC-VPP container
-as detailed in [Simple SONiC-VPP container testing](https://wwwin-github.cisco.com/shaship/sonic-platform-vpp/blob/master/docs/README.simple.topo.md).
-```
-docker load < ./build/sonic-buildimage/target/docker-sonic-vpp.gz
-```
-## How to build a SONiC-VPP vm image(kvm image actually) ?
+### Testing the single container image
+
+Refer to the [Getting started](docs/README.getting-started.md) document in docs directory for details. 
+
+
+## Building a KVM VM image 
 Run below make command (in case of proxy use the proxy parameters as mentioned above in the "make sonic" build)
 ```
 make sonic_vm
 ```
 
-The built vm image can be found at build/sonic-buildimage/target/sonic-vpp.img.gz. To test the image refer to the [vm_image README](https://wwwin-github.cisco.com/shaship/sonic-platform-vpp/blob/master/docs/README.sonic_vm)
+The built vm image can be found at `build/sonic-buildimage/target/sonic-vpp.img.gz`.
 
-## Troubleshooting
+### Testing the qemu VM image
+
+Refer to the [document](docs/README.sonic-vm.md) in docs directory for details. 
+
+
+# Troubleshooting
 
 http(s)_proxy driven make fails sometimes with package download failure. It says hash mismatch. This may be caused
 by some bug in the proxy which corrupts some bytes or downloaded package is incomplete. The fix is to run the
