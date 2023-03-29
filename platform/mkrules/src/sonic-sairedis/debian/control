@@ -1,0 +1,130 @@
+Source: sonic
+Maintainer: Shashidhar Patil <shaship@cisco.com>
+Section: net
+Priority: optional
+Build-Depends: debhelper (>=9), autotools-dev, libzmq5-dev
+Standards-Version: 1.0.0
+
+Package: syncd
+Architecture: any
+Conflicts: syncd-rpc, syncd-vpp
+Description: This package contains sync daemon for SONiC project.
+  This sync daemon syncs the ASIC_DB in Redis database and the real ASIC via SAI.
+
+Package: syncd-rpc
+Architecture: any
+Conflicts: syncd, syncd-vpp
+Description: This package contains sync daemon with rpc for SONiC project.
+  This sync daemon syncs the ASIC_DB in Redis database and the real ASIC via SAI.
+  This daemon contains saithrift rpc library for remote control of an ASIC.
+
+Package: syncd-vpp
+Architecture: any
+Conflicts: syncd-rpc, syncd
+Description: This package contains sync daemon for SONiC project linked with VPP data path.
+  This sync daemon syncs the ASIC_DB in Redis database and the real ASIC via SAI.
+
+Package: libsairedis
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Pre-Depends}
+Section: libs
+Description: This package contains SAI-Redis implementation for SONiC project.
+
+Package: libsairedis-dev
+Architecture: any
+Depends: libsairedis (= ${binary:Version}), libzmq5-dev
+Section: libdevel
+Description: This package contains development files for SAI-Redis.
+
+Package: libsaivpp
+Architecture: any
+Section: libs
+Description: This package contains SAI-VPP implementation for SONiC project.
+
+Package: libsaivpp-dev
+Architecture: any
+Depends: libsaivpp (= ${binary:Version})
+Section: libdevel
+Description: This package contains development files for SAI-VPP.
+
+Package: libsaimetadata
+Architecture: any
+Section: libs
+Description: This package contains SAI-Metadata implementation for SONiC project.
+
+Package: libsaimetadata-dev
+Architecture: any
+Depends: libsaimetadata (= ${binary:Version})
+Section: libdevel
+Description: This package contains development files for SAI-Metadata.
+
+Package: syncd-dbg
+Architecture: any
+Section: debug
+Priority: extra
+Conflicts: syncd-rpc-dbg, syncd-vpp
+Depends:
+    syncd (= ${binary:Version}),
+    ${misc:Depends}
+Description: debugging symbols for syncd
+
+Package: syncd-rpc-dbg
+Architecture: any
+Section: debug
+Priority: extra
+Conflicts: syncd-dbg, syncd-vpp
+Depends:
+    syncd-rpc (= ${binary:Version}),
+    ${misc:Depends}
+Description: debugging symbols for syncd-rpc
+
+Package: syncd-vpp-dbg
+Architecture: any
+Section: debug
+Priority: extra
+Conflicts: syncd-dbg, syncd-rpc-dbg
+Depends:
+    syncd-vpp (= ${binary:Version}),
+    ${misc:Depends}
+Description: debugging symbols for syncd-vpp
+
+Package: libsairedis-dbg
+Architecture: any
+Section: debug
+Priority: extra
+Depends:
+    libsairedis (= ${binary:Version}),
+    ${misc:Depends}
+Description: debugging symbols for libsairedis
+
+Package: libsaivpp-dbg
+Architecture: any
+Section: debug
+Priority: extra
+Depends:
+    libsaivpp (= ${binary:Version}),
+    ${misc:Depends}
+Description: debugging symbols for libsaivpp
+
+Package: libsaimetadata-dbg
+Architecture: any
+Section: debug
+Priority: extra
+Depends:
+    libsaimetadata (= ${binary:Version}),
+    ${misc:Depends}
+Description: debugging symbols for libsaimetadata
+
+Package: python-pysairedis
+Architecture: any
+Build-Profiles: <!nopython2>
+Depends: ${shlibs:Depends}, ${misc:Pre-Depends}
+Section: libs
+Description: This package contains Switch State Service sairedis Python2 library.
+
+Package: python3-pysairedis
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Pre-Depends}
+Section: libs
+Description: This package contains Switch State Service sairedis Python3 library.
+

@@ -1,0 +1,29 @@
+clusters:
+  hosts:
+    cluster1:
+      ansible_user: {{ username }}
+      ansible_ssh_pass: {{ password }}
+      ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+      ansible_become: yes 
+      ansible_become_method: sudo
+      ansible_become_password: {{ password }}
+      ansible_host: {{ host }}
+
+      sonic_vm1_Loopback0: 20.0.4.1
+      sonic_vm1_ethernet0: 20.0.1.1
+      sonic_vm1_ethernet1: 20.0.3.1
+
+      sonic_vm2_Loopback0: 20.0.4.2
+      sonic_vm2_ethernet0: 20.0.2.1
+      sonic_vm2_ethernet1: 20.0.3.2
+
+      sonic_host_tap_1: 20.0.1.2
+      sonic_host_tap_2: 20.0.2.2
+      sonic_host_1_prefix: 20.0.1.0/24
+      sonic_host_2_prefix: 20.0.2.0/24
+      sonic_vpp_prefix: 20.0.3.0/24
+
+      bgp_as: 65100
+      sonic_vm_password: YourPaSsWoRd
+
+     

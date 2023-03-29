@@ -1,0 +1,33 @@
+# Copyright (c) 2023 Cisco and/or its affiliates.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+diff --git a/files/build_templates/per_namespace/syncd.service.j2 b/files/build_templates/per_namespace/syncd.service.j2
+index b509e7732..687553800 100644
+--- a/files/build_templates/per_namespace/syncd.service.j2
++++ b/files/build_templates/per_namespace/syncd.service.j2
+@@ -23,9 +23,15 @@ Before=ntp-config.service
+ [Service]
+ User=root
+ Environment=sonic_asic_platform={{ sonic_asic_platform }}
++{% if sonic_asic_platform == 'vpp' %}
++ExecStartPre=/usr/local/bin/vpp_ports_setup.sh start
++{% endif %}
+ ExecStartPre=/usr/local/bin/syncd.sh start{% if multi_instance == 'true' %} %i{% endif %}
+ ExecStart=/usr/local/bin/syncd.sh wait{% if multi_instance == 'true' %} %i{% endif %}
+ ExecStop=/usr/local/bin/syncd.sh stop{% if multi_instance == 'true' %} %i{% endif %}
++{% if sonic_asic_platform == 'vpp' %}
++ExecStopPost=/usr/local/bin/vpp_ports_setup.sh stop
++{% endif %}
+ {% if sonic_asic_platform == 'mellanox' %}
+ TimeoutStartSec=480
+ {% endif %}

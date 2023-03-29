@@ -1,0 +1,11 @@
+# Base docker build
+FROM docker-sonic-vpp-sonic:latest
+
+# Copy the cache data to host
+From scratch as output
+COPY --from=docker-sonic-vpp-sonic:latest /cache.tgz cache.tgz
+
+# Clean up the cache data
+FROM docker-sonic-vpp-sonic:latest as final
+RUN rm /cache.tgz
+

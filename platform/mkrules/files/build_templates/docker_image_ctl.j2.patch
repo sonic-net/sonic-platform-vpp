@@ -1,0 +1,36 @@
+# Copyright (c) 2023 Cisco and/or its affiliates.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+diff --git a/files/build_templates/docker_image_ctl.j2 b/files/build_templates/docker_image_ctl.j2
+index 6ba11ce65..28f42bb48 100644
+--- a/files/build_templates/docker_image_ctl.j2
++++ b/files/build_templates/docker_image_ctl.j2
+@@ -557,6 +557,11 @@ start() {
+         --env "NAMESPACE_PREFIX"="$NAMESPACE_PREFIX" \
+         --env "NAMESPACE_COUNT"=$NUM_ASIC \
+         --env "CONTAINER_NAME"=$DOCKERNAME \
++{%- if sonic_asic_platform == "vpp" %}
++{%- if docker_container_name == "syncd" %}
++        --env-file /etc/sonic/vpp/syncd_vpp_env \
++{%- endif %}
++{%- endif %}
+         --name=$DOCKERNAME \
+ {%- if docker_container_name == "gbsyncd" %}
+         -v /var/run/docker-syncd$DEV:/var/run/sswsyncd \
+@@ -650,4 +655,4 @@ case "$1" in
+         echo "Usage: $0 {start namespace(optional)|wait namespace(optional)|stop namespace(optional)}"
+         exit 1
+         ;;
+-esac
+\ No newline at end of file
++esac
