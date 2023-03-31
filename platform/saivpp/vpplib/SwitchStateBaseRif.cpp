@@ -55,13 +55,19 @@ IpVrfInfo::~IpVrfInfo()
 bool vpp_get_intf_ip_address (
     const char *linux_ifname,
     sai_ip_prefix_t& ip_prefix,
+    bool is_v6,
     std::string& res)
 {
     std::stringstream cmd;
 
     swss::IpPrefix prefix = getIpPrefixFromSaiPrefix(ip_prefix);
 
-    cmd << IP_CMD << " addr show dev " << linux_ifname << " to " << prefix.to_string() << " scope global | awk '/inet / {print $2}'";
+    if (is_v6)
+    {
+        cmd << IP_CMD << " -6 " <<" addr show dev " << linux_ifname << " to " << prefix.to_string() << " scope global | awk '/inet6 / {print $2}'";
+    } else {
+        cmd << IP_CMD << " addr show dev " << linux_ifname << " to " << prefix.to_string() << " scope global | awk '/inet / {print $2}'";
+    }
     int ret = swss::exec(cmd.str(), res);
     if (ret)
     {
@@ -71,7 +77,7 @@ bool vpp_get_intf_ip_address (
 
     if (res.length() != 0)
     {
-        SWSS_LOG_NOTICE("Ip address of %s is %s", linux_ifname, res.c_str());
+        SWSS_LOG_NOTICE("%s address of %s is %s", (is_v6 ? "IPv6" : "IPv4"), linux_ifname, res.c_str());
 	return true;
     } else {
 	return false;
@@ -319,7 +325,7 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr (
     {
 	std::string ip_prefix_str;
 
-	bool ret = vpp_get_intf_ip_address(linux_ifname, ip_prefix, ip_prefix_str);
+	bool ret = vpp_get_intf_ip_address(linux_ifname, ip_prefix, is_v6, ip_prefix_str);
 	if (ret == false)
 	{
 	    SWSS_LOG_DEBUG("No ip address to add on router interface %s", linux_ifname);
