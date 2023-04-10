@@ -48,7 +48,10 @@ Note- Phases 2 and beyond needs agreement between the various stateholders. The 
   Routing focus
   - VPP Configurability
   - Debug ability
-  - Various Environments (AWS, K8S, etc) 
+  - Various Environments (AWS, K8S, etc)
+  - Loopback interface create/delete support (SAI_ROUTER_INTERFACE_TYPE_LOOPBACK)
+  - syncd-vpp container and docker-sonic-vpp container migration to debian/bullseye
+  - Upgrade VPP to upcoming 23.xx release
   - Support for following SAI APIs 
     - SAI_OBJECT_TYPE_NEXT_HOP_GROUP = 5
     - SAI_OBJECT_TYPE_ACL_TABLE = 7,
