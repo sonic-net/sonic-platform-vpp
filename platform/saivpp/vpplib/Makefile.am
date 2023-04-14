@@ -117,6 +117,7 @@ libsaivpp_la_SOURCES = \
 					  sai_vpp_ipsec.cpp
 
 VPP_LIBS        = -lvapiclient
+VPP_LIBS        += -lvppapiclient
 VPP_LIBS        += -lvlibmemoryclient
 VPP_LIBS        += -lsvm
 VPP_LIBS        += -lvppinfra

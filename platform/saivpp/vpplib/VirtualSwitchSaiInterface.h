@@ -260,6 +260,7 @@ namespace saivpp
                     _In_ const sai_attribute_t *attr);
             void setPortStats(sai_object_id_t oid);
 	    bool port_to_hostif_list(sai_object_id_t oid, std::string& if_name);
+      	    bool port_to_hwifname(sai_object_id_t oid, std::string& if_name);
 
         private:
 

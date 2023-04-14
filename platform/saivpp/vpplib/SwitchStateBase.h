@@ -732,9 +732,6 @@ namespace saivpp
                     _In_ std::string& ip_prefix);
             void vpp_intf_remove_prefix_entry(std::string& intf_name);
 
-            char * vpp_get_hwif_name (
-                    sai_object_id_t object_id,
-                    uint32_t vlan_id);
             sai_status_t vpp_set_interface_state (
                     _In_ sai_object_id_t object_id,
                     _In_ uint32_t vlan_id,
@@ -795,6 +792,12 @@ namespace saivpp
 	    int vpp_del_ip_vrf(_In_ sai_object_id_t objectId);
 
             int vpp_get_vrf_id(const char *linux_ifname, uint32_t *vrf_id);
+
+        public:
+            bool vpp_get_hwif_name (
+		    _In_ sai_object_id_t object_id,
+                    _In_ uint32_t vlan_id,
+		    _Out_ std::string& ifname);
 
         protected:
 	    void populate_if_mapping();

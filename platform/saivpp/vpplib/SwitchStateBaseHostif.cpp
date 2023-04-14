@@ -97,7 +97,7 @@ const char * SwitchStateBase::tap_to_hwif_name (const char *name)
 
 	return "Unknown";
     }
-    SWSS_LOG_ERROR("Found hwif %s info entry for hostif device: %s", it->second.c_str(), tap_name.c_str());
+    SWSS_LOG_DEBUG("Found hwif %s info entry for hostif device: %s", it->second.c_str(), tap_name.c_str());
     return it->second.c_str();
 }
 

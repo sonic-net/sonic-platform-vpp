@@ -117,9 +117,10 @@ void SwitchStateBase::vpp_intf_remove_prefix_entry (std::string& intf_name)
     m_intf_prefix_map.erase(it);
 }
 
-char * SwitchStateBase::vpp_get_hwif_name (
-    sai_object_id_t object_id,
-    uint32_t vlan_id)
+bool SwitchStateBase::vpp_get_hwif_name (
+      _In_ sai_object_id_t object_id,
+      _In_ uint32_t vlan_id,
+      _Out_ std::string& ifname)
 {
     std::string if_name;
     bool found = getTapNameFromPortId(object_id, if_name);
@@ -127,7 +128,7 @@ char * SwitchStateBase::vpp_get_hwif_name (
     if (found == false)
     {
 	SWSS_LOG_ERROR("host interface for port id %s not found", sai_serialize_object_id(object_id).c_str());
-	return NULL;
+	return false;
     }
 
     const char *hwifname = tap_to_hwif_name(if_name.c_str());
@@ -140,7 +141,9 @@ char * SwitchStateBase::vpp_get_hwif_name (
     } else {
 	hw_ifname = hwifname;
     }
-    return strdup(hw_ifname);
+    ifname = std::string(hw_ifname);
+
+    return true;
 }
 
 sai_status_t SwitchStateBase::vpp_set_interface_state (
@@ -152,13 +155,14 @@ sai_status_t SwitchStateBase::vpp_set_interface_state (
 	return SAI_STATUS_SUCCESS;
     }
 
-    char *hwif_name = vpp_get_hwif_name(object_id, vlan_id);
+    std::string ifname;
 
-    if (hwif_name) {
+    if (vpp_get_hwif_name(object_id, vlan_id, ifname) == true) {
+        const char *hwif_name = ifname.c_str();
+
 	interface_set_state(hwif_name, is_up);
 	SWSS_LOG_NOTICE("Updating router interface admin state %s %s", hwif_name,
 			(is_up ? "UP" : "DOWN"));
-	free(hwif_name);
     }
     return SAI_STATUS_SUCCESS;
 }
@@ -172,13 +176,14 @@ sai_status_t SwitchStateBase::vpp_set_port_mtu (
 	return SAI_STATUS_SUCCESS;
     }
 
-    char *hwif_name = vpp_get_hwif_name(object_id, vlan_id);
+    std::string ifname;
 
-    if (hwif_name) {
+    if (vpp_get_hwif_name(object_id, vlan_id, ifname) == true) {
+        const char *hwif_name = ifname.c_str();
+
 	hw_interface_set_mtu(hwif_name, mtu);
 	SWSS_LOG_NOTICE("Updating router interface mtu %s to %u", hwif_name,
 			mtu);
-	free(hwif_name);
     }
     return SAI_STATUS_SUCCESS;
 }
@@ -193,13 +198,14 @@ sai_status_t SwitchStateBase::vpp_set_interface_mtu (
 	return SAI_STATUS_SUCCESS;
     }
 
-    char *hwif_name = vpp_get_hwif_name(object_id, vlan_id);
+    std::string ifname;
 
-    if (hwif_name) {
+    if (vpp_get_hwif_name(object_id, vlan_id, ifname) == true) {
+        const char *hwif_name = ifname.c_str();
+
         sw_interface_set_mtu(hwif_name, mtu, type);
 	SWSS_LOG_NOTICE("Updating router interface mtu %s to %u", hwif_name,
 			mtu);
-	free(hwif_name);
     }
     return SAI_STATUS_SUCCESS;
 }
