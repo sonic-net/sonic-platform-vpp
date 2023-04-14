@@ -12,6 +12,7 @@
 # limitations under the License.
 
 VPP_LIBS        = -lvapiclient
+VPP_LIBS        += -lvppapiclient
 VPP_LIBS        += -lvlibmemoryclient
 VPP_LIBS        += -lsvm
 VPP_LIBS        += -lvppinfra
@@ -19,12 +20,21 @@ VPP_LIBS        += -lvlib
 VPP_LIBS        += -lvatplugin
 
 SaiVppXlate.o: SaiVppXlate.c
-	$(CC) -g -fPIC -oSaiVppXlate.o -c SaiVppXlate.c
+	$(CC) -g -fPIC -o$@ -c SaiVppXlate.c
 
-libvppxlate.a: SaiVppXlate.o
-	ar rc $@ SaiVppXlate.o
+SaiVppStats.o: SaiVppStats.c SaiVppStats.h
+	$(CC) -g -fPIC -o$@ -c SaiVppStats.c
 
-all: SaiVppXlate.o libvppxlate.a
+SaiIntfStats.o: SaiIntfStats.c SaiVppStats.h SaiIntfStats.h
+	$(CC) -g -fPIC -o$@ -c SaiIntfStats.c
+
+libvppxlate.a: SaiVppXlate.o SaiVppStats.o SaiIntfStats.o
+	ar rc $@ SaiVppXlate.o SaiVppStats.o SaiIntfStats.o
+
+vppst: SaiIntfStats.c SaiVppStats.c
+	$(CC) -DMAIN -g -o$@ $(VPP_LIBS) SaiVppStats.c SaiIntfStats.c
+
+all: libvppxlate.a
 
 .PHONY: install
 

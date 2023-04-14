@@ -1,11 +1,16 @@
 {
     "DEVICE_METADATA": {
         "localhost": {
-            "bgp_asn": "65100",
-	    "default_bgp_status": "up",
             "mac": "{{ system_mac }}",
-            "buffer_model": "traditional",
-	    "type": "LeafRouter"
+            "buffer_model": "traditional"
+        }
+    },
+    "FLEX_COUNTER_TABLE": {
+        "PORT": {
+            "FLEX_COUNTER_STATUS": "enable"
+        },
+        "RIF": {
+            "FLEX_COUNTER_STATUS": "enable"
         }
     },
 {% set features = ["swss", "bgp", "teamd", "nat", "database", "lldp", "dhcp_relay", "macsec"] %}
