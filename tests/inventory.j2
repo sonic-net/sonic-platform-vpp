@@ -14,10 +14,18 @@ clusters:
       host_1_0_route_1: {{ subnet }}.2.0
       host_1_0_gw1: {{ subnet }}.1.1
 
+      host_1_0_ipv6_1: {{ ipv6_subnet }}:85a3::0370:7334
+      host_1_0_route_v6_1: {{ ipv6_subnet }}:85a4::0370:7335
+      host_1_0_gw_v6_1: {{ ipv6_subnet  }}:85a3::0370:7335
+
       host_2_0_prefix: {{ subnet }}.2.0/24
       host_2_0_ip1: {{ subnet }}.2.2
       host_2_0_route1: {{ subnet }}.1.0
       host_2_0_gw1: {{ subnet }}.2.1
+
+      host_2_0_ipv6_1: {{ ipv6_subnet }}:85a4::0370:7335
+      host_2_0_route_v6_1: {{ ipv6_subnet }}:85a3::0370:7334
+      host_2_0_gw_v6_1: {{ ipv6_subnet  }}:85a4::0370:7334      
 
       sonic_vpp1_3_0: {{ subnet }}.3.1
       sonic_vpp1_gw: {{ subnet }}.3.2
@@ -26,4 +34,5 @@ clusters:
       sonic_vpp2_Loopback0: {{ subnet }}.4.2
 
       bgp_as: 65100
-     
+      no_linux_nl: {{ no_linux_nl }}
+      
