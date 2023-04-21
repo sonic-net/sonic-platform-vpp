@@ -18,7 +18,7 @@
    - name: Stop SONiC VPP Container 
      shell: | 
        cd sonic-vpp
-       ./start_sonic_vpp.sh stop -n sonic-vpp
+       NO_LINUX_NL={{ no_linux_nl }} ./start_sonic_vpp.sh stop -n sonic-vpp
      register: command_result
      failed_when: command_result.rc != 0 and (command_result.stdout == '' or "No such container" not in command_result.stderr)
      tags:
@@ -26,7 +26,7 @@
    - name: Stop SONiC VPP Container 1
      shell: | 
        cd sonic-vpp
-       ./start_sonic_vpp.sh stop -n sonic-vpp1
+       NO_LINUX_NL={{ no_linux_nl }} ./start_sonic_vpp.sh stop -n sonic-vpp1
      register: command_result
      failed_when: command_result.rc != 0 and (command_result.stdout == '' or "No such container" not in command_result.stderr)
      tags:
@@ -34,7 +34,7 @@
    - name: Stop SONiC VPP Container 2
      shell: | 
        cd sonic-vpp
-       ./start_sonic_vpp.sh stop -n sonic-vpp2
+       NO_LINUX_NL={{ no_linux_nl }} ./start_sonic_vpp.sh stop -n sonic-vpp2
      register: command_result
      failed_when: command_result.rc != 0 and (command_result.stdout == '' or "No such container" not in command_result.stderr)
      tags:

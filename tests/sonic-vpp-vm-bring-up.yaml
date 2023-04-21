@@ -90,9 +90,9 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
        expect "password:"
        send "{{ sonic_vm_password }}\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo sonic_vpp_cfg.sh -p -i eth2,eth3\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args:
@@ -101,13 +101,13 @@
      - build        
    - name: Configure SONiC and syncd-vpp VM 2
      ansible.builtin.shell: |
-       set timeout 120
+       set timeout 60
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
        expect "password:"
        send "{{ sonic_vm_password }}\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo sonic_vpp_cfg.sh -p -i eth2,eth3\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args:
@@ -121,48 +121,43 @@
      - build        
    - name: Configure SONiC-VPP data path interfaces VM 1
      ansible.builtin.shell: |
-       set timeout 120
+       set timeout 30
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
        expect "password:"
        send "{{ sonic_vm_password }}\n"
-       expect "admin@sonic:~$"
-       send "sudo config interface loopback add Loopback0\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface ip add Loopback0 {{ sonic_vm1_Loopback0 }}/24\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface ip add Ethernet0 {{ sonic_vm1_ethernet0 }}/24\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface ip add Ethernet1 {{ sonic_vm1_ethernet1 }}/24\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface startup Loopback0\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface startup Ethernet0\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface startup Ethernet1\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config save -y\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "vtysh\n"
-       expect "sonic#"
+       expect "sonic# "
        send "config\n"
-       expect "sonic(config)#"
+       expect "sonic(config)# "
        send "router bgp {{ bgp_as }}\n"
-       expect "sonic(config-router)#"
+       expect "sonic(config-router)# "
        send "bgp router-id  {{ sonic_vm1_Loopback0 }}\n"
-       expect "sonic(config-router)#"
+       expect "sonic(config-router)# "
        send "neighbor {{ sonic_vm2_ethernet1 }} remote-as {{ bgp_as }}\n"
-       expect "sonic(config-router)#"
+       expect "sonic(config-router)# "
        send "address-family ipv4 unicast\n"
-       expect "sonic(config-router-af)#"
+       expect "sonic(config-router-af)# "
        send "network {{ sonic_host_1_prefix }}\n"
-       expect "sonic(config-router-af)#"
+       expect "sonic(config-router-af)# "
        send "neighbor {{ sonic_vm2_ethernet1 }} activate\n"
-       expect "sonic(config-router-af)#"
+       expect "sonic(config-router-af)# "
        send "end\n"
-       expect "sonic#"
-       send "exit\n"
-       expect "admin@sonic:~$"
-       send "\n"
+       expect "sonic# "
        exit 0
      args:
        executable: /usr/bin/expect
@@ -170,48 +165,43 @@
      - build        
    - name: Configure SONiC-VPP data path interfaces VM 2
      ansible.builtin.shell: |
-       set timeout 120
+       set timeout 30
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
        expect "password:"
        send "{{ sonic_vm_password }}\n"
-       expect "admin@sonic:~$"
-       send "sudo config interface loopback add Loopback0\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface ip add Loopback0 {{ sonic_vm2_Loopback0 }}/24\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface ip add Ethernet0 {{ sonic_vm2_ethernet0 }}/24\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface ip add Ethernet1 {{ sonic_vm2_ethernet1 }}/24\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface startup Loopback0\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface startup Ethernet0\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config interface startup Ethernet1\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "sudo config save -y\n"
-       expect "admin@sonic:~$"
+       expect "admin@sonic:~$ "
        send "vtysh\n"
-       expect "sonic#"
+       expect "sonic# "
        send "config\n"
-       expect "sonic(config)#"
+       expect "sonic(config)# "
        send "router bgp {{ bgp_as }}\n"
-       expect "sonic(config-router)#"
+       expect "sonic(config-router)# "
        send "bgp router-id  {{ sonic_vm2_Loopback0 }}\n"
-       expect "sonic(config-router)#"
+       expect "sonic(config-router)# "
        send "neighbor {{ sonic_vm1_ethernet1 }} remote-as {{ bgp_as }}\n"
-       expect "sonic(config-router)#"
+       expect "sonic(config-router)# "
        send "address-family ipv4 unicast\n"
-       expect "sonic(config-router-af)#"
+       expect "sonic(config-router-af)# "
        send "network {{ sonic_host_2_prefix }}\n"
-       expect "sonic(config-router-af)#"
+       expect "sonic(config-router-af)# "
        send "neighbor {{ sonic_vm1_ethernet1 }} activate\n"
-       expect "sonic(config-router-af)#"
+       expect "sonic(config-router-af)# "
        send "end\n"
-       expect "sonic#"
-       send "exit\n"
-       expect "admin@sonic:~$"
-       send "\n"
+       expect "sonic# "
        exit 0
      args:
        executable: /usr/bin/expect
@@ -240,6 +230,11 @@
      failed_when: command_result.stderr != ''
      tags:
      - build      
+   - name: Pause for 2 minutes for routing to sattle
+     ansible.builtin.pause:
+       minutes: 2
+     tags:
+     - build        
    - name: Verify SONiC Routing 1
      shell: |
        ping -c5 {{ sonic_vm1_ethernet1 }}
@@ -276,4 +271,5 @@
      register: command_result
      failed_when: command_result.rc != 0 
      tags:
-     - tear     
+     - tear
+     

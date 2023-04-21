@@ -60,6 +60,12 @@
        ip netns exec host-1.0 ip link set dev veth_vpp1 up
        ip netns exec host-1.0 ip addr add "{{ host_1_0_ip1 }}"/24 dev veth_vpp1
        ip netns exec host-1.0 ip route add "{{ host_1_0_route_1 }}"/24 via "{{ host_1_0_gw1 }}"
+
+       ip netns exec host-1.0 ip -6 addr add "{{ host_1_0_ipv6_1 }}"/64 dev veth_vpp1
+       ip netns exec host-1.0 ip -6 route add "{{ host_1_0_route_v6_1 }}"/64 via "{{ host_1_0_gw_v6_1 }}"
+       ip netns exec host-1.0 ip -6 address show
+       ip netns exec host-1.0 ip -6 route show
+              
      register: command_result
      failed_when: command_result.rc != 0 and "File exists" not in command_result.stderr 
      tags:
@@ -73,6 +79,12 @@
        ip netns exec host-2.0 ip link set dev veth_vpp2 up
        ip netns exec host-2.0 ip addr add "{{ host_2_0_ip1 }}"/24 dev veth_vpp2
        ip netns exec host-2.0 ip route add "{{ host_2_0_route1 }}"/24 via "{{ host_2_0_gw1 }}"
+
+       ip netns exec host-2.0 ip -6 addr add "{{ host_2_0_ipv6_1 }}"/64 dev veth_vpp2
+       ip netns exec host-2.0 ip -6 route add "{{ host_2_0_route_v6_1 }}"/64 via "{{ host_2_0_gw_v6_1 }}"
+       ip netns exec host-2.0 ip -6 address show
+       ip netns exec host-2.0 ip -6 route show
+
      register: command_result
      failed_when: command_result.rc != 0 and "File exists" not in command_result.stderr 
      tags:
@@ -81,7 +93,7 @@
    - name: Start SONiC VPP Container 
      shell: | 
        cd sonic-vpp
-       ./start_sonic_vpp.sh start -n sonic-vpp -i vpp1,vpp2
+       NO_LINUX_NL={{ no_linux_nl }} ./start_sonic_vpp.sh start -n sonic-vpp -i vpp1,vpp2
      register: command_result
      failed_when: command_result.stdout == ''
      tags:
@@ -89,7 +101,7 @@
    - name: Start SONiC VPP Container 1
      shell: | 
        cd sonic-vpp
-       ./start_sonic_vpp.sh start -n sonic-vpp1 -i vpp1,ir_vpp1
+       NO_LINUX_NL={{ no_linux_nl }} ./start_sonic_vpp.sh start -n sonic-vpp1 -i vpp1,ir_vpp1
      register: command_result
      failed_when: command_result.stdout == ''
      tags:
@@ -97,7 +109,7 @@
    - name: Start SONiC VPP Container 2
      shell: | 
        cd sonic-vpp
-       ./start_sonic_vpp.sh start -n sonic-vpp2 -i vpp2,ir_vpp2
+       NO_LINUX_NL={{ no_linux_nl }} ./start_sonic_vpp.sh start -n sonic-vpp2 -i vpp2,ir_vpp2
      register: command_result
      failed_when: command_result.stdout == ''
      tags:
@@ -213,9 +225,15 @@
    - name: Configure SONiC VPP Addresses 
      shell: | 
        docker exec -it sonic-vpp config interface ip add Ethernet0 "{{ host_1_0_gw1 }}"/24
-       docker exec -it sonic-vpp config interface ip add Ethernet1 "{{ host_2_0_ip1 }}"/24
+       docker exec -it sonic-vpp config interface ip add Ethernet1 "{{ host_2_0_gw1 }}"/24
        docker exec -it sonic-vpp config interface startup Ethernet0
        docker exec -it sonic-vpp config interface startup Ethernet1
+
+       docker exec -it sonic-vpp config interface ip add Ethernet0 "{{ host_1_0_gw_v6_1 }}"/64
+       docker exec -it sonic-vpp config interface ip add Ethernet1 "{{ host_2_0_gw_v6_1 }}"/64
+       docker exec -it sonic-vpp config interface startup Ethernet0
+       docker exec -it sonic-vpp config interface startup Ethernet1
+
      register: command_result
      failed_when: command_result.stderr != ''
      tags:
@@ -254,3 +272,27 @@
      tags:
      - singleHop
      - multiHop
+   - name: Verify SONiC IPV6 Routing 1
+     shell: | 
+       ip netns exec host-1.0 ping -c5  "{{ host_1_0_gw_v6_1 }}"
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - singleHop
+   - name: Print message
+     ansible.builtin.debug:
+       msg: "{{ command_result }}"
+     tags:
+     - singleHop
+   - name: Verify SONiC IPV6 Routing 2
+     shell: | 
+       ip netns exec host-1.0 ping -c5  "{{ host_2_0_ipv6_1 }}"
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - singleHop
+   - name: Print message
+     ansible.builtin.debug:
+       msg: "{{ command_result }}"
+     tags:
+     - singleHop
