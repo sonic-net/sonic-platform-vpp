@@ -12,10 +12,10 @@
 # limitations under the License.
 
 diff --git a/files/build_templates/docker_image_ctl.j2 b/files/build_templates/docker_image_ctl.j2
-index 6ba11ce65..28f42bb48 100644
+index 0a4391cf6..f8e04f479 100644
 --- a/files/build_templates/docker_image_ctl.j2
 +++ b/files/build_templates/docker_image_ctl.j2
-@@ -557,6 +557,11 @@ start() {
+@@ -599,6 +599,11 @@ start() {
          --env "NAMESPACE_PREFIX"="$NAMESPACE_PREFIX" \
          --env "NAMESPACE_COUNT"=$NUM_ASIC \
          --env "CONTAINER_NAME"=$DOCKERNAME \
@@ -27,10 +27,3 @@ index 6ba11ce65..28f42bb48 100644
          --name=$DOCKERNAME \
  {%- if docker_container_name == "gbsyncd" %}
          -v /var/run/docker-syncd$DEV:/var/run/sswsyncd \
-@@ -650,4 +655,4 @@ case "$1" in
-         echo "Usage: $0 {start namespace(optional)|wait namespace(optional)|stop namespace(optional)}"
-         exit 1
-         ;;
--esac
-\ No newline at end of file
-+esac

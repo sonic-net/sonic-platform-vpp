@@ -168,10 +168,14 @@ sai_status_t SwitchStateBase::IpRouteAddRemove(
 
     if (SAI_OBJECT_TYPE_ROUTER_INTERFACE == sai_object_type_query(next_hop_oid))
     {
-	vpp_add_del_intf_ip_addr(route_entry.destination, next_hop_oid, is_add);
+        // vpp_add_del_intf_ip_addr(route_entry.destination, next_hop_oid, is_add);
     }
     else if (SAI_OBJECT_TYPE_PORT == sai_object_type_query(next_hop_oid))
     {
+	status = find_attrib_in_list(attr_count, attr_list, SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION, &next_hop, &next_hop_index);
+	if (status == SAI_STATUS_SUCCESS && SAI_PACKET_ACTION_FORWARD == next_hop->s32) {
+	    vpp_add_del_intf_ip_addr_norif(serializedObjectId, route_entry, is_add);    
+	}
     }
     else if (SAI_OBJECT_TYPE_NEXT_HOP == sai_object_type_query(next_hop_oid))
     {

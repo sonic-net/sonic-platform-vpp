@@ -24,10 +24,10 @@ VPPLIBPATH=$PWD/platform/saivpp/vpplib
 
 cd ./build/sonic-buildimage
 
-#OLD_WORKING_LABEL=5281f6c3f6
+#OLD_WORKING_LABEL=eba30ff26f
 # Below is the build label information
-# 205452	20230119.6	master	Azure.sonic-buildimage.official.vs	succeeded	2023-01-19T08:38:22	2023-01-19T15:40:27	eba30ff26f
-WORKING_LABEL=eba30ff26f
+# 254924	20230417.6	master	Azure.sonic-buildimage.official.vs	succeeded	2023-04-17T08:20:34	2023-04-17T13:39:10	183d0f2be7
+WORKING_LABEL=183d0f2be7
 SONIC_CHECKOUT_LABEL=${SONIC_CHECKOUT_LABEL:=$WORKING_LABEL}
 git checkout $SONIC_CHECKOUT_LABEL
 
@@ -91,17 +91,10 @@ cp $SONIC_SAIREDIS/tests/Makefile.am ./src/sonic-sairedis/tests/Makefile.am
 cp $SONIC_SAIREDIS/unittest/Makefile.am ./src/sonic-sairedis/unittest/Makefile.am
 cp $SONIC_SAIREDIS/unittest/vslib/Makefile.am ./src/sonic-sairedis/unittest/vslib/Makefile.am
 cp $SONIC_SAIREDIS/pyext/py3/Makefile.am ./src/sonic-sairedis/pyext/py3/Makefile.am
+
 # Linking error with saivpp. Disable mock_tests for swss for now. Fix it later
-cp $SONIC_SRC/sonic-swss/Makefile.am ./src/sonic-swss/Makefile.am
+# Also fix the fpmsync to configure routes in APPL_DB from the default routing table.
+# https://github.com/sonic-net/sonic-swss/issues/2746
 
-# The tests fail with "OSError: Failed to locate platform directory" since platform is not defined
-# Fix it later
-rm -rf ./src/sonic-host-services/tests/hostcfgd
+pushd . ; cd ./src/sonic-swss; git apply  $SONIC_SRC/sonic-swss/swss.patch; popd
 
-# The tests fail with "OSError: Failed to locate platform directory" since platform is not defined
-# Fix it later
-mv ./src/sonic-platform-common/pytest.ini ./src/sonic-platform-common/pytest.ini.orig
-> ./src/sonic-platform-common/setup.cfg
-
-mv ./src/sonic-platform-daemons/sonic-ycabled/pytest.ini ./src/sonic-platform-daemons/sonic-ycabled/pytest.ini.orig
-> ./src/sonic-platform-daemons/sonic-ycabled/setup.cfg

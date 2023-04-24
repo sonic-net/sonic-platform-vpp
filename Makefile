@@ -31,12 +31,12 @@ build/.sonic_vpp_config:
 sonic_config: build/.sonic_vpp_config
 
 build/sonic-buildimage/target/docker-sonic-vpp.gz:
-	make -C ./build/sonic-buildimage PLATFORM=vpp SONIC_BUILD_JOBS=4 INSTALL_DEBUG_TOOLS=y target/docker-sonic-vpp.gz
+	make -C ./build/sonic-buildimage SONIC_BUILD_JOBS=4 target/docker-sonic-vpp.gz
 
 sonic_build: build/sonic-buildimage/target/docker-sonic-vpp.gz
 
 build/sonic-buildimage/target/sonic-vpp.img.gz:
-	make -C ./build/sonic-buildimage PLATFORM=vpp SONIC_BUILD_JOBS=4 INSTALL_DEBUG_TOOLS=y target/sonic-vpp.img.gz
+	make -C ./build/sonic-buildimage SONIC_BUILD_JOBS=4 target/sonic-vpp.img.gz
 
 sonic_build_vm: build/sonic-buildimage/target/sonic-vpp.img.gz
 

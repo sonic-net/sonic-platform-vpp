@@ -722,15 +722,20 @@ namespace saivpp
                     _In_ sai_ip_prefix_t& ip_prefix,
                     _In_ sai_object_id_t nexthop_oid,
 		    _In_ bool is_add);
+            sai_status_t vpp_add_del_intf_ip_addr_norif (
+		    _In_ const std::string& ip_prefix_key,
+                    _In_ sai_route_entry_t& route_entry,
+                    _In_ bool is_add);
+
             sai_status_t vpp_get_router_intf_name (
                     _In_ sai_ip_prefix_t& ip_prefix,
                     _In_ sai_object_id_t rif_id,
                     std::string& nexthop_ifname);
 
             bool vpp_intf_get_prefix_entry(
-                    _In_ std::string& intf_name,
+                    _In_ const std::string& intf_name,
                     _In_ std::string& ip_prefix);
-            void vpp_intf_remove_prefix_entry(std::string& intf_name);
+            void vpp_intf_remove_prefix_entry(const std::string& intf_name);
 
             sai_status_t vpp_set_interface_state (
                     _In_ sai_object_id_t object_id,
