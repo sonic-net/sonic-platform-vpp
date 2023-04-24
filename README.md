@@ -43,6 +43,11 @@ To use a different label for SONiC build
 ```
 SONIC_CHECKOUT_LABEL=sonic_git_commit_label make sonic
 ```
+To build a debug container image run below command
+```
+INSTALL_DEBUG_TOOLS=y make sonic
+```
+
 > Note: Refer the instructions above on how to pass proxy if internet access is only though proxy
 
 The ./build directory contains all the repos pulled. The ./build/sonic-buildimage/target directory contains the
@@ -76,6 +81,11 @@ Refer to the [Getting started](docs/README.getting-started.md) document in docs 
 Run below make command (in case of proxy use the proxy parameters as mentioned above in the "make sonic" build)
 ```
 make sonic_vm
+```
+
+To build a debug VM image image run below command
+```
+INSTALL_DEBUG_TOOLS=y make sonic_vm
 ```
 
 The built vm image can be found at `build/sonic-buildimage/target/sonic-vpp.img.gz`.
