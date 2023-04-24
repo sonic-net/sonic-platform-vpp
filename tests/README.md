@@ -23,10 +23,10 @@ sudo apt-get install -y expect
 ## SONiC VPP Docker image Deployment and Validation
 
 Perform following steps to deploy and validate SONiC VPP docker image.
-1. Downalod SONiC-VPP docker image ("docker-sonic-vpp.gz") and script "start_sonic_vpp.sh" to VM in directory "/home/\<user-name\>/sonic-vpp". Script "start_sonic_vpp.sh" is available at https://wwwin-github.cisco.com/shaship/sonic-platform-vpp/blob/master/start_sonic_vpp.sh
-2. Clone repository https://wwwin-github.cisco.com/shaship/sonic-platform-vpp 
+1. Downalod SONiC-VPP docker image ("docker-sonic-vpp.gz") and script "start_sonic_vpp.sh" to VM in directory "/home/\<user-name\>/sonic-vpp". Script "start_sonic_vpp.sh" is available at https://github.com/sonic-net/sonic-platform-vpp/blob/main/start_sonic_vpp.sh
+2. Clone repository https://github.com/sonic-net/sonic-platform-vpp
    ```
-    git clone https://wwwin-github.cisco.com/shaship/sonic-platform-vpp 
+    git clone https://github.com/sonic-net/sonic-platform-vpp 
    ```
    Repository contains python script validate-sonic-vpp-docker-routing.py and two playbooks:
 
@@ -52,11 +52,11 @@ Perform following steps to deploy and validate SONiC VPP docker image.
 ## SONiC VPP VM image Deployment and Validation
 
 Perform following steps to deploy and validate SONiC VPP VM image.
-1. Downalod SONiC-VPP VM image ("sonic-vpp.img.gz") and script "sonic_vpp_cfg.sh" to VM in directory "/home/\<user-name\>/sonic-vpp". Script "sonic_vpp_cfg.sh" is available at https://wwwin-github.cisco.com/shaship/sonic-platform-vpp/blob/master/platform/mkrules/files/scripts/sonic_vpp_cfg.sh
+1. Downalod SONiC-VPP VM image ("sonic-vpp.img.gz") and script "sonic_vpp_cfg.sh" to VM in directory "/home/\<user-name\>/sonic-vpp". Script "sonic_vpp_cfg.sh" is available at https://github.com/sonic-net/sonic-platform-vpp/blob/main/platform/mkrules/files/scripts/sonic_vpp_cfg.sh
 
-2. Clone repository https://wwwin-github.cisco.com/shaship/sonic-platform-vpp 
+2. Clone repository https://github.com/sonic-net/sonic-platform-vpp 
    ```
-    git clone https://wwwin-github.cisco.com/shaship/sonic-platform-vpp 
+    git clone https://github.com/sonic-net/sonic-platform-vpp 
    ```
    Repository contains python script validate-sonic-vpp-vm-routing.py and playbook:
 
