@@ -64,7 +64,7 @@ bool vpp_get_intf_ip_address (
 
     if (is_v6)
     {
-        cmd << IP_CMD << " -6 " <<" addr show dev " << linux_ifname << " to " << prefix.to_string() << " scope global | awk '/inet6 / {print $2}'";
+        cmd << IP_CMD << " -6 " << " addr show dev " << linux_ifname << " to " << prefix.to_string() << " scope global | awk '/inet6 / {print $2}'";
     } else {
         cmd << IP_CMD << " addr show dev " << linux_ifname << " to " << prefix.to_string() << " scope global | awk '/inet / {print $2}'";
     }
@@ -84,7 +84,40 @@ bool vpp_get_intf_ip_address (
     }
 }
 
-bool SwitchStateBase::vpp_intf_get_prefix_entry (std::string& intf_name, std::string& ip_prefix)
+bool vpp_get_intf_name_for_prefix (
+    sai_ip_prefix_t& ip_prefix,
+    bool is_v6,
+    std::string& ifname)
+{
+    std::stringstream cmd;
+
+    swss::IpPrefix prefix = getIpPrefixFromSaiPrefix(ip_prefix);
+
+    if (is_v6)
+    {
+        cmd << IP_CMD << " -6 " << " addr show " << " to " << prefix.to_string() ;
+        cmd << " scope global | awk -F':' '/[0-9]+: Eth/ { printf \"%s\", $2 }' | cut -d' ' -f2 -z | sed 's/@Eth.*//g'";
+    } else {
+        cmd << IP_CMD << " addr show " << " to " << prefix.to_string();
+	cmd << " scope global | awk -F':' '/[0-9]+: Eth/ { printf \"%s\", $2 }' | cut -d' ' -f2 -z | sed 's/@Eth.*//g'";
+    }
+    int ret = swss::exec(cmd.str(), ifname);
+    if (ret)
+    {
+        SWSS_LOG_ERROR("Command '%s' failed with rc %d", cmd.str().c_str(), ret);
+        return false;
+    }
+
+    if (ifname.length() != 0)
+    {
+        SWSS_LOG_NOTICE("%s interface name with prefix %s is %s", (is_v6 ? "IPv6" : "IPv4"), prefix.to_string(), ifname.c_str());
+	return true;
+    } else {
+	return false;
+    }
+}
+
+bool SwitchStateBase::vpp_intf_get_prefix_entry (const std::string& intf_name, std::string& ip_prefix)
 {
     auto it = m_intf_prefix_map.find(intf_name);
 
@@ -101,7 +134,7 @@ bool SwitchStateBase::vpp_intf_get_prefix_entry (std::string& intf_name, std::st
     return true;
 }
 
-void SwitchStateBase::vpp_intf_remove_prefix_entry (std::string& intf_name)
+void SwitchStateBase::vpp_intf_remove_prefix_entry (const std::string& intf_name)
 {
 
     auto it = m_intf_prefix_map.find(intf_name);
@@ -364,6 +397,172 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr (
 
 	vpp_intf_remove_prefix_entry(ip_prefix_key);
     }
+    vpp_ip_route_t vpp_ip_prefix;
+    swss::IpAddress m_ip = intf_ip_prefix.getIp();
+
+    vpp_ip_prefix.prefix_len = intf_ip_prefix.getMaskLength();
+
+    switch (m_ip.getIp().family)
+    {
+        case AF_INET:
+        {
+	    struct sockaddr_in *sin =  &vpp_ip_prefix.prefix_addr.addr.ip4;
+
+            vpp_ip_prefix.prefix_addr.sa_family = AF_INET;
+            sin->sin_addr.s_addr = m_ip.getV4Addr();
+            break;
+        }
+        case AF_INET6:
+        {
+            const uint8_t *prefix = m_ip.getV6Addr();
+            struct sockaddr_in6 *sin6 =  &vpp_ip_prefix.prefix_addr.addr.ip6;
+
+            vpp_ip_prefix.prefix_addr.sa_family = AF_INET6;
+            memcpy(sin6->sin6_addr.s6_addr, prefix, sizeof(sin6->sin6_addr.s6_addr));
+            break;
+        }
+        default:
+        {
+	    throw std::logic_error("Invalid family");
+        }
+    }
+
+    const char *hwifname = tap_to_hwif_name(if_name.c_str());
+    char hw_subifname[32];
+    const char *hw_ifname;
+
+    if (vlan_id) {
+	snprintf(hw_subifname, sizeof(hw_subifname), "%s.%u", hwifname, vlan_id);
+	hw_ifname = hw_subifname;
+    } else {
+	hw_ifname = hwifname;
+    }
+
+    int ret = interface_ip_address_add_del(hw_ifname, &vpp_ip_prefix, is_add);
+
+    if (ret == 0)
+    {
+	return SAI_STATUS_SUCCESS;
+    }
+    else {
+	return SAI_STATUS_FAILURE;
+    }
+}
+
+static void get_intf_vlanid (std::string& sub_ifname, int *vlan_id, std::string& if_name)
+{
+    std::size_t pos = sub_ifname.find(".");
+
+    if (pos == std::string::npos)
+    {
+        if_name = sub_ifname;
+        *vlan_id = 0;
+    } else {
+        if_name = sub_ifname.substr(0, pos);
+        std::string vlan = sub_ifname.substr(pos+1);
+        *vlan_id = std::stoi(vlan);
+    }
+}
+
+static void vpp_serialize_intf_data (std::string& k1, std::string& k2, std::string &serializedData)
+{
+    serializedData.append(k1);
+    serializedData.append("@");
+    serializedData.append(k2);
+}
+
+static void vpp_deserialize_intf_data (std::string &serializedData, std::string& k1, std::string& k2)
+{
+    std::size_t pos = serializedData.find("@");
+
+    if (pos != std::string::npos)
+    {
+	k1 = serializedData.substr(0, pos);
+	k2 = serializedData.substr(pos+1);
+    } else {
+	SWSS_LOG_WARN("String %s does not contain delimiter @", serializedData.c_str());
+    }
+}
+
+sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr_norif (
+    _In_ const std::string& ip_prefix_key,
+    _In_ sai_route_entry_t& route_entry,
+    _In_ bool is_add)
+{
+    bool is_v6 = false;
+
+    is_v6 = (route_entry.destination.addr_family == SAI_IP_ADDR_FAMILY_IPV6) ? true : false;
+
+    std::string full_if_name;
+    std::string ip_prefix_str;
+
+    if (is_add)
+    {
+	bool found = vpp_get_intf_name_for_prefix(route_entry.destination, is_v6, full_if_name);
+	if (found == false)
+	{
+	    SWSS_LOG_ERROR("host interface for prefix not found");
+	    return SAI_STATUS_FAILURE;
+	}
+    } else {
+	std::string intf_data;
+
+	if (vpp_intf_get_prefix_entry(ip_prefix_key, intf_data) == false)
+        {
+	    SWSS_LOG_DEBUG("No interface ip address found for %s", ip_prefix_key.c_str());
+	    return SAI_STATUS_SUCCESS;
+        }
+	vpp_deserialize_intf_data(intf_data, full_if_name, ip_prefix_str);
+    }
+
+    const char *linux_ifname;
+    int vlan_id = 0;
+    std::string if_name;
+
+    get_intf_vlanid(full_if_name, &vlan_id, if_name);
+
+    linux_ifname= full_if_name.c_str();
+
+    std::string addr_family = ((is_v6) ? "v6" : "v4");
+
+    swss::IpPrefix intf_ip_prefix;
+
+    if (is_add)
+    {
+	bool ret = vpp_get_intf_ip_address(linux_ifname, route_entry.destination, is_v6, ip_prefix_str);
+	if (ret == false)
+	{
+	    SWSS_LOG_DEBUG("No ip address to add on router interface %s", linux_ifname);
+	    return SAI_STATUS_SUCCESS;
+	}
+	SWSS_LOG_NOTICE("Adding ip address on router interface %s", linux_ifname);
+
+	intf_ip_prefix = swss::IpPrefix(ip_prefix_str.c_str());
+
+	sai_ip_prefix_t saiIpPrefix;
+
+	copy(saiIpPrefix, intf_ip_prefix);
+
+	std::string intf_data;
+	std::string sai_prefix;
+
+	sai_prefix = sai_serialize_ip_prefix(saiIpPrefix);
+
+	vpp_serialize_intf_data(full_if_name, sai_prefix, intf_data);
+
+	m_intf_prefix_map[ip_prefix_key] = intf_data;
+    } else {
+	sai_ip_prefix_t saiIpPrefix;
+
+      	SWSS_LOG_NOTICE("Removing ip address on router interface %s", linux_ifname);
+
+	sai_deserialize_ip_prefix(ip_prefix_str, saiIpPrefix);
+
+	intf_ip_prefix = getIpPrefixFromSaiPrefix(saiIpPrefix);
+
+	vpp_intf_remove_prefix_entry(ip_prefix_key);
+    }
+
     vpp_ip_route_t vpp_ip_prefix;
     swss::IpAddress m_ip = intf_ip_prefix.getIp();
 

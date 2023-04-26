@@ -28,9 +28,6 @@ static int vpp_stats_init()
 {
   if (is_stats_inited) return 0;
 
-    /* Create a heap of 64MB */
-  clib_mem_init (0, 64 << 20);
-
   is_stats_inited = 1;
   return 0;
 }
