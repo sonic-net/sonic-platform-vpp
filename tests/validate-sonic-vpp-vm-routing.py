@@ -28,20 +28,20 @@ def getIppoolAndCidrMask(ipPoolCidr):
 def checkPosInteger(num):
     if not num.isdigit():
         print(f'Invalid IPPool has been provided')
-        quit()
+        sys.exit(1)
 
 def checkIp(ip):
     try:
         ipaddress.ip_address(ip)
     except ValueError:
         print(f'Invalid IP address specified - {ip}')
-        quit()
+        sys.exit(1)
 
 def checkAction(action):
     
     if  action != "build" and action != "tear" and action != "build,tear":
         print("Invalid action specified")
-        quit()
+        sys.exit(1)
   
 def getSubnet(ippool):
 
@@ -60,7 +60,7 @@ def checkVerboselog(verboselog):
     for i in verboselog:
         if i != 'v' and verboselog.count(i) != len(verboselog):
             print("Invalid verbose argument passed. Please pass like - 'v' or 'vv' or 'vvv' or 'vvvv' or 'vvvvvv")
-            quit()
+            sys.exit(1)
 
 
 def createInventoryFromTemplate(username, password, host):
@@ -99,14 +99,14 @@ def runSonic(action, verboselogArg):
         if  re.search('failed=', loglineDecoded) != None and re.search('unreachable=', loglineDecoded) != None:
             if None == re.search('failed=0', loglineDecoded):
                 print(f'failed to execute {loglineDecoded.split().pop(0)} ansible {action} task')
-                quit()
+                sys.exit(1)
             if None == re.search('unreachable=0', loglineDecoded):
                 print(f'failed to execute {loglineDecoded.split().pop(0)} ansible {action} task, VM is unreachable')
-                quit()
+                sys.exit(1)
 
         if None != re.search('ok=0', loglineDecoded):
             print(f'unable to execute {loglineDecoded.split().pop(0)} ansible {action} task')
-            quit()
+            sys.exit(1)
 
     if action == "build" or action == "build,tear":
         print("SUCCESSFUL in validating SONiC VM routing...\n")
@@ -167,4 +167,4 @@ createInventoryFromTemplate(username, password, host)
 #run python script
 runSonic(action, "-"+verboselog)
 
-
+sys.exit(0)
