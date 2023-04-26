@@ -180,7 +180,7 @@ parser.add_argument("--host", type=str, help="enter host - example : '10.64.98.1
 parser.add_argument("--username", type=str, help="enter SSH username for host", nargs='?',required=True ) 
 parser.add_argument("--password", type=str, help="enter SSH user password for host", nargs='?',required=True )                       
 parser.add_argument("--verboselog", type=str, help="enter verbose logging - example : 'v or vv or vvv etc'", nargs='?', default="v")
-parser.add_argument("--noLinuxNl", type=str, help="enter noLinuxNl - example : 'yes' or 'no'", nargs='?', default="yes")
+parser.add_argument("--noLinuxNl", type=str, help="enter noLinuxNl - example : 'yes' or 'no'", nargs='?', default="no")
 
 
 args = parser.parse_args()
