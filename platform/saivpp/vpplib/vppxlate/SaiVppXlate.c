@@ -193,6 +193,41 @@ vat_suspend (vlib_main_t *vm, f64 interval)
     nanosleep(&req, NULL);
 }
 
+/*
+ * vl_msg_api_set_handlers
+ * preserve the old API for a while
+*/
+static void
+vl_msg_api_set_handlers (int id, char *name, void *handler, void *cleanup,
+                         void *endian, int size, int traced,
+                         void *tojson, void *fromjson, void *calc_size)
+{
+    vl_msg_api_msg_config_t cfg;
+    vl_msg_api_msg_config_t *c = &cfg;
+
+    clib_memset (c, 0, sizeof (*c));
+
+    c->id = id;
+    c->name = name;
+    c->handler = handler;
+    c->cleanup = cleanup;
+    c->endian = endian;
+    c->traced = traced;
+    c->replay = 1;
+    c->message_bounce = 0;
+    c->is_mp_safe = 0;
+    c->is_autoendian = 0;
+    c->tojson = tojson;
+    c->fromjson = fromjson;
+    c->calc_size = calc_size;
+    vl_msg_api_config (c);
+}
+
+void
+vl_noop_handler (void *mp)
+{
+}
+
 static void set_reply_status (int retval)
 {
     vat_main_t *vam = &vat_main;
@@ -357,9 +392,7 @@ static void vpp_base_vpe_init(void)
                             vl_api_##n##_t_handler,             \
                             vl_noop_handler,                    \
                             vl_api_##n##_t_endian,              \
-                            vl_api_##n##_t_print,               \
                             sizeof(vl_api_##n##_t), 1,          \
-                            vl_api_##n##_t_print_json,          \
                             vl_api_##n##_t_tojson,              \
                             vl_api_##n##_t_fromjson,            \
                             vl_api_##n##_t_calc_size);
@@ -400,9 +433,7 @@ static void vpp_ext_vpe_init(void)
                             vl_api_##n##_t_handler,             \
                             vl_noop_handler,                    \
                             vl_api_##n##_t_endian,              \
-                            vl_api_##n##_t_print,               \
                             sizeof(vl_api_##n##_t), 1,          \
-                            vl_api_##n##_t_print_json,          \
                             vl_api_##n##_t_tojson,              \
                             vl_api_##n##_t_fromjson,            \
                             vl_api_##n##_t_calc_size);
@@ -432,9 +463,7 @@ static void vpp_plugin_vpe_init(void)
                             vl_api_##n##_t_handler,             \
                             vl_noop_handler,                    \
                             vl_api_##n##_t_endian,              \
-                            vl_noop_handler,                    \
                             sizeof(vl_api_##n##_t), 1,          \
-                            vl_noop_handler,                    \
                             vl_noop_handler,                    \
                             vl_noop_handler,                    \
                             vl_api_##n##_t_calc_size);

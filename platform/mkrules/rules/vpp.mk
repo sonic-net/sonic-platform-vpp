@@ -13,10 +13,10 @@
 
 # libvpp package
 
-VPP_VERSION = 22.06.0
-VPP_VERSION_FULL = 22.06-release
-VPP_PKG_SERVER = "https://packagecloud.io/fdio/attic/packages/debian/buster"
-VPP_DIST_VER="/download.deb?distro_version_id=150"
+VPP_VERSION = 23.02
+VPP_VERSION_FULL = 23.02-release
+VPP_PKG_SERVER = "https://packagecloud.io/fdio/release/packages/debian/$(BLDENV)"
+VPP_DIST_VER="/download.deb?distro_version_id=207"
 
 
 VPPINFRA = libvppinfra_$(VPP_VERSION_FULL)_$(CONFIGURED_ARCH).deb
