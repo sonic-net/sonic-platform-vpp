@@ -177,6 +177,10 @@ if [ "$NO_LINUX_NL" == "y" ]; then
     echo "NO_LINUX_NL=y" >> $VPP_ENV_FILE
 fi
 
+if [ "$VPP_CONF_DB" == "y" ]; then
+    echo "VPP_CONF_DB=y" >> $VPP_ENV_FILE
+fi
+
 setup_ports_list $portlist
 
 echo "Creating vpp to sonic interface mapping file"

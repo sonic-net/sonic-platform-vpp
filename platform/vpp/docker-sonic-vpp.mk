@@ -40,6 +40,7 @@ $(DOCKER_SONIC_VPP)_PYTHON_WHEELS += $(SWSSSDK_PY3) \
                                     $(SONIC_UTILITIES_PY3) \
                                     $(SONIC_HOST_SERVICES_PY3) \
 				    $(SONIC_BGPCFGD) \
+				    $(SONIC_VPPCFGD) \
 				    $(SONIC_FRR_MGMT_FRAMEWORK)
 
 ifeq ($(INSTALL_DEBUG_TOOLS), y)

@@ -1,0 +1,24 @@
+[Unit]
+Description=VPP configuration daemon
+Requires=database{% if multi_instance == 'true' %}@%i{% endif %}.service
+After=database{% if multi_instance == 'true' %}@%i{% endif %}.service
+
+Requires=config-setup.service
+After=config-setup.service
+
+Requires=updategraph.service
+After=updategraph.service
+
+BindsTo=sonic.target
+After=sonic.target
+Before=syncd.service
+
+[Service]
+EnvironmentFile=/etc/sonic/vpp/syncd_vpp_env
+ExecStartPre=/usr/local/bin/vppcfg_load.py
+ExecStart=/usr/local/bin/vppcfgd
+
+RestartSec=3
+
+[Install]
+WantedBy=sonic.target

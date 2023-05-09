@@ -1,0 +1,11 @@
+{
+    "PLATFORM": {
+        "vpp": {
+            "buffers": "{}",
+            "cpu": "{'workers': '2'}",
+            "dpdk": "{}",
+            "logging": "{}",
+            "memory": "{'main-heap-size': '512M'}"
+        }
+    }
+}
