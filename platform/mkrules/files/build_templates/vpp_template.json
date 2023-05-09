@@ -1,0 +1,55 @@
+{
+    "unix": {
+	"nodaemon": "",
+	"log": "/var/log/vpp.log",
+	"full-coredump": "",
+	"cli-listen": "/run/vpp/cli.sock",
+	"gid": "vpp",
+	"startup-config": "/etc/sonic/vpp/bootup.conf"
+    },
+    "api-trace": {
+	"on": ""
+    },
+    "api-segment": {
+	"gid": "vpp"
+    },
+
+    "socksvr": {
+	"default": ""
+    },
+    "memory": {
+	"main-heap-size": "1G"
+    },
+    "cpu": {
+	"main-core": "1",
+	"workers": "2"
+    },
+    "buffers": {
+	"page-size": "default-hugepage"
+    },
+    "dpdk": {
+	"dev": {
+	    "default": {
+		"num-rx-queues": "2",
+		"num-tx-queues": "2"
+	    }
+	}
+    },
+    "plugins": {
+	"plugin": {
+	    "default": "disable",
+	    "af_packet_plugin.so": "enable",
+	    "dpdk_plugin.so": "enable",
+	    "linux_cp_plugin.so": "enable",
+	    "linux_nl_plugin.so": "enable"
+	}
+    },
+    "logging": {
+	"default-log-level": "notice",
+	"default-syslog-log-level": "info"
+    },
+    "linux-cp": {
+	"lcp-auto-subint": ""
+    }
+}
+

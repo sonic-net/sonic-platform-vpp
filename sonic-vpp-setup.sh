@@ -73,6 +73,9 @@ cp $MKRULES_PATH/rules/swss.mk  ./rules/swss.mk
 cp $MKRULES_PATH/rules/vpp.mk ./rules/vpp.mk
 cp $MKRULES_PATH/rules/vpp.dep  ./rules/vpp.dep
 
+cp $MKRULES_PATH/rules/vppcfgd.mk ./rules/
+cp $MKRULES_PATH/rules/vppcfgd.dep  ./rules/
+
 #Configure.ac explicitly uses LIBSAIVS. Use LIBSAIVPP instead.
 cp $SONIC_SAIREDIS/configure.ac.vpp ./src/sonic-sairedis/configure.ac
 
@@ -97,6 +100,11 @@ cp $SONIC_SAIREDIS/pyext/py3/Makefile.am ./src/sonic-sairedis/pyext/py3/Makefile
 # https://github.com/sonic-net/sonic-swss/issues/2746
 
 pushd . ; cd ./src/sonic-swss; git apply  $SONIC_SRC/sonic-swss/swss.patch; popd
+
+cp -r $SONIC_SRC/sonic-vppcfgd ./src/
+cp $MKRULES_PATH/files/build_templates/vppcfg.service.j2 ./files/build_templates/vppcfg.service.j2
+cp $MKRULES_PATH/files/build_templates/vpp_template.json ./files/build_templates/
+cp $MKRULES_PATH/files/scripts/vppcfg_load.py ./files/scripts/vppcfg_load.py
 
 # Fix docker-py and urllib3 incompatibility issue which breaks the build
 git apply $MKRULES_PATH/build_debian.sh.patch

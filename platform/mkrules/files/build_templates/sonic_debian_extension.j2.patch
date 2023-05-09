@@ -12,17 +12,33 @@
 # limitations under the License.
 
 diff --git a/files/build_templates/sonic_debian_extension.j2 b/files/build_templates/sonic_debian_extension.j2
-index b2b5f5035..a7ff7c3c0 100644
+index 0dc60b2b6..1ec418964 100644
 --- a/files/build_templates/sonic_debian_extension.j2
 +++ b/files/build_templates/sonic_debian_extension.j2
-@@ -874,6 +874,10 @@ sudo LANG=C cp $SCRIPTS_DIR/telemetry.sh $FILESYSTEM_ROOT/usr/local/bin/telemetr
- sudo LANG=C cp $SCRIPTS_DIR/mgmt-framework.sh $FILESYSTEM_ROOT/usr/local/bin/mgmt-framework.sh
+@@ -881,6 +881,26 @@ sudo LANG=C cp $SCRIPTS_DIR/mgmt-framework.sh $FILESYSTEM_ROOT/usr/local/bin/mgm
  sudo LANG=C cp $SCRIPTS_DIR/asic_status.sh $FILESYSTEM_ROOT/usr/local/bin/asic_status.sh
  sudo LANG=C cp $SCRIPTS_DIR/asic_status.py $FILESYSTEM_ROOT/usr/local/bin/asic_status.py
+ 
 +{% if sonic_asic_platform == "vpp" %}
++
 +sudo LANG=C cp $SCRIPTS_DIR/vpp_ports_setup.sh $FILESYSTEM_ROOT/usr/local/bin/vpp_ports_setup.sh
 +sudo LANG=C cp $SCRIPTS_DIR/sonic_vpp_cfg.sh $FILESYSTEM_ROOT/usr/local/bin/sonic_vpp_cfg.sh
++j2 files/build_templates/vppcfg.service.j2 | sudo tee $FILESYSTEM_ROOT_USR_LIB_SYSTEMD_SYSTEM/vppcfg.service
++sudo LANG=C cp $SCRIPTS_DIR/vppcfg_load.py $FILESYSTEM_ROOT/usr/local/bin/vppcfg_load.py
++sudo LANG=C chroot $FILESYSTEM_ROOT mkdir -p /etc/sonic/vpp/
++sudo LANG=C cp files/build_templates/vpp_template.json $FILESYSTEM_ROOT/etc/sonic/vpp/
++sudo LANG=C cp /dev/null $FILESYSTEM_ROOT/etc/sonic/vpp/syncd_vpp_env
++
++sudo LANG=C DEBIAN_FRONTEND=noninteractive chroot $FILESYSTEM_ROOT systemctl enable vppcfg.service
++
++# Install vppcfgd Python 3 package
++VPP_PLATFORM_VPPCFGD_WHEEL_NAME=$(basename {{vpp_platform_vppcfgd_py3_wheel_path}})
++sudo cp {{vpp_platform_vppcfgd_py3_wheel_path}} $FILESYSTEM_ROOT/$VPP_PLATFORM_VPPCFGD_WHEEL_NAME
++sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install $VPP_PLATFORM_VPPCFGD_WHEEL_NAME
++sudo rm -rf $FILESYSTEM_ROOT/$VPP_PLATFORM_VPPCFGD_WHEEL_NAME
++
 +{% endif %}
- 
++
  # Copy sonic-netns-exec script
  sudo LANG=C cp $SCRIPTS_DIR/sonic-netns-exec $FILESYSTEM_ROOT/usr/bin/sonic-netns-exec
+ 

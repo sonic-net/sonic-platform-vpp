@@ -115,6 +115,11 @@ if [ "$HWSKU" = "brcm_gearbox_vs" ]; then
     supervisorctl start gearsyncd
 fi
 
+# Create vpp port configuration and load it in config_db
+/usr/local/bin/vppcfg_load.py
+
+supervisorctl start vppcfgd
+
 supervisorctl start syncd
 
 supervisorctl start portsyncd

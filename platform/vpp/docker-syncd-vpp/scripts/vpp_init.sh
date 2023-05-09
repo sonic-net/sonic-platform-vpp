@@ -23,6 +23,11 @@ function upd_startup()
     [ "$DPDK_DISABLE" != "y" ] && echo "$*" >> $TMP_FILE
 }
 
+if [ "$VPP_CONF_DB" == "y" ]; then
+    /usr/bin/vpp -c /etc/sonic/vpp/startup.conf
+    exit $?
+fi
+
 STARTUP_TMPL="/etc/vpp/startup.conf.tmpl"
 HWIFNAME="bobm"
 
