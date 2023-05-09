@@ -98,3 +98,5 @@ cp $SONIC_SAIREDIS/pyext/py3/Makefile.am ./src/sonic-sairedis/pyext/py3/Makefile
 
 pushd . ; cd ./src/sonic-swss; git apply  $SONIC_SRC/sonic-swss/swss.patch; popd
 
+# Fix docker-py and urllib3 incompatibility issue which breaks the build
+git apply $MKRULES_PATH/build_debian.sh.patch
