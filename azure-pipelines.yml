@@ -24,6 +24,7 @@ stages:
   jobs:
   - job: build
     pool: sonicbld
+    timeoutInMinutes: 360
     steps:
     - checkout: self
       clean: true
