@@ -28,4 +28,4 @@ stages:
     - checkout: self
       clean: true
     - bash: |
-        make sonic
+        make sonic ENABLE_DOCKER_BASE_PULL=y SONIC_BUILD_JOBS=$(nproc)
