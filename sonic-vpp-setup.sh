@@ -24,10 +24,9 @@ VPPLIBPATH=$PWD/platform/saivpp/vpplib
 
 cd ./build/sonic-buildimage
 
-#OLD_WORKING_LABEL=183d0f2be7
 # Below is the build label information
-# 261138	20230426.6	master	Azure.sonic-buildimage.official.vs	succeeded	2023-04-26T08:12:48	2023-04-26T13:18:17	53ae6a0bf8
-WORKING_LABEL=53ae6a0bf8
+# 272912	20230514.6	master	Azure.sonic-buildimage.official.vs	succeeded	2023-05-14T08:18:10	2023-05-14T13:27:23	31223fb9fe
+WORKING_LABEL=31223fb9fe
 SONIC_CHECKOUT_LABEL=${SONIC_CHECKOUT_LABEL:=$WORKING_LABEL}
 git checkout $SONIC_CHECKOUT_LABEL
 
@@ -105,6 +104,3 @@ cp -r $SONIC_SRC/sonic-vppcfgd ./src/
 cp $MKRULES_PATH/files/build_templates/vppcfg.service.j2 ./files/build_templates/vppcfg.service.j2
 cp $MKRULES_PATH/files/build_templates/vpp_template.json ./files/build_templates/
 cp $MKRULES_PATH/files/scripts/vppcfg_load.py ./files/scripts/vppcfg_load.py
-
-# Fix docker-py and urllib3 incompatibility issue which breaks the build
-git apply $MKRULES_PATH/build_debian.sh.patch
