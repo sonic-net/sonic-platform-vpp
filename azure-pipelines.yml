@@ -30,7 +30,8 @@ stages:
       clean: true
     - bash: |
         set -ex
-        make sonic ENABLE_DOCKER_BASE_PULL=y SONIC_BUILD_JOBS=$(nproc)
+        make sonic_vm ENABLE_DOCKER_BASE_PULL=y SONIC_BUILD_JOBS=$(nproc)
         cp build/sonic-buildimage/target/docker-sonic-vpp.gz $(Build.ArtifactStagingDirectory)
+        cp build/sonic-buildimage/target/sonic-vpp.img.gz $(Build.ArtifactStagingDirectory)
     - publish: $(Build.ArtifactStagingDirectory)/
       artifact: sonic-platform-vpp
