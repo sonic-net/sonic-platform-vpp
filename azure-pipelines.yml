@@ -7,18 +7,6 @@ trigger:
     include:
     - main
 
-resources:
-  repositories:
-  - repository: buildimage
-    type: github
-    name: sonic-net/sonic-buildimage
-    endpoint: sonic-net
-    ref: master
-
-variables:
-  - template: /.azure-pipelines/template-variables.yml@buildimage
-  - template: /.azure-pipelines/azure-pipelines-repd-build-variables.yml@buildimage
-
 stages:
 - stage: Build
   jobs:
