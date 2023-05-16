@@ -1,0 +1,25 @@
+pr:
+- main
+
+trigger:
+  batch: true
+  branches:
+    include:
+    - main
+
+stages:
+- stage: Build
+  jobs:
+  - job: build
+    pool: sonicbld
+    timeoutInMinutes: 360
+    steps:
+    - checkout: self
+      clean: true
+    - bash: |
+        set -ex
+        make sonic_vm ENABLE_DOCKER_BASE_PULL=y SONIC_BUILD_JOBS=$(nproc)
+        cp build/sonic-buildimage/target/docker-sonic-vpp.gz $(Build.ArtifactStagingDirectory)
+        cp build/sonic-buildimage/target/sonic-vpp.img.gz $(Build.ArtifactStagingDirectory)
+    - publish: $(Build.ArtifactStagingDirectory)/
+      artifact: sonic-platform-vpp
