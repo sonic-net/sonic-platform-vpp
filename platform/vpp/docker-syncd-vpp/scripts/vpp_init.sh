@@ -67,6 +67,23 @@ upd_startup "}"
 
 sed -i -e "s,VPP_STARTUP_CONFIG,$STARTUP_CFG,g" $TMP_FILE
 
+PERPORT_BUF=2048
+TOTBUF=$((PERPORT_BUF * IDX))
+
+echo "buffers {" >> $TMP_FILE
+echo "    buffers-per-numa $TOTBUF" >> $TMP_FILE
+echo "    page-size default-hugepage" >> $TMP_FILE
+echo "}" >> $TMP_FILE
+
+if [ "$DPDK_DISABLE" != "y" ]; then
+    if [ $IDX -le 6 ]; then
+	NHPG=12
+    else
+	NHPG=$((IDX * 2))
+    fi
+    echo $NHPG > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+fi
+
 cat $TMP_FILE
 
 /usr/bin/vpp -c ${TMP_FILE}

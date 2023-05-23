@@ -322,9 +322,20 @@ config_syncd_vs()
     CMD_ARGS+=" -p $HWSKU_DIR/sai.profile"
 }
 
+vpp_api_check()
+{
+   VPP_API_SOCK=$1
+   while true
+   do
+      [ -S "$VPP_API_SOCK" ] && vpp_api_test socket-name $VPP_API_SOCK <<< "show_version" 2>/dev/null | grep "version:" && break
+      sleep 1
+   done
+}
+
 config_syncd_vpp()
 {
     CMD_ARGS+=" -p $HWSKU_DIR/sai.profile"
+    vpp_api_check "/run/vpp/api.sock"
 }
 
 config_syncd_soda()
