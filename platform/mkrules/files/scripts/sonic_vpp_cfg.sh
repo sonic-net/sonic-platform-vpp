@@ -92,7 +92,7 @@ function create_if_mapping()
 	    port_name="$DPDK_IFNAME$DPDK_IDX"
 	    DPDK_IDX=$((DPDK_IDX + 1))
 	fi
-	echo "Ethernet$IDX $port_name" >> $SONIC_VPP_IFMAP
+	echo "Ethernet$((IDX * LANES)) $port_name" >> $SONIC_VPP_IFMAP
 	IDX=$((IDX + 1))
     done
 
@@ -107,6 +107,7 @@ mkdir -p $VPP_ROOT_CFG
 NETPORTS=""
 DRY_RUN=n
 DONT_ASK=n
+LANES=${LANES:=1}
 
 SONIC_CFG_FILE=/etc/sonic/config_db.json
 SONIC_CFG_FILE_ORIG=/etc/sonic/config_db.json.orig
@@ -166,7 +167,7 @@ NUM_INTFS=${#portlist[@]}
 for i in `seq 0 1 $((NUM_INTFS - 1))`
 do
 	ETHVAL=$(jq ".PORT.Ethernet$((i * 4))" $SONIC_CFG_FILE_ORIG)
-	jq ".PORT |= . + { \"Ethernet$i\": $ETHVAL }" $TMPCFG1 > $TMPCFG2
+	jq ".PORT |= . + { \"Ethernet$((i * LANES))\": $ETHVAL }" $TMPCFG1 > $TMPCFG2
 	cp $TMPCFG2 $TMPCFG1
 done
 
