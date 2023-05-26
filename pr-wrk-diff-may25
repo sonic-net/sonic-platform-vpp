@@ -1,0 +1,854 @@
+diff --git a/platform/saivpp/vpplib/SwitchStateBase.h b/platform/saivpp/vpplib/SwitchStateBase.h
+index c941ec3..2593695 100644
+--- a/platform/saivpp/vpplib/SwitchStateBase.h
++++ b/platform/saivpp/vpplib/SwitchStateBase.h
+@@ -693,6 +693,12 @@ namespace saivpp
+             bool nbr_env_read = false;
+             bool nbr_active = false;
+ 	    std::map<std::string, std::string> m_intf_prefix_map;
++	    std::unordered_map<std::string, uint32_t> lpbInstMap;
++	    std::unordered_map<std::string, bool> lpbIpExistMap;
++	    std::unordered_map<std::string, bool> lpbIpAddProgressMap;
++	    std::unordered_map<std::string, bool> lpbIpDelProgressMap;
++	    std::unordered_map<std::string, std::string> lpbIpToHostIfMap;
++	    std::unordered_map<std::string, std::string> lpbIpToIfMap;
+ 
+         protected:
+ 	    sai_status_t createRouterif(
+@@ -726,12 +732,21 @@ namespace saivpp
+ 		    _In_ const std::string& ip_prefix_key,
+                     _In_ sai_route_entry_t& route_entry,
+                     _In_ bool is_add);
++            sai_status_t vpp_add_del_lpb_intf_ip_addr (
++                    _In_ std::string destinationIP,
++                    _In_ const std::string &serializedObjectId,
++                    _In_ bool is_add);
+ 
+             sai_status_t vpp_get_router_intf_name (
+                     _In_ sai_ip_prefix_t& ip_prefix,
+                     _In_ sai_object_id_t rif_id,
+                     std::string& nexthop_ifname);
+ 
++            int getNextLoopbackInstance();
++
++            void markLoopbackInstanceDeleted(
++                    _In_ int instance);
++            
+             bool vpp_intf_get_prefix_entry(
+                     _In_ const std::string& intf_name,
+                     _In_ std::string& ip_prefix);
+@@ -786,6 +801,15 @@ namespace saivpp
+                     _In_ const sai_attribute_t *attr_list,
+                     sai_ip_address_t *ip_address,
+                     sai_object_id_t *next_rif_oid);
++            std::string convertIPToString(
++                    _In_ const sai_ip_addr_t &ipAddress);
++            std::string convertIPv6ToString(
++                    _In_ const sai_ip_addr_t &ipAddress,
++                    _In_ int ipFamily);
++            std::string extractDestinationIP(
++                    _In_ const std::string &serializedObjectId);
++            unsigned long ipToInteger(
++                    _In_ const std::string &ipAddress);
+             sai_status_t IpRouteAddRemove(
+                     _In_ const std::string &serializedObjectId,
+                     _In_ uint32_t attr_count,
+@@ -814,6 +838,10 @@ namespace saivpp
+ 
+         public: // TODO private
+ 
++            static int currentMaxInstance;
++
++            std::set<int> availableInstances;
++
+             std::set<FdbInfo> m_fdb_info_set;
+ 
+             std::map<std::string, std::shared_ptr<HostInterfaceInfo>> m_hostif_info_map;
+diff --git a/platform/saivpp/vpplib/SwitchStateBaseHostif.cpp b/platform/saivpp/vpplib/SwitchStateBaseHostif.cpp
+index 7bb1804..632c268 100644
+--- a/platform/saivpp/vpplib/SwitchStateBaseHostif.cpp
++++ b/platform/saivpp/vpplib/SwitchStateBaseHostif.cpp
+@@ -693,7 +693,8 @@ sai_status_t SwitchStateBase::vpp_create_hostif_tap_interface(
+     {
+         const char *dev = name.c_str();
+ 	init_vpp_client();
+-	configure_lcp_interface(tap_to_hwif_name(dev), dev);
++	bool is_add = true;
++	configure_lcp_interface(tap_to_hwif_name(dev), dev, is_add);
+     }
+ 
+     sai_attribute_t attr;
+diff --git a/platform/saivpp/vpplib/SwitchStateBaseRif.cpp b/platform/saivpp/vpplib/SwitchStateBaseRif.cpp
+index 7cf0f84..4733ad2 100644
+--- a/platform/saivpp/vpplib/SwitchStateBaseRif.cpp
++++ b/platform/saivpp/vpplib/SwitchStateBaseRif.cpp
+@@ -13,6 +13,9 @@
+  * limitations under the License.
+  */
+ 
++#include <iostream>
++#include <regex>
++#include <fstream>
+ #include "SwitchStateBase.h"
+ 
+ #include "swss/logger.h"
+@@ -26,6 +29,7 @@
+ #include <fcntl.h>
+ #include <sys/socket.h>
+ #include <net/if.h>
++#include <linux/if_tun.h>
+ 
+ #include "SwitchStateBaseUtils.h"
+ 
+@@ -35,6 +39,8 @@ using namespace saivpp;
+ 
+ #define IP_CMD               "/sbin/ip"
+ 
++int SwitchStateBase::currentMaxInstance = 0;
++
+ IpVrfInfo::IpVrfInfo(
+     _In_ sai_object_id_t obj_id,
+     _In_ uint32_t vrf_id,
+@@ -117,7 +123,140 @@ bool vpp_get_intf_name_for_prefix (
+     }
+ }
+ 
+-bool SwitchStateBase::vpp_intf_get_prefix_entry (const std::string& intf_name, std::string& ip_prefix)
++void create_route_prefix (
++    sai_route_entry_t *route_entry,
++    vpp_ip_route_t *ip_route)
++{
++    const sai_ip_prefix_t *ip_address = &route_entry->destination;
++
++    switch (ip_address->addr_family) {
++    case SAI_IP_ADDR_FAMILY_IPV4:
++    {
++	struct sockaddr_in *sin =  &ip_route->prefix_addr.addr.ip4;
++
++	ip_route->prefix_addr.sa_family = AF_INET;
++	sin->sin_addr.s_addr = ip_address->addr.ip4;
++	ip_route->prefix_len = getPrefixLenFromAddrMask(reinterpret_cast<const uint8_t*>(&ip_address->mask.ip4), 4);
++
++	break;
++    }
++    case SAI_IP_ADDR_FAMILY_IPV6:
++    {
++	struct sockaddr_in6 *sin6 =  &ip_route->prefix_addr.addr.ip6;
++
++	ip_route->prefix_addr.sa_family = AF_INET6;
++	memcpy(sin6->sin6_addr.s6_addr, ip_address->addr.ip6, sizeof(sin6->sin6_addr.s6_addr));
++	ip_route->prefix_len = getPrefixLenFromAddrMask(ip_address->mask.ip6, 16);
++
++	break;
++    }
++    }
++}
++
++int configureLoopbackInterface (
++    bool isAdd,
++    const std::string &hostIfname,
++    const std::string &destinationIp,
++    int prefixLen) 
++{
++    SWSS_LOG_ENTER();
++
++    // Prepare the command
++    std::string command = "config interface ip ";
++    command += isAdd ? "add " : "remove ";
++    command += hostIfname + " " + destinationIp + "/" + std::to_string(prefixLen);
++ 
++    // Execute the command
++    FILE* pipe = popen(command.c_str(), "r");
++    if (!pipe) {
++        SWSS_LOG_ERROR("Error executing command:%s", command);
++        return -1; // Return a failure value
++    }
++ 
++    // Read the command output
++    char buffer[128];
++    std::string output;
++    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
++        output += buffer;
++    }
++ 
++    // Close the pipe
++    pclose(pipe);
++ 
++    // Check the command output for success or failure
++    if (output.empty()) {
++        return 0; // Return a success value
++    } else {
++        SWSS_LOG_ERROR("Command execution failed:%s", command);
++        return -1; // Return a failure value
++    }
++}
++
++std::string findInterfaceNameByIp (const std::string &ipStr)
++{
++    SWSS_LOG_ENTER();
++
++    std::string interfaceName;
++    // Execute the "ip addr show" command and read its output
++    std::string command = "ip addr show";
++    std::string output;
++    std::string line;
++
++    FILE* pipe = popen(command.c_str(), "r");
++    if (!pipe) {
++        SWSS_LOG_ERROR("Error executing command %s", command.c_str());
++        return interfaceName;
++    }
++ 
++    char buffer[128];
++    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
++        line += buffer;
++    }
++    pclose(pipe);
++ 
++    // Extract the interface name from the command output
++    std::regex regexPattern(R"(^\d+:\s+(\w+):)");
++    std::smatch regexMatch;
++ 
++    std::istringstream iss(line);
++    std::string currentLine;
++    while (std::getline(iss, currentLine)) {
++        if (std::regex_search(currentLine, regexMatch, regexPattern)) {
++            interfaceName = regexMatch[1].str();
++        } else if (currentLine.find(ipStr) != std::string::npos) {
++            // Match found, return the interface name
++            return interfaceName;
++        }
++    }
++ 
++    return interfaceName;
++}
++
++int SwitchStateBase::getNextLoopbackInstance () 
++{
++    SWSS_LOG_ENTER();
++
++    int nextInstance = 0;
++ 
++    if (!availableInstances.empty()) {
++        nextInstance = *availableInstances.begin();
++        availableInstances.erase(availableInstances.begin());
++    } else {
++        nextInstance = currentMaxInstance;
++        ++currentMaxInstance;
++    }
++ 
++    SWSS_LOG_DEBUG("Next Loopback Instance:%u", nextInstance);
++ 
++    return nextInstance;
++}
++ 
++void SwitchStateBase::markLoopbackInstanceDeleted (int instance)
++{
++    availableInstances.insert(instance);
++}
++
++bool SwitchStateBase::vpp_intf_get_prefix_entry (const std::string &intf_name, std::string &ip_prefix)
+ {
+     auto it = m_intf_prefix_map.find(intf_name);
+ 
+@@ -320,7 +459,8 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr (
+     }
+ 
+     if (rif_type != SAI_ROUTER_INTERFACE_TYPE_SUB_PORT &&
+-	rif_type != SAI_ROUTER_INTERFACE_TYPE_PORT)
++	rif_type != SAI_ROUTER_INTERFACE_TYPE_PORT &&
++    rif_type != SAI_ROUTER_INTERFACE_TYPE_LOOPBACK)
+     {
+         return SAI_STATUS_SUCCESS;
+     }
+@@ -615,6 +755,157 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr_norif (
+     }
+ }
+ 
++sai_status_t SwitchStateBase::vpp_add_del_lpb_intf_ip_addr (
++    _In_ std::string destinationIP,
++    _In_ const std::string &serializedObjectId,
++    _In_ bool is_add)
++{
++    SWSS_LOG_ENTER();
++    
++    sai_route_entry_t route_entry;
++    sai_deserialize_route_entry(serializedObjectId, route_entry);
++    std::string ip_prefix_str;
++ 
++    if (is_add) 
++    {
++        // Add loopback interface
++        lpbIpAddProgressMap[destinationIP] = true;
++
++        // check if loopback interface ip already exists
++        if (lpbIpExistMap[destinationIP] == true)
++        {
++            SWSS_LOG_DEBUG("IP:%s already exists", destinationIP.c_str());
++            lpbIpAddProgressMap[destinationIP] = false;
++            return SAI_STATUS_SUCCESS;
++        }
++        lpbIpExistMap[destinationIP] = true;
++
++        // Retrieve the current instance for the interface
++        uint32_t instance = getNextLoopbackInstance();
++
++        // Generate the loopback interface name
++        std::string interfaceName = "loop" + std::to_string(instance);
++ 
++        // Store the current instance interface pair
++        lpbInstMap[interfaceName] = instance;
++
++        // Store the ip/interfaceName pair
++        lpbIpToIfMap[destinationIP] = interfaceName;
++        const char *hw_ifname = interfaceName.c_str();
++
++        SWSS_LOG_NOTICE("create_loopback_instance interfaceName:%s hwif_name:%s instance:%u ",
++            interfaceName.c_str(), hw_ifname, instance);
++        
++        // Create the loopback instance
++        int ret = create_loopback_instance(hw_ifname, instance);
++        if (ret != 0) {
++            SWSS_LOG_ERROR("create_loopback_instance returned error");
++        }
++ 
++        /* Get new list of physical interfaces from VPP */
++        refresh_interfaces_list();
++        
++        vpp_ip_route_t ip_route;
++        create_route_prefix(&route_entry, &ip_route);
++
++        char prefixIp4Str[INET_ADDRSTRLEN];
++        inet_ntop(AF_INET, &(ip_route.prefix_addr.addr.ip4.sin_addr), prefixIp4Str, INET_ADDRSTRLEN);
++
++        SWSS_LOG_DEBUG("hw_ifname:%s is_add:%u", hw_ifname, is_add);
++        ret = interface_ip_address_add_del(hw_ifname, &ip_route, is_add);
++        if (ret != 0) {
++            SWSS_LOG_ERROR("interface_ip_address_add_del returned error");
++        }
++
++        //Set state up
++        bool is_up = true;
++        interface_set_state(hw_ifname, is_up);
++
++        const std::string hostIfname = findInterfaceNameByIp(destinationIP);
++        lpbIpToHostIfMap[destinationIP] = hostIfname;
++        
++        // remove host looback interface before creating lcp tap
++        bool lpb_add = false;
++        const std::string destinationIp = destinationIP;
++        int result = configureLoopbackInterface(lpb_add, hostIfname, destinationIp, ip_route.prefix_len);
++        if (result != 0) 
++        {
++            SWSS_LOG_ERROR("Failed to configure loopback interface remove");
++        }
++
++        // create lcp tap between vpp and host
++        {
++            const char *sonic_name = hostIfname.c_str();
++            const char *vpp_name = interfaceName.c_str();
++	        init_vpp_client();
++            SWSS_LOG_DEBUG("configure_lcp_interface vpp_name:%s sonic_name:%s", vpp_name, sonic_name);
++	        configure_lcp_interface(vpp_name, sonic_name, is_add);
++        }
++
++        // add back host looback interface after creating lcp tap
++        lpb_add = true;
++        result = configureLoopbackInterface(lpb_add, hostIfname, destinationIp, ip_route.prefix_len);
++        if (result != 0) 
++        {
++            SWSS_LOG_ERROR("Failed to configure loopback interface add");
++        }
++
++        lpbIpAddProgressMap[destinationIP] = false;
++        return SAI_STATUS_SUCCESS;
++
++    } else 
++    {
++        // Delete loopback interface
++        if(lpbIpAddProgressMap[destinationIP] == true)
++        {
++            return SAI_STATUS_SUCCESS;
++        }
++        if(lpbIpDelProgressMap[destinationIP] == true)
++        {
++            return SAI_STATUS_SUCCESS;
++        }
++        if (lpbIpExistMap[destinationIP] != true)
++        {
++            return SAI_STATUS_SUCCESS;
++        }
++
++        lpbIpDelProgressMap[destinationIP] = true;
++        std::string interfaceName = lpbIpToIfMap[destinationIP];
++        const std::string hostIfname = lpbIpToHostIfMap[destinationIP];
++        uint32_t instance = lpbInstMap[interfaceName];
++        const char *hw_ifname = interfaceName.c_str();
++
++        // remove lcp tap between vpp and host
++        {
++            const char *sonic_name = hostIfname.c_str();
++            const char *vpp_name = interfaceName.c_str();
++            // Get new list of physical interfaces from VPP
++	        refresh_interfaces_list();
++            SWSS_LOG_DEBUG("Delete lcp_interface vpp_name:%s sonic_name:%s is_add:%u",
++                vpp_name, sonic_name, is_add);
++	        configure_lcp_interface(vpp_name, sonic_name, is_add);
++        }
++
++        // Delete the loopback instance
++        delete_loopback(hw_ifname, instance);
++
++        lpbIpExistMap[destinationIP] = false;
++        lpbIpDelProgressMap[destinationIP] = false; 
++
++        // Remove the IP/interface mappings from the maps
++        lpbInstMap.erase(interfaceName);
++        lpbIpToIfMap.erase(destinationIP);
++        lpbIpToHostIfMap.erase(destinationIP);
++ 
++        // Mark the loopback instance available
++        markLoopbackInstanceDeleted(instance);
++
++        return SAI_STATUS_SUCCESS;
++    }
++
++    return SAI_STATUS_SUCCESS;
++}
++
+ sai_status_t SwitchStateBase::vpp_get_router_intf_name (
+     _In_ sai_ip_prefix_t& ip_prefix,
+     _In_ sai_object_id_t rif_id,
+@@ -664,7 +955,8 @@ sai_status_t SwitchStateBase::vpp_get_router_intf_name (
+     }
+ 
+     if (rif_type != SAI_ROUTER_INTERFACE_TYPE_SUB_PORT &&
+-	rif_type != SAI_ROUTER_INTERFACE_TYPE_PORT)
++	rif_type != SAI_ROUTER_INTERFACE_TYPE_PORT &&
++    rif_type != SAI_ROUTER_INTERFACE_TYPE_LOOPBACK)
+     {
+         return SAI_STATUS_SUCCESS;
+     }
+diff --git a/platform/saivpp/vpplib/SwitchStateBaseRoute.cpp b/platform/saivpp/vpplib/SwitchStateBaseRoute.cpp
+index cdea4b5..8638d75 100644
+--- a/platform/saivpp/vpplib/SwitchStateBaseRoute.cpp
++++ b/platform/saivpp/vpplib/SwitchStateBaseRoute.cpp
+@@ -19,6 +19,10 @@
+ #include "swss/exec.h"
+ #include "swss/converter.h"
+ 
++#include <iostream>
++#include <cstring>
++#include <arpa/inet.h>
++#include <sys/ioctl.h>
+ #include "meta/sai_serialize.h"
+ #include "meta/NotificationPortStateChange.h"
+ #include <sys/types.h>
+@@ -66,6 +70,44 @@ void create_route_prefix_entry (
+     }
+ }
+ 
++std::string getInterfaceNameFromIP (const std::string &ipAddress) 
++{
++    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
++    if (sockfd < 0) {
++        SWSS_LOG_ERROR("getInterfaceNameFromIP failed to create socket");
++        return "";
++    }
++ 
++    struct ifconf ifc;
++    char buffer[4096];
++    std::memset(buffer, 0, sizeof(buffer));
++    ifc.ifc_len = sizeof(buffer);
++    ifc.ifc_buf = buffer;
++ 
++    if (ioctl(sockfd, SIOCGIFCONF, &ifc) < 0) {
++        SWSS_LOG_ERROR("getInterfaceNameFromIP ioctl failed");
++        close(sockfd);
++        return "";
++    }
++ 
++    struct ifreq* ifr = ifc.ifc_req;
++    const int numInterfaces = ifc.ifc_len / sizeof(struct ifreq);
++ 
++    for (int i = 0; i < numInterfaces; ++i) {
++        struct sockaddr_in* sa = static_cast<struct sockaddr_in*>(static_cast<void*>(&ifr[i].ifr_addr));
++        char ip[INET_ADDRSTRLEN];
++        inet_ntop(AF_INET, &(sa->sin_addr), ip, INET_ADDRSTRLEN);
++ 
++        if (ipAddress == ip) {
++            close(sockfd);
++            return ifr[i].ifr_name;
++        }
++    }
++ 
++    close(sockfd);
++    return "";
++}
++
+ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
+         _In_ uint32_t attr_count,
+         _In_ const sai_attribute_t *attr_list,
+@@ -137,6 +179,82 @@ void create_vpp_nexthop_entry (
+     vpp_nexthop->weight = 1;
+ }
+ 
++// Function to convert an IPv4 address from unsigned integer to string representation
++std::string SwitchStateBase::convertIPToString (
++        _In_ const sai_ip_addr_t &ipAddress)
++{
++    char ipStr[INET6_ADDRSTRLEN];
++ 
++    if (inet_ntop(AF_INET, &(ipAddress.ip4), ipStr, INET_ADDRSTRLEN) != nullptr) {
++        // IPv4 address
++        return std::string(ipStr);
++    } else if (inet_ntop(AF_INET6, &(ipAddress.ip6), ipStr, INET6_ADDRSTRLEN) != nullptr) {
++        // IPv6 address
++        return std::string(ipStr);
++    }
++ 
++    // Unsupported address family or conversion failure
++    return "";
++}
++
++// Function to convert an IPv6 address from unsigned integer to string representation
++std::string SwitchStateBase::convertIPv6ToString (
++        _In_ const sai_ip_addr_t &ipAddress,
++        _In_ int ipFamily)
++{
++    SWSS_LOG_ENTER();
++
++    if (ipFamily == AF_INET) {
++        // IPv4 address
++        char ipStr[INET_ADDRSTRLEN];
++        struct sockaddr_in sa;
++        sa.sin_family = AF_INET;
++        memcpy(&sa.sin_addr, &(ipAddress.ip4), 4);
++
++        if (inet_ntop(AF_INET, &(sa.sin_addr), ipStr, INET_ADDRSTRLEN) != nullptr)
++        {
++            return std::string(ipStr);
++        }
++
++    } else {
++        // IPv6 address
++        char ipStr[INET6_ADDRSTRLEN];
++        struct sockaddr_in6 sa6;
++        sa6.sin6_family = AF_INET6;
++        memcpy(&sa6.sin6_addr, &(ipAddress.ip6), 16);
++
++        if (inet_ntop(AF_INET6, &(sa6.sin6_addr), ipStr, INET6_ADDRSTRLEN) != nullptr)
++        {
++            return std::string(ipStr);
++        }
++    }
++ 
++    // Conversion failure
++    SWSS_LOG_ERROR("Failed to convert IPv6 address to string");
++    return "";
++}
++
++std::string SwitchStateBase::extractDestinationIP (
++    const std::string &serializedObjectId)
++{
++    SWSS_LOG_ENTER();
++
++    sai_route_entry_t routeEntry;
++    sai_deserialize_route_entry(serializedObjectId, routeEntry);
++ 
++    std::string destIPAddress = "";
++    if (routeEntry.destination.addr_family == SAI_IP_ADDR_FAMILY_IPV4)
++    {
++       destIPAddress = convertIPToString(routeEntry.destination.addr);
++    } else if (routeEntry.destination.addr_family == SAI_IP_ADDR_FAMILY_IPV6)
++    {
++       destIPAddress = convertIPv6ToString(routeEntry.destination.addr, routeEntry.destination.addr_family);
++    } else {
++        SWSS_LOG_ERROR("Could not determine IP address family!  destIPStream:%s", destIPAddress.c_str());
++    }
++    return destIPAddress;
++}
++
+ sai_status_t SwitchStateBase::IpRouteAddRemove(
+         _In_ const std::string &serializedObjectId,
+         _In_ uint32_t attr_count,
+@@ -228,6 +346,14 @@ sai_status_t SwitchStateBase::addIpRoute(
+         _In_ const sai_attribute_t *attr_list)
+ {
+     SWSS_LOG_ENTER();
++    sai_route_entry_t route_entry;
++    sai_deserialize_route_entry(serializedObjectId, route_entry);
++
++    std::string destinationIP = extractDestinationIP(serializedObjectId);
++ 
++    std::string interfaceName = getInterfaceNameFromIP(destinationIP);
++    bool isLoopback = (interfaceName.find("Loopback") != std::string::npos);
++    SWSS_LOG_NOTICE("getInterfaceNameFromIP:%s is:%s isLoopback:%u", destinationIP.c_str(), interfaceName.c_str(), isLoopback);
+ 
+     if (is_ip_nbr_active() == true) {
+ 	IpRouteAddRemove(serializedObjectId, attr_count, attr_list, true);
+@@ -235,6 +361,11 @@ sai_status_t SwitchStateBase::addIpRoute(
+ 
+     CHECK_STATUS(create_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, switch_id, attr_count, attr_list));
+ 
++    if (isLoopback) {
++        vpp_add_del_lpb_intf_ip_addr(destinationIP, serializedObjectId, true);
++        return SAI_STATUS_SUCCESS;
++    }
++
+     return SAI_STATUS_SUCCESS;
+ }
+ 
+@@ -243,6 +374,16 @@ sai_status_t SwitchStateBase::removeIpRoute(
+ {
+     SWSS_LOG_ENTER();
+ 
++    sai_route_entry_t route_entry;
++    sai_deserialize_route_entry(serializedObjectId, route_entry);
++    std::string destinationIP = extractDestinationIP(serializedObjectId);
++
++    std::string interfaceName = lpbIpToHostIfMap[destinationIP];
++    // std::string interfaceName = getInterfaceNameFromIP(destinationIP);
++    bool isLoopback = (interfaceName.find("Loopback") != std::string::npos);
++    SWSS_LOG_NOTICE("getInterfaceNameFromIP:%s is:%s isLoopback:%u", destinationIP.c_str(), interfaceName.c_str(), isLoopback);
++
++
+     if (is_ip_nbr_active() == true) {
+         sai_attribute_t attr[2];
+ 
+@@ -263,6 +404,11 @@ sai_status_t SwitchStateBase::removeIpRoute(
+ 
+     CHECK_STATUS(remove_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId));
+ 
++    if (isLoopback) {
++        vpp_add_del_lpb_intf_ip_addr(destinationIP, serializedObjectId, false);
++        return SAI_STATUS_SUCCESS;
++    }
++
+     return SAI_STATUS_SUCCESS;
+ }
+ 
+diff --git a/platform/saivpp/vpplib/vppxlate/SaiVppXlate.c b/platform/saivpp/vpplib/vppxlate/SaiVppXlate.c
+index 2329be5..f40bed5 100644
+--- a/platform/saivpp/vpplib/vppxlate/SaiVppXlate.c
++++ b/platform/saivpp/vpplib/vppxlate/SaiVppXlate.c
+@@ -243,6 +243,13 @@ static void set_reply_status (int retval)
+     }
+ }
+ 
++static void set_reply_sw_if_index (vl_api_interface_index_t sw_if_index)
++{
++    vat_main_t *vam = &vat_main;
++    
++	vam->sw_if_index = sw_if_index;
++}
++
+ static void
+ vl_api_control_ping_reply_t_handler (vl_api_control_ping_reply_t *mp)
+ {
+@@ -291,6 +298,23 @@ vl_api_sw_interface_details_t_handler (vl_api_sw_interface_details_t *mp)
+     }
+ }
+ 
++static void
++vl_api_create_loopback_instance_reply_t_handler (
++    vl_api_create_loopback_reply_t * msg)
++{
++    vat_main_t *vam = &vat_main;
++
++    set_reply_sw_if_index(ntohl(msg->sw_if_index));
++    set_reply_status(ntohl(msg->retval));
++}
++
++static void
++vl_api_delete_loopback_reply_t_handler (
++    vl_api_delete_loopback_reply_t * msg)
++{
++    set_reply_status(ntohl(msg->retval));
++}
++
+ static void
+ vl_api_create_subif_reply_t_handler (vl_api_create_subif_reply_t *msg)
+ {
+@@ -412,6 +436,8 @@ static void vpp_base_vpe_init(void)
+ 
+ #define foreach_vpe_ext_api_reply_msg                                   \
+     _(INTERFACE_MSG_ID(SW_INTERFACE_DETAILS), sw_interface_details)     \
++    _(INTERFACE_MSG_ID(CREATE_LOOPBACK_INSTANCE_REPLY), create_loopback_instance_reply) \
++    _(INTERFACE_MSG_ID(DELETE_LOOPBACK_REPLY), delete_loopback_reply) \
+     _(INTERFACE_MSG_ID(CREATE_SUBIF_REPLY), create_subif_reply) \
+     _(INTERFACE_MSG_ID(DELETE_SUBIF_REPLY), delete_subif_reply) \
+     _(INTERFACE_MSG_ID(SW_INTERFACE_SET_TABLE_REPLY), sw_interface_set_table_reply) \
+@@ -629,7 +655,30 @@ static u32 get_swif_idx (vat_main_t *vam, const char *ifname)
+     return ((u32) -1);
+ }
+ 
+-static int config_lcp_hostif (vat_main_t *vam, vl_api_interface_index_t if_idx, const char *hostif_name)
++static int config_lcp_hostif (vat_main_t *vam,
++                              vl_api_interface_index_t if_idx,
++                              const char *hostif_name,
++                              bool is_add)
++{
++    vl_api_lcp_itf_pair_add_del_t *mp;
++    int ret;
++
++    __plugin_msg_base = lcp_msg_id_base;
++
++    M (LCP_ITF_PAIR_ADD_DEL, mp);
++    mp->is_add = is_add;
++    mp->sw_if_index = htonl(if_idx);
++    strncpy((char *) mp->host_if_name, hostif_name, sizeof(mp->host_if_name));
++    mp->host_if_type = LCP_API_ITF_HOST_TAP;
++    S (mp);
++
++    W (ret);
++    return ret;
++}
++
++static int delete_lcp_hostif (vat_main_t *vam,
++                              vl_api_interface_index_t if_idx,
++                              const char *hostif_name)
+ {
+     vl_api_lcp_itf_pair_add_del_t *mp;
+     int ret;
+@@ -637,7 +686,7 @@ static int config_lcp_hostif (vat_main_t *vam, vl_api_interface_index_t if_idx,
+     __plugin_msg_base = lcp_msg_id_base;
+ 
+     M (LCP_ITF_PAIR_ADD_DEL, mp);
+-    mp->is_add = true;
++    mp->is_add = false;
+     mp->sw_if_index = htonl(if_idx);
+     strncpy((char *) mp->host_if_name, hostif_name, sizeof(mp->host_if_name));
+     mp->host_if_type = LCP_API_ITF_HOST_TAP;
+@@ -647,6 +696,79 @@ static int config_lcp_hostif (vat_main_t *vam, vl_api_interface_index_t if_idx,
+     return ret;
+ }
+ 
++static void compute_mac_addr(u32 instance, u8 *mac_address)
++{
++    u64 addr = 0x000000000000;
++    u8 *mac = (u8 *)&addr;
++
++    mac[0] = 0x00;
++    mac[1] = 0x00;
++    mac[2] = 0x00;
++
++    for (int i = 5; i > 2; i--) {
++        u8 quotient = instance % 256;
++        mac[i] = quotient;
++        instance /= 256;
++    }
++
++    if (instance > 0) {
++        mac[2] += instance & 0xff;
++        mac[1] += (instance >> 8) & 0xff;
++    }
++
++    memcpy(mac_address, mac, 6);
++}
++
++static int __create_loopback_instance (vat_main_t *vam, u32 instance)
++{
++    vl_api_create_loopback_instance_t *mp;
++    int ret;
++    u8 mac_address[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
++
++    __plugin_msg_base = interface_msg_id_base;
++
++    M (CREATE_LOOPBACK, mp);
++    mp->client_index = htonl(socket_client_main.client_index);
++    mp->context = instance;
++    mp->is_specified = true;
++    mp->user_instance = instance;
++    /* Set MAC address */
++    /* compute_mac_addr(if_idx, mac_address); */
++    memcpy(mp->mac_address, mac_address, sizeof(mac_address));
++
++    /* create_loopback interfaces from vnet/interface_cli.c */
++    S (mp);
++
++    W (ret);
++    return ret;
++}
++
++static int __delete_loopback (vat_main_t *vam, const char *hwif_name, u32 instance)
++{
++    vl_api_delete_loopback_t *mp;
++    int ret;
++
++    __plugin_msg_base = interface_msg_id_base;
++
++    M (DELETE_LOOPBACK, mp);
++    mp->client_index = htonl(socket_client_main.client_index);
++    mp->context = instance;
++
++	u32 idx;
++	idx = get_swif_idx(vam, hwif_name);
++	if (idx != (u32) -1) {
++	    mp->sw_if_index = htonl(idx);
++	} else {
++	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
++	    return -EINVAL;
++    }
++
++    S (mp);
++
++    W (ret);
++    return ret;
++}
++
+ static int __create_sub_interface (vat_main_t *vam, vl_api_interface_index_t if_idx, u32 sub_id, u16 vlan_id)
+ {
+     vl_api_create_subif_t *mp;
+@@ -735,7 +857,7 @@ int refresh_interfaces_list ()
+     return rc;
+ }
+ 
+-int configure_lcp_interface (const char *hwif_name, const char *hostif_name)
++int configure_lcp_interface (const char *hwif_name, const char *hostif_name, bool is_add)
+ {
+     u32 idx;
+     vat_main_t *vam = &vat_main;
+@@ -743,7 +865,25 @@ int configure_lcp_interface (const char *hwif_name, const char *hostif_name)
+     idx = get_swif_idx(vam, hwif_name);
+     SAIVPP_DEBUG("swif index of interface %s is %u\n", hwif_name, idx);
+ 
+-    return config_lcp_hostif(vam, idx, hostif_name);
++    return config_lcp_hostif(vam, idx, hostif_name, is_add);
++}
++
++int get_sw_if_idx(const char *ifname)
++{
++    vat_main_t *vam = &vat_main;
++    return get_swif_idx(&vam, ifname);
++}
++
++int create_loopback_instance (const char *hwif_name, u32 instance)
++{
++    vat_main_t *vam = &vat_main;
++    return __create_loopback_instance(vam, instance);
++}
++
++int delete_loopback (const char *hwif_name, u32 instance)
++{
++    vat_main_t *vam = &vat_main;
++    return __delete_loopback(vam, hwif_name, instance);
+ }
+ 
+ int create_sub_interface (const char *hwif_name, u32 sub_id, u16 vlan_id)
+diff --git a/platform/saivpp/vpplib/vppxlate/SaiVppXlate.h b/platform/saivpp/vpplib/vppxlate/SaiVppXlate.h
+index 4d93c53..8e61b59 100644
+--- a/platform/saivpp/vpplib/vppxlate/SaiVppXlate.h
++++ b/platform/saivpp/vpplib/vppxlate/SaiVppXlate.h
+@@ -54,7 +54,10 @@ extern "C" {
+ 
+     extern int init_vpp_client();
+     extern int refresh_interfaces_list();
+-    extern int configure_lcp_interface(const char *hwif_name, const char *hostif_name);
++    extern int configure_lcp_interface(const char *hwif_name, const char *hostif_name, bool is_add);
++    extern int create_loopback_instance(const char *hwif_name, uint32_t instance);
++    extern int delete_loopback(const char *hwif_name, uint32_t instance);
++    extern int get_sw_if_idx(const char *ifname);
+     extern int create_sub_interface(const char *hwif_name, uint32_t sub_id, uint16_t vlan_id);
+     extern int delete_sub_interface(const char *hwif_name, uint32_t sub_id);
+     extern int set_interface_vrf(const char *hwif_name, uint32_t sub_id, uint32_t vrf_id, bool is_ipv6);

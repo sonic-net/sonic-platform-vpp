@@ -693,7 +693,8 @@ sai_status_t SwitchStateBase::vpp_create_hostif_tap_interface(
     {
         const char *dev = name.c_str();
 	init_vpp_client();
-	configure_lcp_interface(tap_to_hwif_name(dev), dev);
+	bool is_add = true;
+	configure_lcp_interface(tap_to_hwif_name(dev), dev, is_add);
     }
 
     sai_attribute_t attr;
