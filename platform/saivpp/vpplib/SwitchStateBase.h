@@ -29,6 +29,9 @@
 #include <set>
 #include <unordered_set>
 #include <vector>
+#include <list>
+
+#include "SwitchStateBaseNexthop.h"
 
 #define SAI_VPP_FDB_INFO "SAI_VPP_FDB_INFO"
 
@@ -162,7 +165,7 @@ namespace saivpp
 
             virtual sai_status_t refresh_vlan_member_list(
                     _In_ const sai_attr_metadata_t *meta,
-                    _In_ sai_object_id_t vlan_id);
+                   _In_ sai_object_id_t vlan_id);
 
             virtual sai_status_t refresh_port_list(
                     _In_ const sai_attr_metadata_t *meta);
@@ -694,6 +697,30 @@ namespace saivpp
             bool nbr_active = false;
 	    std::map<std::string, std::string> m_intf_prefix_map;
 
+            std::map<sai_object_id_t, std::list<sai_object_id_t>> m_nxthop_grp_mbr_map;
+
+        protected:
+            sai_status_t NexthopGrpRemove(
+                _In_ const std::string &serializedObjectId);
+
+            sai_status_t NexthopGrpMemberRemove(
+                _In_ const std::string &serializedObjectId);
+
+            sai_status_t NexthopGrpMemberAdd(
+                _In_ const std::string &serializedObjectId,
+                _In_ sai_object_id_t switch_id,
+                _In_ uint32_t attr_count,
+                _In_ const sai_attribute_t *attr_list);
+
+            sai_status_t IpRouteNexthopGroupEntry(
+                _In_ sai_object_id_t next_hop_grp_oid,
+                _Out_ nexthop_grp_config_t **nxthop_group);
+
+            sai_status_t IpRouteNexthopEntry(
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list,
+		    _Out_ nexthop_grp_config_t **nxthop_group_cfg);
+
         protected:
 	    sai_status_t createRouterif(
 		    _In_ sai_object_id_t object_id,
@@ -781,16 +808,14 @@ namespace saivpp
                     _In_ const sai_attribute_t *attr_list);
             sai_status_t removeIpRoute(
 		    _In_ const std::string &serializedObjectId);
-            sai_status_t IpRouteNexthopEntry(
-                    _In_ uint32_t attr_count,
-                    _In_ const sai_attribute_t *attr_list,
-                    sai_ip_address_t *ip_address,
-                    sai_object_id_t *next_rif_oid);
             sai_status_t IpRouteAddRemove(
                     _In_ const std::string &serializedObjectId,
                     _In_ uint32_t attr_count,
                     _In_ const sai_attribute_t *attr_list,
                     _In_ bool is_add);
+            sai_status_t updateIpRoute(
+                    _In_ const std::string &serializedObjectId,
+                    _In_ const sai_attribute_t *attr_list);
 
 
             int vpp_add_ip_vrf(_In_ sai_object_id_t objectId, uint32_t vrf_id);
