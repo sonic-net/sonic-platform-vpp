@@ -186,6 +186,11 @@ sai_status_t SwitchStateBase::create(
         return addIpRoute(serializedObjectId, switch_id, attr_count, attr_list);
     }
 
+    if (object_type == SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER)
+    {
+        return NexthopGrpMemberAdd(serializedObjectId, switch_id, attr_count, attr_list);
+    }
+
     if (object_type == SAI_OBJECT_TYPE_NEIGHBOR_ENTRY)
     {
         return addIpNbr(serializedObjectId, switch_id, attr_count, attr_list);
@@ -433,6 +438,16 @@ sai_status_t SwitchStateBase::remove(
         return removeIpRoute(serializedObjectId);
     }
 
+    if (object_type == SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER)
+    {
+        return NexthopGrpMemberRemove(serializedObjectId);
+    }
+
+    if (object_type == SAI_OBJECT_TYPE_NEXT_HOP_GROUP)
+    {
+        return NexthopGrpRemove(serializedObjectId);
+    }
+
     if (object_type == SAI_OBJECT_TYPE_NEIGHBOR_ENTRY)
     {
         return removeIpNbr(serializedObjectId);
@@ -589,6 +604,11 @@ sai_status_t SwitchStateBase::set(
         sai_object_id_t objectId;
         sai_deserialize_object_id(serializedObjectId, objectId);
         return setAclEntry(objectId, attr);
+    }
+
+    if (objectType == SAI_OBJECT_TYPE_ROUTE_ENTRY)
+    {
+        return updateIpRoute(serializedObjectId, attr);
     }
 
     if (objectType == SAI_OBJECT_TYPE_MACSEC_SA)

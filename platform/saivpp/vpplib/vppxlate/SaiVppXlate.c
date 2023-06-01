@@ -362,7 +362,15 @@ vl_api_ip_route_add_del_reply_t_handler (vl_api_ip_route_add_del_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
 
-    SAIVPP_DEBUG("ip vrf add %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    SAIVPP_DEBUG("ip route add %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_set_ip_flow_hash_v2_reply_t_handler (vl_api_ip_route_add_del_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("ip flow has set %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
 }
 
 static void
@@ -421,6 +429,7 @@ static void vpp_base_vpe_init(void)
     _(INTERFACE_MSG_ID(HW_INTERFACE_SET_MTU_REPLY), hw_interface_set_mtu_reply) \
     _(IP_MSG_ID(IP_TABLE_ADD_DEL_REPLY), ip_table_add_del_reply) \
     _(IP_MSG_ID(IP_ROUTE_ADD_DEL_REPLY), ip_route_add_del_reply) \
+    _(IP_MSG_ID(SET_IP_FLOW_HASH_V2_REPLY), set_ip_flow_hash_v2_reply)	\
     _(IP_NBR_MSG_ID(IP_NEIGHBOR_ADD_DEL_REPLY), ip_neighbor_add_del_reply)
 
 static u16 interface_msg_id_base, ip_msg_id_base, ip_nbr_msg_id_base, lcp_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
@@ -963,6 +972,7 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
 	fib_path->table_id = 0;
 	fib_path->rpf_id = htonl(~0);
 	fib_path->weight = nexthop->weight;
+	fib_path->preference = nexthop->preference;
 	fib_path->n_labels = 0;
     }
     ip_route->table_id = htonl(prefix->vrf_id);
@@ -973,6 +983,32 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
     S (mp);
 
     W (ret);
+    return ret;
+}
+
+int vpp_ip_flow_hash_set (uint32_t vrf_id, uint32_t hash_mask, int addr_family)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_set_ip_flow_hash_v2_t *mp;
+    int ret;
+
+    __plugin_msg_base = ip_msg_id_base;
+
+    M (SET_IP_FLOW_HASH_V2, mp);
+    mp->table_id = htonl(vrf_id);
+    mp->flow_hash_config = htonl(hash_mask);
+
+    if (addr_family == AF_INET) {
+        mp->af = ADDRESS_IP4;
+    } else if (addr_family == AF_INET6) {
+        mp->af = ADDRESS_IP6;
+    } else {
+        return -1;
+    }
+
+    S (mp);
+    W (ret);
+
     return ret;
 }
 

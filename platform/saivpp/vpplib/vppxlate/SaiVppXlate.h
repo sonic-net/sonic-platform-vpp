@@ -39,6 +39,7 @@ extern "C" {
 	vpp_ip_addr_t addr;
         const char *hwif_name;
 	uint8_t weight;
+        uint8_t preference;
 	vpp_nexthop_type_e type;
         uint32_t flags;
     } vpp_ip_nexthop_t;
@@ -51,6 +52,17 @@ extern "C" {
         unsigned int nexthop_cnt;
         vpp_ip_nexthop_t nexthop[0];
     } vpp_ip_route_t;
+
+    typedef enum {
+        VPP_IP_API_FLOW_HASH_SRC_IP = 1,
+        VPP_IP_API_FLOW_HASH_DST_IP = 2,
+        VPP_IP_API_FLOW_HASH_SRC_PORT = 4,
+        VPP_IP_API_FLOW_HASH_DST_PORT = 8,
+        VPP_IP_API_FLOW_HASH_PROTO = 16,
+        VPP_IP_API_FLOW_HASH_REVERSE = 32,
+        VPP_IP_API_FLOW_HASH_SYMETRIC = 64,
+        VPP_IP_API_FLOW_HASH_FLOW_LABEL = 128,
+    } vpp_ip_flow_hash_mask_e;
 
     extern int init_vpp_client();
     extern int refresh_interfaces_list();
@@ -71,6 +83,7 @@ extern "C" {
     extern int ip6_nbr_add_del(const char *hwif_name, struct sockaddr_in6 *addr,
 			       bool is_static, uint8_t *mac, bool is_add);
     extern int ip_route_add_del(vpp_ip_route_t *prefix, bool is_add);
+    extern int vpp_ip_flow_hash_set(uint32_t vrf_id, uint32_t mask, int addr_family);
 
 #ifdef __cplusplus
 }
