@@ -68,11 +68,11 @@ upd_startup "}"
 sed -i -e "s,VPP_STARTUP_CONFIG,$STARTUP_CFG,g" $TMP_FILE
 
 PERPORT_BUF=2048
-TOTBUF=$((PERPORT_BUF * IDX))
+TOTBUF=$((PERPORT_BUF * SONIC_NUM_PORTS))
 
 echo "buffers {" >> $TMP_FILE
 echo "    buffers-per-numa $TOTBUF" >> $TMP_FILE
-echo "    page-size default-hugepage" >> $TMP_FILE
+[ "$DPDK_DISABLE" != "y" ] && echo "    page-size default-hugepage" >> $TMP_FILE
 echo "}" >> $TMP_FILE
 
 if [ "$DPDK_DISABLE" != "y" ]; then
