@@ -18,7 +18,7 @@ stages:
       clean: true
     - bash: |
         set -ex
-        make sonic_vm ENABLE_DOCKER_BASE_PULL=y SONIC_BUILD_JOBS=$(nproc)
+        make sonic_vm DEFAULT_CONTAINER_REGISTRY=publicmirror.azurecr.io MIRROR_SNAPSHOT=y SONIC_VERSION_CONTROL_COMPONENTS=all DOCKER_BUILDKIT=0 SONIC_BUILD_RETRY_INTERVAL=600 SONIC_BUILD_RETRY_COUNT=3 ENABLE_DOCKER_BASE_PULL=y
         cp build/sonic-buildimage/target/docker-sonic-vpp.gz $(Build.ArtifactStagingDirectory)
         cp build/sonic-buildimage/target/sonic-vpp.img.gz $(Build.ArtifactStagingDirectory)
     - publish: $(Build.ArtifactStagingDirectory)/
