@@ -25,8 +25,8 @@ VPPLIBPATH=$PWD/platform/saivpp/vpplib
 cd ./build/sonic-buildimage
 
 # Below is the build label information
-# 272912	20230514.6	master	Azure.sonic-buildimage.official.vs	succeeded	2023-05-14T08:18:10	2023-05-14T13:27:23	31223fb9fe
-WORKING_LABEL=31223fb9fe
+# 285104	20230601.6	master	Azure.sonic-buildimage.official.vs	succeeded	2023-06-01T08:18:54	2023-06-01T13:21:09	8b151d81c7
+WORKING_LABEL=8b151d81c7
 SONIC_CHECKOUT_LABEL=${SONIC_CHECKOUT_LABEL:=$WORKING_LABEL}
 git checkout $SONIC_CHECKOUT_LABEL
 

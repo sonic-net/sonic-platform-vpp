@@ -35,10 +35,16 @@ tests_LDADD = -lhiredis -lswsscommon -lpthread \
 			  $(top_srcdir)/lib/libsairedis.la $(top_srcdir)/syncd/libSyncd.a \
 			  -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta -lzmq $(CODE_COVERAGE_LIBS)
 
-testclient_SOURCES = testclient.cpp
+testclient_SOURCES = TestClient.cpp testclient.cpp
 testclient_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON)
 testclient_LDADD = -lhiredis -lswsscommon -lpthread \
 				   $(top_srcdir)/lib/libsairedis.la $(top_srcdir)/syncd/libSyncd.a \
 				   -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta -lzmq $(CODE_COVERAGE_LIBS)
 
-TESTS = aspellcheck.pl conflictnames.pl swsslogentercheck.sh checkwhitespace.sh tests BCM56850.pl MLNX2700.pl BCM56971B0.pl
+testdash_gtest_SOURCES = TestDashMain.cpp TestDash.cpp TestDashEnv.cpp
+testdash_gtest_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON)
+testdash_gtest_LDADD = -lgtest -lhiredis -lswsscommon -lpthread \
+				   $(top_srcdir)/lib/libsairedis.la $(top_srcdir)/syncd/libSyncd.a \
+				   -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta -lzmq $(CODE_COVERAGE_LIBS)
+
+TESTS = aspellcheck.pl conflictnames.pl swsslogentercheck.sh checkwhitespace.sh tests BCM56850.pl MLNX2700.pl BCM56971B0.pl NVDAMBF2H536C.pl testdash_gtest
