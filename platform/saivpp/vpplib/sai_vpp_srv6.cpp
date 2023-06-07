@@ -30,6 +30,10 @@ const sai_srv6_api_t vpp_srv6_api = {
     vpp_bulk_create_srv6_sidlists,
     vpp_bulk_remove_srv6_sidlists,
 
+    NULL,
+    NULL,
+    NULL,
+
     VPP_GENERIC_QUAD_API(my_sid_entry)
     VPP_BULK_QUAD_API(my_sid_entry)
 };
