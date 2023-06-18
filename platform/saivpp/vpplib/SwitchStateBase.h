@@ -694,9 +694,6 @@ namespace saivpp
             bool nbr_active = false;
 	    std::map<std::string, std::string> m_intf_prefix_map;
 	    std::unordered_map<std::string, uint32_t> lpbInstMap;
-	    std::unordered_map<std::string, bool> lpbIpExistMap;
-	    std::unordered_map<std::string, bool> lpbIpAddProgressMap;
-	    std::unordered_map<std::string, bool> lpbIpDelProgressMap;
 	    std::unordered_map<std::string, std::string> lpbIpToHostIfMap;
 	    std::unordered_map<std::string, std::string> lpbIpToIfMap;
 
@@ -732,6 +729,10 @@ namespace saivpp
 		    _In_ const std::string& ip_prefix_key,
                     _In_ sai_route_entry_t& route_entry,
                     _In_ bool is_add);
+            sai_status_t process_interface_loopback (
+                    _In_ const std::string &serializedObjectId,
+                    _In_ bool is_add,
+                    _In_ bool &isLoopback);
             sai_status_t vpp_add_del_lpb_intf_ip_addr (
                     _In_ std::string destinationIP,
                     _In_ const std::string &serializedObjectId,
@@ -746,7 +747,7 @@ namespace saivpp
 
             void markLoopbackInstanceDeleted(
                     _In_ int instance);
-            
+
             bool vpp_intf_get_prefix_entry(
                     _In_ const std::string& intf_name,
                     _In_ std::string& ip_prefix);
@@ -836,11 +837,11 @@ namespace saivpp
 	    std::map<std::string, std::string> m_hostif_hwif_map;
 	    int mapping_init = 0;
 
-        public: // TODO private
-
+        private:
             static int currentMaxInstance;
-
             std::set<int> availableInstances;
+
+        public: // TODO private
 
             std::set<FdbInfo> m_fdb_info_set;
 

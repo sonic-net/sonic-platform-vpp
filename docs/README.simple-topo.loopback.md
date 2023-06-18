@@ -1,10 +1,13 @@
 # Using a simple routing topology as below this demonstrates SONiC VPP Loopback
 
-  |-------------------------------------------------------------|
-  |                                                             |
-Host1 --------------------- Sonic-VPP-Router ---------------- Loopback0
+  |<--------------LCP Punt -------------|
+  |                                     |
+ Loopback0                           loop0
+  |  10.1.0.30/32          10.1.0.30/32 |   
+  |                                     |
+Host1 --------------------- Sonic-VPP-Router -------------------- Host2
 
-    172.16.1.2/24         172.16.1.1/24   172.16.2.1/24        10.1.0.30/32
+    172.16.1.2/24         172.16.1.1/24   172.16.2.1/24        172.16.2.2/24
 
 Pre-requisites for testing this out
     Make sure the docker is installed on the Linux system. iproute2 and sudo packages should be installed.
@@ -67,23 +70,9 @@ ip route show
 exit
 ```
 
-Now in the host start the sonic container and pass the veth interfaces to sonic-vpp
+Now on the host start the sonic container and pass the veth interfaces to sonic-vpp
 ```
 sudo ./start_sonic_vpp.sh start -n sonic-vpp -i vpp1,vpp2
-```
-
-Get into the sonic container and configure network addresses
-add the ipv4range and ipv6range for loopback interfaces
-
-```
-docker exec -it sonic-vpp /bin/bash
-ip link show
-
-vi /usr/share/sonic/hwsku/sonic_vpp_lpb_range.ini
-ipv4range 10.1.0.0-10.1.255.255
-ipv6range FC00:1::0-FC00:1::FF
-
-exit
 ```
 
 Get into the sonic container and configure network addresses 
@@ -105,8 +94,8 @@ show ip interfaces
 exit
 ```
 
-Get into VPP, check the loopback interfaces, address and lcp
-then get out of vpp and then get out of the container
+Get into VPP, check the loopback interface, its address and 
+lcp. Get out of vpp and then the container.
 
 ```
 vppctl

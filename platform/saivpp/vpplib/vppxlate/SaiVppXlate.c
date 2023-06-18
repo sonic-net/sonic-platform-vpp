@@ -246,7 +246,6 @@ static void set_reply_status (int retval)
 static void set_reply_sw_if_index (vl_api_interface_index_t sw_if_index)
 {
     vat_main_t *vam = &vat_main;
-    
 	vam->sw_if_index = sw_if_index;
 }
 
@@ -304,7 +303,7 @@ vl_api_create_loopback_instance_reply_t_handler (
 {
     vat_main_t *vam = &vat_main;
 
-    set_reply_sw_if_index(ntohl(msg->sw_if_index));
+    /*set_reply_sw_if_index(ntohl(msg->sw_if_index));*/
     set_reply_status(ntohl(msg->retval));
 }
 
@@ -696,29 +695,6 @@ static int delete_lcp_hostif (vat_main_t *vam,
     return ret;
 }
 
-static void compute_mac_addr(u32 instance, u8 *mac_address)
-{
-    u64 addr = 0x000000000000;
-    u8 *mac = (u8 *)&addr;
-
-    mac[0] = 0x00;
-    mac[1] = 0x00;
-    mac[2] = 0x00;
-
-    for (int i = 5; i > 2; i--) {
-        u8 quotient = instance % 256;
-        mac[i] = quotient;
-        instance /= 256;
-    }
-
-    if (instance > 0) {
-        mac[2] += instance & 0xff;
-        mac[1] += (instance >> 8) & 0xff;
-    }
-
-    memcpy(mac_address, mac, 6);
-}
-
 static int __create_loopback_instance (vat_main_t *vam, u32 instance)
 {
     vl_api_create_loopback_instance_t *mp;
@@ -728,12 +704,9 @@ static int __create_loopback_instance (vat_main_t *vam, u32 instance)
     __plugin_msg_base = interface_msg_id_base;
 
     M (CREATE_LOOPBACK, mp);
-    mp->client_index = htonl(socket_client_main.client_index);
-    mp->context = instance;
     mp->is_specified = true;
     mp->user_instance = instance;
     /* Set MAC address */
-    /* compute_mac_addr(if_idx, mac_address); */
     memcpy(mp->mac_address, mac_address, sizeof(mac_address));
 
     /* create_loopback interfaces from vnet/interface_cli.c */
@@ -751,16 +724,13 @@ static int __delete_loopback (vat_main_t *vam, const char *hwif_name, u32 instan
     __plugin_msg_base = interface_msg_id_base;
 
     M (DELETE_LOOPBACK, mp);
-    mp->client_index = htonl(socket_client_main.client_index);
-    mp->context = instance;
-
-	u32 idx;
-	idx = get_swif_idx(vam, hwif_name);
-	if (idx != (u32) -1) {
-	    mp->sw_if_index = htonl(idx);
-	} else {
-	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
-	    return -EINVAL;
+    u32 idx;
+    idx = get_swif_idx(vam, hwif_name);
+    if (idx != (u32) -1) {
+        mp->sw_if_index = htonl(idx);
+    } else {
+        SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+        return -EINVAL;
     }
 
     S (mp);
@@ -866,12 +836,6 @@ int configure_lcp_interface (const char *hwif_name, const char *hostif_name, boo
     SAIVPP_DEBUG("swif index of interface %s is %u\n", hwif_name, idx);
 
     return config_lcp_hostif(vam, idx, hostif_name, is_add);
-}
-
-int get_sw_if_idx(const char *ifname)
-{
-    vat_main_t *vam = &vat_main;
-    return get_swif_idx(&vam, ifname);
 }
 
 int create_loopback_instance (const char *hwif_name, u32 instance)

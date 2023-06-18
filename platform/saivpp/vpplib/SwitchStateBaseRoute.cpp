@@ -19,10 +19,6 @@
 #include "swss/exec.h"
 #include "swss/converter.h"
 
-#include <iostream>
-#include <cstring>
-#include <arpa/inet.h>
-#include <sys/ioctl.h>
 #include "meta/sai_serialize.h"
 #include "meta/NotificationPortStateChange.h"
 #include <sys/types.h>
@@ -68,44 +64,6 @@ void create_route_prefix_entry (
 	break;
     }
     }
-}
-
-std::string getInterfaceNameFromIP (const std::string &ipAddress) 
-{
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        SWSS_LOG_ERROR("getInterfaceNameFromIP failed to create socket");
-        return "";
-    }
- 
-    struct ifconf ifc;
-    char buffer[4096];
-    std::memset(buffer, 0, sizeof(buffer));
-    ifc.ifc_len = sizeof(buffer);
-    ifc.ifc_buf = buffer;
- 
-    if (ioctl(sockfd, SIOCGIFCONF, &ifc) < 0) {
-        SWSS_LOG_ERROR("getInterfaceNameFromIP ioctl failed");
-        close(sockfd);
-        return "";
-    }
- 
-    struct ifreq* ifr = ifc.ifc_req;
-    const int numInterfaces = ifc.ifc_len / sizeof(struct ifreq);
- 
-    for (int i = 0; i < numInterfaces; ++i) {
-        struct sockaddr_in* sa = static_cast<struct sockaddr_in*>(static_cast<void*>(&ifr[i].ifr_addr));
-        char ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(sa->sin_addr), ip, INET_ADDRSTRLEN);
- 
-        if (ipAddress == ip) {
-            close(sockfd);
-            return ifr[i].ifr_name;
-        }
-    }
- 
-    close(sockfd);
-    return "";
 }
 
 sai_status_t SwitchStateBase::IpRouteNexthopEntry(
@@ -177,82 +135,6 @@ void create_vpp_nexthop_entry (
     vpp_nexthop->type = type;
     vpp_nexthop->hwif_name = hwif_name;
     vpp_nexthop->weight = 1;
-}
-
-// Function to convert an IPv4 address from unsigned integer to string representation
-std::string SwitchStateBase::convertIPToString (
-        _In_ const sai_ip_addr_t &ipAddress)
-{
-    char ipStr[INET6_ADDRSTRLEN];
- 
-    if (inet_ntop(AF_INET, &(ipAddress.ip4), ipStr, INET_ADDRSTRLEN) != nullptr) {
-        // IPv4 address
-        return std::string(ipStr);
-    } else if (inet_ntop(AF_INET6, &(ipAddress.ip6), ipStr, INET6_ADDRSTRLEN) != nullptr) {
-        // IPv6 address
-        return std::string(ipStr);
-    }
- 
-    // Unsupported address family or conversion failure
-    return "";
-}
-
-// Function to convert an IPv6 address from unsigned integer to string representation
-std::string SwitchStateBase::convertIPv6ToString (
-        _In_ const sai_ip_addr_t &ipAddress,
-        _In_ int ipFamily)
-{
-    SWSS_LOG_ENTER();
-
-    if (ipFamily == AF_INET) {
-        // IPv4 address
-        char ipStr[INET_ADDRSTRLEN];
-        struct sockaddr_in sa;
-        sa.sin_family = AF_INET;
-        memcpy(&sa.sin_addr, &(ipAddress.ip4), 4);
-
-        if (inet_ntop(AF_INET, &(sa.sin_addr), ipStr, INET_ADDRSTRLEN) != nullptr)
-        {
-            return std::string(ipStr);
-        }
-
-    } else {
-        // IPv6 address
-        char ipStr[INET6_ADDRSTRLEN];
-        struct sockaddr_in6 sa6;
-        sa6.sin6_family = AF_INET6;
-        memcpy(&sa6.sin6_addr, &(ipAddress.ip6), 16);
-
-        if (inet_ntop(AF_INET6, &(sa6.sin6_addr), ipStr, INET6_ADDRSTRLEN) != nullptr)
-        {
-            return std::string(ipStr);
-        }
-    }
- 
-    // Conversion failure
-    SWSS_LOG_ERROR("Failed to convert IPv6 address to string");
-    return "";
-}
-
-std::string SwitchStateBase::extractDestinationIP (
-    const std::string &serializedObjectId)
-{
-    SWSS_LOG_ENTER();
-
-    sai_route_entry_t routeEntry;
-    sai_deserialize_route_entry(serializedObjectId, routeEntry);
- 
-    std::string destIPAddress = "";
-    if (routeEntry.destination.addr_family == SAI_IP_ADDR_FAMILY_IPV4)
-    {
-       destIPAddress = convertIPToString(routeEntry.destination.addr);
-    } else if (routeEntry.destination.addr_family == SAI_IP_ADDR_FAMILY_IPV6)
-    {
-       destIPAddress = convertIPv6ToString(routeEntry.destination.addr, routeEntry.destination.addr_family);
-    } else {
-        SWSS_LOG_ERROR("Could not determine IP address family!  destIPStream:%s", destIPAddress.c_str());
-    }
-    return destIPAddress;
 }
 
 sai_status_t SwitchStateBase::IpRouteAddRemove(
@@ -346,24 +228,17 @@ sai_status_t SwitchStateBase::addIpRoute(
         _In_ const sai_attribute_t *attr_list)
 {
     SWSS_LOG_ENTER();
-    sai_route_entry_t route_entry;
-    sai_deserialize_route_entry(serializedObjectId, route_entry);
+    bool isLoopback = false;
+    isLoopback = process_interface_loopback(serializedObjectId, true, isLoopback);
 
-    std::string destinationIP = extractDestinationIP(serializedObjectId);
- 
-    std::string interfaceName = getInterfaceNameFromIP(destinationIP);
-    bool isLoopback = (interfaceName.find("Loopback") != std::string::npos);
-    SWSS_LOG_NOTICE("getInterfaceNameFromIP:%s is:%s isLoopback:%u", destinationIP.c_str(), interfaceName.c_str(), isLoopback);
-
-    if (is_ip_nbr_active() == true) {
-	IpRouteAddRemove(serializedObjectId, attr_count, attr_list, true);
+    if (isLoopback == false && is_ip_nbr_active() == true)
+    {
+	    IpRouteAddRemove(serializedObjectId, attr_count, attr_list, true);
     }
 
-    CHECK_STATUS(create_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, switch_id, attr_count, attr_list));
-
-    if (isLoopback) {
-        vpp_add_del_lpb_intf_ip_addr(destinationIP, serializedObjectId, true);
-        return SAI_STATUS_SUCCESS;
+    if (isLoopback == false)
+    {
+        CHECK_STATUS(create_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, switch_id, attr_count, attr_list));
     }
 
     return SAI_STATUS_SUCCESS;
@@ -373,40 +248,31 @@ sai_status_t SwitchStateBase::removeIpRoute(
         _In_ const std::string &serializedObjectId)
 {
     SWSS_LOG_ENTER();
+    bool isLoopback = false;
+    isLoopback = process_interface_loopback(serializedObjectId, false, isLoopback);
 
-    sai_route_entry_t route_entry;
-    sai_deserialize_route_entry(serializedObjectId, route_entry);
-    std::string destinationIP = extractDestinationIP(serializedObjectId);
-
-    std::string interfaceName = lpbIpToHostIfMap[destinationIP];
-    // std::string interfaceName = getInterfaceNameFromIP(destinationIP);
-    bool isLoopback = (interfaceName.find("Loopback") != std::string::npos);
-    SWSS_LOG_NOTICE("getInterfaceNameFromIP:%s is:%s isLoopback:%u", destinationIP.c_str(), interfaceName.c_str(), isLoopback);
-
-
-    if (is_ip_nbr_active() == true) {
+    if (isLoopback == false && is_ip_nbr_active() == true)
+    {
         sai_attribute_t attr[2];
 
-	attr[0].id = SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID;
+	    attr[0].id = SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID;
 
-	if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr[0]) == SAI_STATUS_SUCCESS) {
-	    uint32_t attr_count = 1;
+	    if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr[0]) == SAI_STATUS_SUCCESS) {
+	        uint32_t attr_count = 1;
 
-	    attr[1].id = SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION;
-	    if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr[1]) == SAI_STATUS_SUCCESS)
-	    {
-		attr_count++;
+	        attr[1].id = SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION;
+	        if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr[1]) == SAI_STATUS_SUCCESS)
+	        {
+		        attr_count++;
+	        }
+
+	        IpRouteAddRemove(serializedObjectId, attr_count, attr, false);
 	    }
-
-	    IpRouteAddRemove(serializedObjectId, attr_count, attr, false);
-	}
     }
 
-    CHECK_STATUS(remove_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId));
-
-    if (isLoopback) {
-        vpp_add_del_lpb_intf_ip_addr(destinationIP, serializedObjectId, false);
-        return SAI_STATUS_SUCCESS;
+    if (isLoopback == false)
+    {
+        CHECK_STATUS(remove_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId));
     }
 
     return SAI_STATUS_SUCCESS;

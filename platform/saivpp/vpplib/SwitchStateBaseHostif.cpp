@@ -692,9 +692,8 @@ sai_status_t SwitchStateBase::vpp_create_hostif_tap_interface(
     SWSS_LOG_ERROR("created TAP device for %s, fd: %d", name.c_str(), tapfd);
     {
         const char *dev = name.c_str();
-	init_vpp_client();
-	bool is_add = true;
-	configure_lcp_interface(tap_to_hwif_name(dev), dev, is_add);
+        init_vpp_client();
+        configure_lcp_interface(tap_to_hwif_name(dev), dev, true);
     }
 
     sai_attribute_t attr;
