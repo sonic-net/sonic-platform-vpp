@@ -57,6 +57,7 @@ libSaiVPP_a_SOURCES = \
 					  SwitchStateBaseRif.cpp \
 					  SwitchStateBaseNbr.cpp \
 					  SwitchStateBaseRoute.cpp \
+					  SwitchStateBaseNexthop.cpp \
 					  SwitchStateBaseMACsec.cpp \
 					  SwitchState.cpp \
 					  TrafficFilterPipes.cpp \
@@ -67,11 +68,22 @@ libSaiVPP_a_SOURCES = \
 
 libsaivpp_la_SOURCES = \
 					  sai_vpp_acl.cpp \
+					  sai_vpp_ars.cpp \
+					  sai_vpp_ars_profile.cpp \
 					  sai_vpp_bfd.cpp \
 					  sai_vpp_bmtor.cpp \
 					  sai_vpp_bridge.cpp \
 					  sai_vpp_buffer.cpp \
 					  sai_vpp_counter.cpp \
+					  sai_vpp_dash_vip.cpp \
+					  sai_vpp_dash_pa_validation.cpp \
+					  sai_vpp_dash_vnet.cpp \
+					  sai_vpp_dash_outbound_routing.cpp \
+					  sai_vpp_dash_outbound_ca_to_pa.cpp \
+					  sai_vpp_dash_inbound_routing.cpp \
+					  sai_vpp_dash_eni.cpp \
+					  sai_vpp_dash_direction_lookup.cpp \
+					  sai_vpp_dash_acl.cpp \
 					  sai_vpp_debug_counter.cpp\
 					  sai_vpp_dtel.cpp \
 					  sai_vpp_fdb.cpp \
