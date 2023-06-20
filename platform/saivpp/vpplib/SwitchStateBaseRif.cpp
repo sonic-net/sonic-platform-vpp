@@ -273,7 +273,7 @@ int configureLoopbackInterface (
         return -1;
     }
 
-    return 0
+    return 0;
 }
 
 int SwitchStateBase::getNextLoopbackInstance ()
