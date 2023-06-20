@@ -236,10 +236,7 @@ sai_status_t SwitchStateBase::addIpRoute(
 	    IpRouteAddRemove(serializedObjectId, attr_count, attr_list, true);
     }
 
-    if (isLoopback == false)
-    {
-        CHECK_STATUS(create_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, switch_id, attr_count, attr_list));
-    }
+    CHECK_STATUS(create_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, switch_id, attr_count, attr_list));
 
     return SAI_STATUS_SUCCESS;
 }
@@ -270,10 +267,7 @@ sai_status_t SwitchStateBase::removeIpRoute(
 	    }
     }
 
-    if (isLoopback == false)
-    {
-        CHECK_STATUS(remove_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId));
-    }
+    CHECK_STATUS(remove_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId));
 
     return SAI_STATUS_SUCCESS;
 }

@@ -256,36 +256,24 @@ int configureLoopbackInterface (
     int prefixLen)
 {
     SWSS_LOG_ENTER();
+    std::stringstream cmd;
+    std::string res;
 
     // Prepare the command
     std::string command = "";
-    command += isAdd ? "ip address add " : "ip link delete dev ";
+    command += isAdd ? " address add " : " link delete dev ";
     command += isAdd ?  destinationIp + "/" + std::to_string(prefixLen) + " dev " + hostIfname : hostIfname;
+    cmd << IP_CMD << command;
 
     // Execute the command
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) {
-        SWSS_LOG_ERROR("Error executing command:%s", command);
-        return -1; // Return a failure value
+    int ret = swss::exec(cmd.str(), res);
+    if (ret)
+    {
+        SWSS_LOG_ERROR("Command '%s' failed with rc %d", cmd.str().c_str(), ret);
+        return -1;
     }
 
-    // Read the command output
-    char buffer[128];
-    std::string output;
-    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        output += buffer;
-    }
-
-    // Close the pipe
-    pclose(pipe);
-
-    // Check the command output for success or failure
-    if (output.empty()) {
-        return 0; // Return a success value
-    } else {
-        SWSS_LOG_ERROR("Command execution failed:%s", command);
-        return -1; // Return a failure value
-    }
+    return 0
 }
 
 int SwitchStateBase::getNextLoopbackInstance ()
@@ -932,7 +920,7 @@ sai_status_t SwitchStateBase::vpp_add_del_lpb_intf_ip_addr (
         delete_loopback(hw_ifname, instance);
 
         // refresh interfaces list as we have deleted the loopback interface
-	    refresh_interfaces_list();
+        refresh_interfaces_list();
 
         // Remove the IP/interface mappings from the maps
         lpbInstMap.erase(interfaceName);
