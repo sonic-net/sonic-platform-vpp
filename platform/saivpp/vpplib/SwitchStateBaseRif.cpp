@@ -13,6 +13,12 @@
  * limitations under the License.
  */
 
+#include <iostream>
+#include <cstring>
+#include <arpa/inet.h>
+#include <sys/ioctl.h>
+#include <regex>
+#include <fstream>
 #include "SwitchStateBase.h"
 
 #include "swss/logger.h"
@@ -26,6 +32,7 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <net/if.h>
+#include <linux/if_tun.h>
 
 #include "SwitchStateBaseUtils.h"
 
@@ -34,6 +41,8 @@
 using namespace saivpp;
 
 #define IP_CMD               "/sbin/ip"
+
+int SwitchStateBase::currentMaxInstance = 0;
 
 IpVrfInfo::IpVrfInfo(
     _In_ sai_object_id_t obj_id,
@@ -95,11 +104,11 @@ bool vpp_get_intf_name_for_prefix (
 
     if (is_v6)
     {
-        cmd << IP_CMD << " -6 " << " addr show " << " to " << prefix.to_string() ;
-        cmd << " scope global | awk -F':' '/[0-9]+: Eth/ { printf \"%s\", $2 }' | cut -d' ' -f2 -z | sed 's/@Eth.*//g'";
+        cmd << IP_CMD << " -6 " << " addr show " << " to " << prefix.to_string();
+        cmd << " scope global | awk -F':' '/[0-9]+: [a-zA-Z]+/ { printf \"%s\", $2 }' | cut -d' ' -f2 -z | sed 's/@[a-zA-Z].*//g'";
     } else {
         cmd << IP_CMD << " addr show " << " to " << prefix.to_string();
-	cmd << " scope global | awk -F':' '/[0-9]+: Eth/ { printf \"%s\", $2 }' | cut -d' ' -f2 -z | sed 's/@Eth.*//g'";
+        cmd << " scope global | awk -F':' '/[0-9]+: [a-zA-Z]+/ { printf \"%s\", $2 }' | cut -d' ' -f2 -z | sed 's/@[a-zA-Z].*//g'";
     }
     int ret = swss::exec(cmd.str(), ifname);
     if (ret)
@@ -111,13 +120,187 @@ bool vpp_get_intf_name_for_prefix (
     if (ifname.length() != 0)
     {
         SWSS_LOG_NOTICE("%s interface name with prefix %s is %s", (is_v6 ? "IPv6" : "IPv4"), prefix.to_string(), ifname.c_str());
-	return true;
+        return true;
     } else {
-	return false;
+        return false;
     }
 }
 
-bool SwitchStateBase::vpp_intf_get_prefix_entry (const std::string& intf_name, std::string& ip_prefix)
+// wrapper for vpp_get_intf_name_for_prefix
+std::string get_intf_name_for_prefix (
+    _In_ sai_route_entry_t& route_entry)
+{
+    bool is_v6 = false;
+    is_v6 = (route_entry.destination.addr_family == SAI_IP_ADDR_FAMILY_IPV6) ? true : false;
+
+    std::string full_if_name = "";
+	bool found = vpp_get_intf_name_for_prefix(route_entry.destination, is_v6, full_if_name);
+	if (found == false)
+	{
+	    SWSS_LOG_ERROR("host interface for prefix not found");
+    }
+    return full_if_name;
+
+}
+
+// Function to convert an IPv4 address from unsigned integer to string representation
+std::string SwitchStateBase::convertIPToString (
+        _In_ const sai_ip_addr_t &ipAddress)
+{
+    char ipStr[INET6_ADDRSTRLEN];
+
+    if (inet_ntop(AF_INET, &(ipAddress.ip4), ipStr, INET_ADDRSTRLEN) != nullptr) {
+        // IPv4 address
+        return std::string(ipStr);
+    } else if (inet_ntop(AF_INET6, &(ipAddress.ip6), ipStr, INET6_ADDRSTRLEN) != nullptr) {
+        // IPv6 address
+        return std::string(ipStr);
+    }
+
+    // Unsupported address family or conversion failure
+    return "";
+}
+
+// Function to convert an IPv6 address from unsigned integer to string representation
+std::string SwitchStateBase::convertIPv6ToString (
+        _In_ const sai_ip_addr_t &ipAddress,
+        _In_ int ipFamily)
+{
+    SWSS_LOG_ENTER();
+
+    if (ipFamily == AF_INET) {
+        // IPv4 address
+        char ipStr[INET_ADDRSTRLEN];
+        struct sockaddr_in sa;
+        sa.sin_family = AF_INET;
+        memcpy(&sa.sin_addr, &(ipAddress.ip4), 4);
+
+        if (inet_ntop(AF_INET, &(sa.sin_addr), ipStr, INET_ADDRSTRLEN) != nullptr)
+        {
+            return std::string(ipStr);
+        }
+
+    } else {
+        // IPv6 address
+        char ipStr[INET6_ADDRSTRLEN];
+        struct sockaddr_in6 sa6;
+        sa6.sin6_family = AF_INET6;
+        memcpy(&sa6.sin6_addr, &(ipAddress.ip6), 16);
+
+        if (inet_ntop(AF_INET6, &(sa6.sin6_addr), ipStr, INET6_ADDRSTRLEN) != nullptr)
+        {
+            return std::string(ipStr);
+        }
+    }
+
+    // Conversion failure
+    SWSS_LOG_ERROR("Failed to convert IPv6 address to string");
+    return "";
+}
+
+std::string SwitchStateBase::extractDestinationIP (
+    const std::string &serializedObjectId)
+{
+    SWSS_LOG_ENTER();
+
+    sai_route_entry_t routeEntry;
+    sai_deserialize_route_entry(serializedObjectId, routeEntry);
+
+    std::string destIPAddress = "";
+    if (routeEntry.destination.addr_family == SAI_IP_ADDR_FAMILY_IPV4)
+    {
+       destIPAddress = convertIPToString(routeEntry.destination.addr);
+    } else if (routeEntry.destination.addr_family == SAI_IP_ADDR_FAMILY_IPV6)
+    {
+       destIPAddress = convertIPv6ToString(routeEntry.destination.addr, routeEntry.destination.addr_family);
+    } else {
+        SWSS_LOG_ERROR("Could not determine IP address family!  destIPStream:%s", destIPAddress.c_str());
+    }
+    return destIPAddress;
+}
+
+void create_route_prefix (
+    sai_route_entry_t *route_entry,
+    vpp_ip_route_t *ip_route)
+{
+    const sai_ip_prefix_t *ip_address = &route_entry->destination;
+
+    switch (ip_address->addr_family) {
+    case SAI_IP_ADDR_FAMILY_IPV4:
+    {
+	struct sockaddr_in *sin =  &ip_route->prefix_addr.addr.ip4;
+
+	ip_route->prefix_addr.sa_family = AF_INET;
+	sin->sin_addr.s_addr = ip_address->addr.ip4;
+	ip_route->prefix_len = getPrefixLenFromAddrMask(reinterpret_cast<const uint8_t*>(&ip_address->mask.ip4), 4);
+
+	break;
+    }
+    case SAI_IP_ADDR_FAMILY_IPV6:
+    {
+	struct sockaddr_in6 *sin6 =  &ip_route->prefix_addr.addr.ip6;
+
+	ip_route->prefix_addr.sa_family = AF_INET6;
+	memcpy(sin6->sin6_addr.s6_addr, ip_address->addr.ip6, sizeof(sin6->sin6_addr.s6_addr));
+	ip_route->prefix_len = getPrefixLenFromAddrMask(ip_address->mask.ip6, 16);
+
+	break;
+    }
+    }
+}
+
+int configureLoopbackInterface (
+    bool isAdd,
+    const std::string &hostIfname,
+    const std::string &destinationIp,
+    int prefixLen)
+{
+    SWSS_LOG_ENTER();
+    std::stringstream cmd;
+    std::string res;
+
+    // Prepare the command
+    std::string command = "";
+    command += isAdd ? " address add " : " link delete dev ";
+    command += isAdd ?  destinationIp + "/" + std::to_string(prefixLen) + " dev " + hostIfname : hostIfname;
+    cmd << IP_CMD << command;
+
+    // Execute the command
+    int ret = swss::exec(cmd.str(), res);
+    if (ret)
+    {
+        SWSS_LOG_ERROR("Command '%s' failed with rc %d", cmd.str().c_str(), ret);
+        return -1;
+    }
+
+    return 0;
+}
+
+int SwitchStateBase::getNextLoopbackInstance ()
+{
+    SWSS_LOG_ENTER();
+
+    int nextInstance = 0;
+
+    if (!availableInstances.empty()) {
+        nextInstance = *availableInstances.begin();
+        availableInstances.erase(availableInstances.begin());
+    } else {
+        nextInstance = currentMaxInstance;
+        ++currentMaxInstance;
+    }
+
+    SWSS_LOG_DEBUG("Next Loopback Instance:%u", nextInstance);
+
+    return nextInstance;
+}
+
+void SwitchStateBase::markLoopbackInstanceDeleted (int instance)
+{
+    availableInstances.insert(instance);
+}
+
+bool SwitchStateBase::vpp_intf_get_prefix_entry (const std::string &intf_name, std::string &ip_prefix)
 {
     auto it = m_intf_prefix_map.find(intf_name);
 
@@ -320,7 +503,8 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr (
     }
 
     if (rif_type != SAI_ROUTER_INTERFACE_TYPE_SUB_PORT &&
-	rif_type != SAI_ROUTER_INTERFACE_TYPE_PORT)
+        rif_type != SAI_ROUTER_INTERFACE_TYPE_PORT &&
+        rif_type != SAI_ROUTER_INTERFACE_TYPE_LOOPBACK)
     {
         return SAI_STATUS_SUCCESS;
     }
@@ -615,6 +799,143 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr_norif (
     }
 }
 
+sai_status_t SwitchStateBase::process_interface_loopback (
+   _In_ const std::string &serializedObjectId,
+   _In_ bool is_add,
+   _In_ bool &isLoopback)
+{
+    SWSS_LOG_ENTER();
+    isLoopback = false;
+
+    sai_route_entry_t route_entry;
+    sai_deserialize_route_entry(serializedObjectId, route_entry);
+
+    std::string destinationIP = extractDestinationIP(serializedObjectId);
+
+    std::string interfaceName = get_intf_name_for_prefix(route_entry);
+    isLoopback = (interfaceName.find("Loopback") != std::string::npos);
+    SWSS_LOG_NOTICE("destination_ip:%s interfaceName:%s isLoopback:%u", destinationIP.c_str(), interfaceName.c_str(), isLoopback);
+
+    if (isLoopback) {
+        vpp_add_del_lpb_intf_ip_addr(destinationIP, serializedObjectId, is_add);
+    }
+
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::vpp_add_del_lpb_intf_ip_addr (
+    _In_ std::string destinationIP,
+    _In_ const std::string &serializedObjectId,
+    _In_ bool is_add)
+{
+    SWSS_LOG_ENTER();
+
+    sai_route_entry_t route_entry;
+    sai_deserialize_route_entry(serializedObjectId, route_entry);
+    std::string ip_prefix_str;
+
+    if (is_add)
+    {
+        // Retrieve the current instance for the interface
+        uint32_t instance = getNextLoopbackInstance();
+
+        // Generate the loopback interface name
+        std::string interfaceName = "loop" + std::to_string(instance);
+
+        // Store the current instance interface pair
+        lpbInstMap[interfaceName] = instance;
+
+        // Store the ip/interfaceName pair
+        lpbIpToIfMap[destinationIP] = interfaceName;
+        const char *hw_ifname = interfaceName.c_str();
+
+        SWSS_LOG_NOTICE("create_loopback_instance interfaceName:%s hwif_name:%s instance:%u ",
+            interfaceName.c_str(), hw_ifname, instance);
+
+        // Create the loopback instance
+        int ret = create_loopback_instance(hw_ifname, instance);
+        if (ret != 0) {
+            SWSS_LOG_ERROR("create_loopback_instance returned error");
+        }
+
+        /* Get new list of physical interfaces from VPP */
+        refresh_interfaces_list();
+
+        vpp_ip_route_t ip_route;
+        create_route_prefix(&route_entry, &ip_route);
+
+        char prefixIp4Str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(ip_route.prefix_addr.addr.ip4.sin_addr), prefixIp4Str, INET_ADDRSTRLEN);
+
+        SWSS_LOG_DEBUG("hw_ifname:%s is_add:%u", hw_ifname, is_add);
+        ret = interface_ip_address_add_del(hw_ifname, &ip_route, is_add);
+        if (ret != 0) {
+            SWSS_LOG_ERROR("interface_ip_address_add_del returned error");
+        }
+
+        //Set state up
+        bool is_up = true;
+        interface_set_state(hw_ifname, is_up);
+
+        const std::string hostIfname = get_intf_name_for_prefix(route_entry);
+        SWSS_LOG_NOTICE("get_intf_name_for_prefix:%s", hostIfname.c_str());
+        lpbIpToHostIfMap[destinationIP] = hostIfname;
+
+        // remove host looback interface before creating lcp tap
+        bool lpb_add = false;
+        const std::string destinationIp = destinationIP;
+        int result = configureLoopbackInterface(lpb_add, hostIfname, destinationIp, ip_route.prefix_len);
+        if (result != 0)
+        {
+            SWSS_LOG_ERROR("Failed to configure loopback interface remove");
+        }
+
+        // create lcp tap between vpp and host
+        {
+            const char *sonic_name = hostIfname.c_str();
+            const char *vpp_name = interfaceName.c_str();
+            init_vpp_client();
+            SWSS_LOG_DEBUG("configure_lcp_interface vpp_name:%s sonic_name:%s", vpp_name, sonic_name);
+            configure_lcp_interface(vpp_name, sonic_name, is_add);
+        }
+
+        // add back host looback interface after creating lcp tap
+        lpb_add = true;
+        result = configureLoopbackInterface(lpb_add, hostIfname, destinationIp, ip_route.prefix_len);
+        if (result != 0)
+        {
+            SWSS_LOG_ERROR("Failed to configure loopback interface add");
+        }
+
+        return SAI_STATUS_SUCCESS;
+
+    } else
+    {
+        std::string interfaceName = lpbIpToIfMap[destinationIP];
+        const std::string hostIfname = lpbIpToHostIfMap[destinationIP];
+        uint32_t instance = lpbInstMap[interfaceName];
+        const char *hw_ifname = interfaceName.c_str();
+
+        // Delete the loopback instance
+        delete_loopback(hw_ifname, instance);
+
+        // refresh interfaces list as we have deleted the loopback interface
+        refresh_interfaces_list();
+
+        // Remove the IP/interface mappings from the maps
+        lpbInstMap.erase(interfaceName);
+        lpbIpToIfMap.erase(destinationIP);
+        lpbIpToHostIfMap.erase(destinationIP);
+
+        // Mark the loopback instance available
+        markLoopbackInstanceDeleted(instance);
+
+        return SAI_STATUS_SUCCESS;
+    }
+
+    return SAI_STATUS_SUCCESS;
+}
+
 sai_status_t SwitchStateBase::vpp_get_router_intf_name (
     _In_ sai_ip_prefix_t& ip_prefix,
     _In_ sai_object_id_t rif_id,
@@ -664,7 +985,8 @@ sai_status_t SwitchStateBase::vpp_get_router_intf_name (
     }
 
     if (rif_type != SAI_ROUTER_INTERFACE_TYPE_SUB_PORT &&
-	rif_type != SAI_ROUTER_INTERFACE_TYPE_PORT)
+	rif_type != SAI_ROUTER_INTERFACE_TYPE_PORT &&
+    rif_type != SAI_ROUTER_INTERFACE_TYPE_LOOPBACK)
     {
         return SAI_STATUS_SUCCESS;
     }
