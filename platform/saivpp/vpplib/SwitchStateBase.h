@@ -696,6 +696,9 @@ namespace saivpp
             bool nbr_env_read = false;
             bool nbr_active = false;
 	    std::map<std::string, std::string> m_intf_prefix_map;
+	    std::unordered_map<std::string, uint32_t> lpbInstMap;
+	    std::unordered_map<std::string, std::string> lpbIpToHostIfMap;
+	    std::unordered_map<std::string, std::string> lpbIpToIfMap;
 
             std::map<sai_object_id_t, std::list<sai_object_id_t>> m_nxthop_grp_mbr_map;
 
@@ -753,11 +756,24 @@ namespace saivpp
 		    _In_ const std::string& ip_prefix_key,
                     _In_ sai_route_entry_t& route_entry,
                     _In_ bool is_add);
+            sai_status_t process_interface_loopback (
+                    _In_ const std::string &serializedObjectId,
+                    _In_ bool is_add,
+                    _In_ bool &isLoopback);
+            sai_status_t vpp_add_del_lpb_intf_ip_addr (
+                    _In_ std::string destinationIP,
+                    _In_ const std::string &serializedObjectId,
+                    _In_ bool is_add);
 
             sai_status_t vpp_get_router_intf_name (
                     _In_ sai_ip_prefix_t& ip_prefix,
                     _In_ sai_object_id_t rif_id,
                     std::string& nexthop_ifname);
+
+            int getNextLoopbackInstance();
+
+            void markLoopbackInstanceDeleted(
+                    _In_ int instance);
 
             bool vpp_intf_get_prefix_entry(
                     _In_ const std::string& intf_name,
@@ -808,6 +824,22 @@ namespace saivpp
                     _In_ const sai_attribute_t *attr_list);
             sai_status_t removeIpRoute(
 		    _In_ const std::string &serializedObjectId);
+
+            sai_status_t IpRouteNexthopEntry(
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list,
+                    sai_ip_address_t *ip_address,
+                    sai_object_id_t *next_rif_oid);
+            std::string convertIPToString(
+                    _In_ const sai_ip_addr_t &ipAddress);
+            std::string convertIPv6ToString(
+                    _In_ const sai_ip_addr_t &ipAddress,
+                    _In_ int ipFamily);
+            std::string extractDestinationIP(
+                    _In_ const std::string &serializedObjectId);
+            unsigned long ipToInteger(
+                    _In_ const std::string &ipAddress);
+
             sai_status_t IpRouteAddRemove(
                     _In_ const std::string &serializedObjectId,
                     _In_ uint32_t attr_count,
@@ -836,6 +868,10 @@ namespace saivpp
         private:
 	    std::map<std::string, std::string> m_hostif_hwif_map;
 	    int mapping_init = 0;
+
+        private:
+            static int currentMaxInstance;
+            std::set<int> availableInstances;
 
         public: // TODO private
 
