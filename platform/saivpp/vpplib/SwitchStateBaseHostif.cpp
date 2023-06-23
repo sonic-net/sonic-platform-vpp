@@ -591,6 +591,21 @@ bool SwitchStateBase::hostif_create_tap_veth_forwarding(
     return true;
 }
 
+bool SwitchStateBase::is_sonic_vpp_switch ()
+{
+    if (vpp_switch_env_read == false)
+    {
+	const char *val;
+
+	val = getenv("SONIC_VPP_SWITCH");
+	if (val && (*val == 'y' || *val == 'Y')) {
+	    sonic_vpp_switch = true;
+	}
+	vpp_switch_env_read = true;
+    }
+    return sonic_vpp_switch;
+}
+
 sai_status_t SwitchStateBase::vpp_create_hostif_tap_interface(
         _In_ uint32_t attr_count,
         _In_ const sai_attribute_t *attr_list)
@@ -696,36 +711,37 @@ sai_status_t SwitchStateBase::vpp_create_hostif_tap_interface(
         configure_lcp_interface(tap_to_hwif_name(dev), dev, true);
     }
 
-    sai_attribute_t attr;
-
-    memset(&attr, 0, sizeof(attr));
-
-    attr.id = SAI_SWITCH_ATTR_SRC_MAC_ADDRESS;
-
-    sai_status_t status = get(SAI_OBJECT_TYPE_SWITCH, m_switch_id, 1, &attr);
-
-    if (status != SAI_STATUS_SUCCESS)
-    {
-        SWSS_LOG_ERROR("failed to get SAI_SWITCH_ATTR_SRC_MAC_ADDRESS on switch %s: %s",
-                sai_serialize_object_id(m_switch_id).c_str(),
-                sai_serialize_status(status).c_str());
-    }
     send_port_oper_status_notification(obj_id, SAI_PORT_OPER_STATUS_UP, true);
 
-    /*
-    int err = vpp_set_dev_mac_address(name.c_str(), attr.value.mac);
+    if (is_sonic_vpp_switch()) {
+        sai_attribute_t attr;
 
-    if (err < 0)
-    {
-        SWSS_LOG_ERROR("failed to set MAC address %s for %s",
-                sai_serialize_mac(attr.value.mac).c_str(),
-                name.c_str());
+	memset(&attr, 0, sizeof(attr));
 
-        close(tapfd);
+	attr.id = SAI_SWITCH_ATTR_SRC_MAC_ADDRESS;
 
-        return SAI_STATUS_FAILURE;
+	sai_status_t status = get(SAI_OBJECT_TYPE_SWITCH, m_switch_id, 1, &attr);
+
+	if (status != SAI_STATUS_SUCCESS)
+        {
+	    SWSS_LOG_ERROR("failed to get SAI_SWITCH_ATTR_SRC_MAC_ADDRESS on switch %s: %s",
+			   sai_serialize_object_id(m_switch_id).c_str(),
+			   sai_serialize_status(status).c_str());
+	}
+
+	int err = vpp_set_dev_mac_address(name.c_str(), attr.value.mac);
+
+	if (err < 0)
+        {
+	    SWSS_LOG_ERROR("failed to set MAC address %s for %s",
+			   sai_serialize_mac(attr.value.mac).c_str(),
+			   name.c_str());
+	    close(tapfd);
+
+	    return SAI_STATUS_FAILURE;
+	}
     }
-    */
+
     /*
     std::string vname = vpp_get_veth_name(name, obj_id);
 
