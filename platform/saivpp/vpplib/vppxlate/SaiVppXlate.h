@@ -66,7 +66,10 @@ extern "C" {
 
     extern int init_vpp_client();
     extern int refresh_interfaces_list();
-    extern int configure_lcp_interface(const char *hwif_name, const char *hostif_name);
+    extern int configure_lcp_interface(const char *hwif_name, const char *hostif_name, bool is_add);
+    extern int create_loopback_instance(const char *hwif_name, uint32_t instance);
+    extern int delete_loopback(const char *hwif_name, uint32_t instance);
+    extern int get_sw_if_idx(const char *ifname);
     extern int create_sub_interface(const char *hwif_name, uint32_t sub_id, uint16_t vlan_id);
     extern int delete_sub_interface(const char *hwif_name, uint32_t sub_id);
     extern int set_interface_vrf(const char *hwif_name, uint32_t sub_id, uint32_t vrf_id, bool is_ipv6);

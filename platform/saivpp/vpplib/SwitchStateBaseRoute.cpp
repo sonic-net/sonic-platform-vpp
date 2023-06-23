@@ -217,9 +217,12 @@ sai_status_t SwitchStateBase::addIpRoute(
         _In_ const sai_attribute_t *attr_list)
 {
     SWSS_LOG_ENTER();
+    bool isLoopback = false;
+    isLoopback = process_interface_loopback(serializedObjectId, true, isLoopback);
 
-    if (is_ip_nbr_active() == true) {
-	IpRouteAddRemove(serializedObjectId, attr_count, attr_list, true);
+    if (isLoopback == false && is_ip_nbr_active() == true)
+    {
+	    IpRouteAddRemove(serializedObjectId, attr_count, attr_list, true);
     }
 
     CHECK_STATUS(create_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, switch_id, attr_count, attr_list));
@@ -264,23 +267,26 @@ sai_status_t SwitchStateBase::removeIpRoute(
         _In_ const std::string &serializedObjectId)
 {
     SWSS_LOG_ENTER();
+    bool isLoopback = false;
+    isLoopback = process_interface_loopback(serializedObjectId, false, isLoopback);
 
-    if (is_ip_nbr_active() == true) {
+    if (isLoopback == false && is_ip_nbr_active() == true)
+    {
         sai_attribute_t attr[2];
 
-	attr[0].id = SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID;
+	    attr[0].id = SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID;
 
-	if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr[0]) == SAI_STATUS_SUCCESS) {
-	    uint32_t attr_count = 1;
+	    if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr[0]) == SAI_STATUS_SUCCESS) {
+	        uint32_t attr_count = 1;
 
-	    attr[1].id = SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION;
-	    if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr[1]) == SAI_STATUS_SUCCESS)
-	    {
-		attr_count++;
+	        attr[1].id = SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION;
+	        if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr[1]) == SAI_STATUS_SUCCESS)
+	        {
+		        attr_count++;
+	        }
+
+	        IpRouteAddRemove(serializedObjectId, attr_count, attr, false);
 	    }
-
-	    IpRouteAddRemove(serializedObjectId, attr_count, attr, false);
-	}
     }
 
     CHECK_STATUS(remove_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId));

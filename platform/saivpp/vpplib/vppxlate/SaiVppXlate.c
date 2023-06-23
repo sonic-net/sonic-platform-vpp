@@ -243,6 +243,12 @@ static void set_reply_status (int retval)
     }
 }
 
+static void set_reply_sw_if_index (vl_api_interface_index_t sw_if_index)
+{
+    vat_main_t *vam = &vat_main;
+	vam->sw_if_index = sw_if_index;
+}
+
 static void
 vl_api_control_ping_reply_t_handler (vl_api_control_ping_reply_t *mp)
 {
@@ -289,6 +295,23 @@ vl_api_sw_interface_details_t_handler (vl_api_sw_interface_details_t *mp)
       sub->vtr_tag1 = ntohl (mp->vtr_tag1);
       sub->vtr_tag2 = ntohl (mp->vtr_tag2);
     }
+}
+
+static void
+vl_api_create_loopback_instance_reply_t_handler (
+    vl_api_create_loopback_reply_t * msg)
+{
+    vat_main_t *vam = &vat_main;
+
+    /*set_reply_sw_if_index(ntohl(msg->sw_if_index));*/
+    set_reply_status(ntohl(msg->retval));
+}
+
+static void
+vl_api_delete_loopback_reply_t_handler (
+    vl_api_delete_loopback_reply_t * msg)
+{
+    set_reply_status(ntohl(msg->retval));
 }
 
 static void
@@ -420,6 +443,8 @@ static void vpp_base_vpe_init(void)
 
 #define foreach_vpe_ext_api_reply_msg                                   \
     _(INTERFACE_MSG_ID(SW_INTERFACE_DETAILS), sw_interface_details)     \
+    _(INTERFACE_MSG_ID(CREATE_LOOPBACK_INSTANCE_REPLY), create_loopback_instance_reply) \
+    _(INTERFACE_MSG_ID(DELETE_LOOPBACK_REPLY), delete_loopback_reply) \
     _(INTERFACE_MSG_ID(CREATE_SUBIF_REPLY), create_subif_reply) \
     _(INTERFACE_MSG_ID(DELETE_SUBIF_REPLY), delete_subif_reply) \
     _(INTERFACE_MSG_ID(SW_INTERFACE_SET_TABLE_REPLY), sw_interface_set_table_reply) \
@@ -638,7 +663,10 @@ static u32 get_swif_idx (vat_main_t *vam, const char *ifname)
     return ((u32) -1);
 }
 
-static int config_lcp_hostif (vat_main_t *vam, vl_api_interface_index_t if_idx, const char *hostif_name)
+static int config_lcp_hostif (vat_main_t *vam,
+                              vl_api_interface_index_t if_idx,
+                              const char *hostif_name,
+                              bool is_add)
 {
     vl_api_lcp_itf_pair_add_del_t *mp;
     int ret;
@@ -646,10 +674,74 @@ static int config_lcp_hostif (vat_main_t *vam, vl_api_interface_index_t if_idx, 
     __plugin_msg_base = lcp_msg_id_base;
 
     M (LCP_ITF_PAIR_ADD_DEL, mp);
-    mp->is_add = true;
+    mp->is_add = is_add;
     mp->sw_if_index = htonl(if_idx);
     strncpy((char *) mp->host_if_name, hostif_name, sizeof(mp->host_if_name));
     mp->host_if_type = LCP_API_ITF_HOST_TAP;
+    S (mp);
+
+    W (ret);
+    return ret;
+}
+
+static int delete_lcp_hostif (vat_main_t *vam,
+                              vl_api_interface_index_t if_idx,
+                              const char *hostif_name)
+{
+    vl_api_lcp_itf_pair_add_del_t *mp;
+    int ret;
+
+    __plugin_msg_base = lcp_msg_id_base;
+
+    M (LCP_ITF_PAIR_ADD_DEL, mp);
+    mp->is_add = false;
+    mp->sw_if_index = htonl(if_idx);
+    strncpy((char *) mp->host_if_name, hostif_name, sizeof(mp->host_if_name));
+    mp->host_if_type = LCP_API_ITF_HOST_TAP;
+    S (mp);
+
+    W (ret);
+    return ret;
+}
+
+static int __create_loopback_instance (vat_main_t *vam, u32 instance)
+{
+    vl_api_create_loopback_instance_t *mp;
+    int ret;
+    u8 mac_address[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    __plugin_msg_base = interface_msg_id_base;
+
+    M (CREATE_LOOPBACK, mp);
+    mp->is_specified = true;
+    mp->user_instance = instance;
+    /* Set MAC address */
+    memcpy(mp->mac_address, mac_address, sizeof(mac_address));
+
+    /* create_loopback interfaces from vnet/interface_cli.c */
+    S (mp);
+
+    W (ret);
+    return ret;
+}
+
+static int __delete_loopback (vat_main_t *vam, const char *hwif_name, u32 instance)
+{
+    vl_api_delete_loopback_t *mp;
+    int ret;
+
+    __plugin_msg_base = interface_msg_id_base;
+
+    M (DELETE_LOOPBACK, mp);
+    u32 idx;
+    idx = get_swif_idx(vam, hwif_name);
+    if (idx != (u32) -1) {
+        mp->sw_if_index = htonl(idx);
+    } else {
+        SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+        return -EINVAL;
+    }
+
     S (mp);
 
     W (ret);
@@ -744,7 +836,7 @@ int refresh_interfaces_list ()
     return rc;
 }
 
-int configure_lcp_interface (const char *hwif_name, const char *hostif_name)
+int configure_lcp_interface (const char *hwif_name, const char *hostif_name, bool is_add)
 {
     u32 idx;
     vat_main_t *vam = &vat_main;
@@ -752,7 +844,19 @@ int configure_lcp_interface (const char *hwif_name, const char *hostif_name)
     idx = get_swif_idx(vam, hwif_name);
     SAIVPP_DEBUG("swif index of interface %s is %u\n", hwif_name, idx);
 
-    return config_lcp_hostif(vam, idx, hostif_name);
+    return config_lcp_hostif(vam, idx, hostif_name, is_add);
+}
+
+int create_loopback_instance (const char *hwif_name, u32 instance)
+{
+    vat_main_t *vam = &vat_main;
+    return __create_loopback_instance(vam, instance);
+}
+
+int delete_loopback (const char *hwif_name, u32 instance)
+{
+    vat_main_t *vam = &vat_main;
+    return __delete_loopback(vam, hwif_name, instance);
 }
 
 int create_sub_interface (const char *hwif_name, u32 sub_id, u16 vlan_id)
