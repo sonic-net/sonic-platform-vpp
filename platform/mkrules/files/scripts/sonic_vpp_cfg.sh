@@ -182,6 +182,14 @@ if [ "$VPP_CONF_DB" == "y" ]; then
     echo "VPP_CONF_DB=y" >> $VPP_ENV_FILE
 fi
 
+if [ "x$PERPORT_BUF" != "x" ]; then
+    echo "PERPORT_BUF=$PERPORT_BUF" >> $VPP_ENV_FILE
+fi
+
+if [ "x$SONIC_VPP_SWITCH" != "x" ]; then
+    echo "SONIC_VPP_SWITCH=$SONIC_VPP_SWITCH" >> $VPP_ENV_FILE
+fi
+
 setup_ports_list $portlist
 
 echo "Creating vpp to sonic interface mapping file"

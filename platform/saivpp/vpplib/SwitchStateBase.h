@@ -862,12 +862,15 @@ namespace saivpp
 		    _Out_ std::string& ifname);
 
         protected:
+            bool is_sonic_vpp_switch ();
 	    void populate_if_mapping();
 	    const char *tap_to_hwif_name(const char *name);
 
         private:
 	    std::map<std::string, std::string> m_hostif_hwif_map;
 	    int mapping_init = 0;
+            bool vpp_switch_env_read = false;
+            bool sonic_vpp_switch = false;
 
         private:
             static int currentMaxInstance;
