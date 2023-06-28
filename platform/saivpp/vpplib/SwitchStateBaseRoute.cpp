@@ -218,7 +218,7 @@ sai_status_t SwitchStateBase::addIpRoute(
 {
     SWSS_LOG_ENTER();
     bool isLoopback = false;
-    isLoopback = process_interface_loopback(serializedObjectId, true, isLoopback);
+    process_interface_loopback(serializedObjectId, isLoopback, true);
 
     if (isLoopback == false && is_ip_nbr_active() == true)
     {
@@ -268,7 +268,7 @@ sai_status_t SwitchStateBase::removeIpRoute(
 {
     SWSS_LOG_ENTER();
     bool isLoopback = false;
-    isLoopback = process_interface_loopback(serializedObjectId, false, isLoopback);
+    process_interface_loopback(serializedObjectId, isLoopback, false);
 
     if (isLoopback == false && is_ip_nbr_active() == true)
     {

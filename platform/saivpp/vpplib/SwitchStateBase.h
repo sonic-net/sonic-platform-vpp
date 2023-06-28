@@ -761,7 +761,6 @@ namespace saivpp
                     _In_ bool is_add,
                     _In_ bool &isLoopback);
             sai_status_t vpp_add_del_lpb_intf_ip_addr (
-                    _In_ std::string destinationIP,
                     _In_ const std::string &serializedObjectId,
                     _In_ bool is_add);
 
