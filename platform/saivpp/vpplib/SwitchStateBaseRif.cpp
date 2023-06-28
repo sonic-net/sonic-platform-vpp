@@ -801,8 +801,8 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr_norif (
 
 sai_status_t SwitchStateBase::process_interface_loopback (
    _In_ const std::string &serializedObjectId,
-   _In_ bool is_add,
-   _In_ bool &isLoopback)
+   _In_ bool &isLoopback,
+   _In_ bool is_add)
 {
     SWSS_LOG_ENTER();
 
