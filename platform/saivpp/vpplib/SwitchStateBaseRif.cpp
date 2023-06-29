@@ -801,30 +801,35 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr_norif (
 
 sai_status_t SwitchStateBase::process_interface_loopback (
    _In_ const std::string &serializedObjectId,
-   _In_ bool is_add,
-   _In_ bool &isLoopback)
+   _In_ bool &isLoopback,
+   _In_ bool is_add)
 {
     SWSS_LOG_ENTER();
-    isLoopback = false;
 
     sai_route_entry_t route_entry;
     sai_deserialize_route_entry(serializedObjectId, route_entry);
-
     std::string destinationIP = extractDestinationIP(serializedObjectId);
+    std::string interfaceName;
 
-    std::string interfaceName = get_intf_name_for_prefix(route_entry);
+    if (is_add)
+    {
+        interfaceName = get_intf_name_for_prefix(route_entry);
+    } else
+    {
+        interfaceName = lpbIpToHostIfMap[destinationIP];
+    }
+
     isLoopback = (interfaceName.find("Loopback") != std::string::npos);
-    SWSS_LOG_NOTICE("destination_ip:%s interfaceName:%s isLoopback:%u", destinationIP.c_str(), interfaceName.c_str(), isLoopback);
+    SWSS_LOG_NOTICE("interfaceName:%s isLoopback:%u", interfaceName.c_str(), isLoopback);
 
     if (isLoopback) {
-        vpp_add_del_lpb_intf_ip_addr(destinationIP, serializedObjectId, is_add);
+        vpp_add_del_lpb_intf_ip_addr(serializedObjectId, is_add);
     }
 
     return SAI_STATUS_SUCCESS;
 }
 
 sai_status_t SwitchStateBase::vpp_add_del_lpb_intf_ip_addr (
-    _In_ std::string destinationIP,
     _In_ const std::string &serializedObjectId,
     _In_ bool is_add)
 {
@@ -833,6 +838,7 @@ sai_status_t SwitchStateBase::vpp_add_del_lpb_intf_ip_addr (
     sai_route_entry_t route_entry;
     sai_deserialize_route_entry(serializedObjectId, route_entry);
     std::string ip_prefix_str;
+    std::string destinationIP = extractDestinationIP(serializedObjectId);
 
     if (is_add)
     {

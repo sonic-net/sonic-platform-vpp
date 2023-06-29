@@ -299,7 +299,7 @@ vl_api_sw_interface_details_t_handler (vl_api_sw_interface_details_t *mp)
 
 static void
 vl_api_create_loopback_instance_reply_t_handler (
-    vl_api_create_loopback_reply_t * msg)
+    vl_api_create_loopback_instance_reply_t * msg)
 {
     vat_main_t *vam = &vat_main;
 
@@ -712,13 +712,13 @@ static int __create_loopback_instance (vat_main_t *vam, u32 instance)
 
     __plugin_msg_base = interface_msg_id_base;
 
-    M (CREATE_LOOPBACK, mp);
+    M (CREATE_LOOPBACK_INSTANCE, mp);
     mp->is_specified = true;
     mp->user_instance = instance;
     /* Set MAC address */
     memcpy(mp->mac_address, mac_address, sizeof(mac_address));
 
-    /* create_loopback interfaces from vnet/interface_cli.c */
+    /* create loopback interfaces from vnet/interface_cli.c */
     S (mp);
 
     W (ret);
