@@ -58,6 +58,7 @@ libSaiVPP_a_SOURCES = \
 					  SwitchStateBaseNbr.cpp \
 					  SwitchStateBaseRoute.cpp \
 					  SwitchStateBaseNexthop.cpp \
+					  SwitchStateBaseAcl.cpp \
 					  SwitchStateBaseMACsec.cpp \
 					  SwitchState.cpp \
 					  TrafficFilterPipes.cpp \

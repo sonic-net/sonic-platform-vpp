@@ -53,6 +53,33 @@ extern "C" {
         vpp_ip_nexthop_t nexthop[0];
     } vpp_ip_route_t;
 
+    typedef enum  {
+        VPP_ACL_ACTION_API_DENY = 0,
+        VPP_ACL_ACTION_API_PERMIT = 1,
+        VPP_ACL_ACTION_API_PERMIT_STFULL = 2,
+    } vpp_acl_action_e;
+
+    typedef struct  _vpp_acl_rule {
+        vpp_acl_action_e action;
+        vpp_ip_addr_t src_prefix;
+        vpp_ip_addr_t src_prefix_mask;
+        vpp_ip_addr_t dst_prefix;
+        vpp_ip_addr_t dst_prefix_mask;
+        int proto;
+        uint16_t srcport_or_icmptype_first;
+        uint16_t srcport_or_icmptype_last;
+        uint16_t dstport_or_icmpcode_first;
+        uint16_t dstport_or_icmpcode_last;
+        uint8_t tcp_flags_mask;
+        uint8_t tcp_flags_value;
+    } vpp_acl_rule_t;
+
+    typedef struct _vpp_acl_ {
+        char *acl_name;
+        uint32_t count;
+        vpp_acl_rule_t rules[0];
+    } vpp_acl_t;
+
     typedef enum {
         VPP_IP_API_FLOW_HASH_SRC_IP = 1,
         VPP_IP_API_FLOW_HASH_DST_IP = 2,
@@ -87,6 +114,13 @@ extern "C" {
 			       bool is_static, uint8_t *mac, bool is_add);
     extern int ip_route_add_del(vpp_ip_route_t *prefix, bool is_add);
     extern int vpp_ip_flow_hash_set(uint32_t vrf_id, uint32_t mask, int addr_family);
+
+    extern int vpp_acl_add_replace(vpp_acl_t *in_acl, uint32_t *acl_index, bool is_replace);
+    extern int vpp_acl_del(uint32_t acl_index);
+    extern int vpp_acl_interface_bind(const char *hwif_name, uint32_t acl_index,
+				      bool is_input);
+    extern int vpp_acl_interface_unbind(const char *hwif_name, uint32_t acl_index,
+					bool is_input);
 
 #ifdef __cplusplus
 }

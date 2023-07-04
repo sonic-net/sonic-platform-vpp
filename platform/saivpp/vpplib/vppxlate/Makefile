@@ -20,7 +20,7 @@ VPP_LIBS        += -lvlib
 VPP_LIBS        += -lvatplugin
 
 SaiVppXlate.o: SaiVppXlate.c
-	$(CC) -g -fPIC -o$@ -c SaiVppXlate.c
+	$(CC) -g -I/usr/include/vpp_plugins -fPIC -o$@ -c SaiVppXlate.c
 
 SaiVppStats.o: SaiVppStats.c SaiVppStats.h
 	$(CC) -g -fPIC -o$@ -c SaiVppStats.c
@@ -36,7 +36,9 @@ vppst: SaiIntfStats.c SaiVppStats.c
 
 all: libvppxlate.a
 
-.PHONY: install
+.PHONY: install clean
 
 install:
 
+clean:
+	rm -f *.o libvppxlate.a
