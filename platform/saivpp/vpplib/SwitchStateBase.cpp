@@ -196,6 +196,27 @@ sai_status_t SwitchStateBase::create(
         return addIpNbr(serializedObjectId, switch_id, attr_count, attr_list);
     }
 
+    if (object_type == SAI_OBJECT_TYPE_ACL_ENTRY)
+    {
+        sai_object_id_t object_id;
+        sai_deserialize_object_id(serializedObjectId, object_id);
+        return createAclEntry(object_id, switch_id, attr_count, attr_list);
+    }
+
+    if (object_type == SAI_OBJECT_TYPE_ACL_TABLE)
+    {
+        sai_object_id_t object_id;
+        sai_deserialize_object_id(serializedObjectId, object_id);
+        return aclTableCreate(object_id, switch_id, attr_count, attr_list);
+    }
+
+    if (object_type == SAI_OBJECT_TYPE_ACL_TABLE_GROUP_MEMBER)
+    {
+        sai_object_id_t object_id;
+        sai_deserialize_object_id(serializedObjectId, object_id);
+        return createAclGrpMbr(object_id, switch_id, attr_count, attr_list);
+    }
+
     if (object_type == SAI_OBJECT_TYPE_MACSEC_PORT)
     {
         sai_object_id_t object_id;
@@ -453,6 +474,26 @@ sai_status_t SwitchStateBase::remove(
         return removeIpNbr(serializedObjectId);
     }
 
+    if (object_type == SAI_OBJECT_TYPE_ACL_ENTRY)
+    {
+        return removeAclEntry(serializedObjectId);
+    }
+
+    if (object_type == SAI_OBJECT_TYPE_ACL_TABLE)
+    {
+        return aclTableRemove(serializedObjectId);
+    }
+
+    if (object_type == SAI_OBJECT_TYPE_ACL_TABLE_GROUP_MEMBER)
+    {
+        return removeAclGrpMbr(serializedObjectId);
+    }
+
+    if (object_type == SAI_OBJECT_TYPE_ACL_TABLE_GROUP)
+    {
+        return removeAclGrp(serializedObjectId);
+    }
+
     if (object_type == SAI_OBJECT_TYPE_MACSEC_PORT)
     {
         sai_object_id_t objectId;
@@ -562,22 +603,6 @@ sai_status_t SwitchStateBase::setPort(
     return set_internal(SAI_OBJECT_TYPE_PORT, sid, attr);
 }
 
-sai_status_t SwitchStateBase::setAclEntry(
-        _In_ sai_object_id_t entry_id,
-        _In_ const sai_attribute_t* attr)
-{
-    SWSS_LOG_ENTER();
-
-    if (attr && attr->id == SAI_ACL_ENTRY_ATTR_ACTION_MACSEC_FLOW)
-    {
-        return setAclEntryMACsecFlowActive(entry_id, attr);
-    }
-
-    auto sid = sai_serialize_object_id(entry_id);
-
-    return set_internal(SAI_OBJECT_TYPE_ACL_ENTRY, sid, attr);
-}
-
 sai_status_t SwitchStateBase::set(
         _In_ sai_object_type_t objectType,
         _In_ const std::string &serializedObjectId,
@@ -604,6 +629,13 @@ sai_status_t SwitchStateBase::set(
         sai_object_id_t objectId;
         sai_deserialize_object_id(serializedObjectId, objectId);
         return setAclEntry(objectId, attr);
+    }
+
+    if (objectType == SAI_OBJECT_TYPE_ACL_TABLE_GROUP_MEMBER)
+    {
+        sai_object_id_t objectId;
+        sai_deserialize_object_id(serializedObjectId, objectId);
+        return setAclGrpMbr(objectId, attr);
     }
 
     if (objectType == SAI_OBJECT_TYPE_ROUTE_ENTRY)
@@ -796,6 +828,94 @@ sai_status_t SwitchStateBase::get(
             return status;
         }
     }
+
+    return final_status;
+}
+
+sai_status_t SwitchStateBase::get(
+        _In_ sai_object_type_t objectType,
+        _In_ const std::string &serializedObjectId,
+	_In_ const uint32_t  max_attr_count,
+        _Out_ uint32_t *attr_count,
+        _Out_ sai_attribute_t *attr_list)
+{
+    SWSS_LOG_ENTER();
+
+    *attr_count = 0;
+
+    const auto &objectHash = m_objectHash.at(objectType);
+
+    auto it = objectHash.find(serializedObjectId);
+
+    if (it == objectHash.end())
+    {
+        SWSS_LOG_ERROR("not found %s:%s",
+                sai_serialize_object_type(objectType).c_str(),
+                serializedObjectId.c_str());
+
+        return SAI_STATUS_ITEM_NOT_FOUND;
+    }
+
+    /*
+     * We need reference here since we can potentially update attr hash for RO
+     * object.
+     */
+
+    auto& attrHash = it->second;
+
+    /*
+     * Some of the list query maybe for length, so we can't do
+     * normal serialize, maybe with count only.
+     */
+
+    sai_status_t final_status = SAI_STATUS_SUCCESS, status;
+    uint32_t idx = 0;
+    sai_attribute_t *dst_attr;
+
+    for (auto &kvp: attrHash)
+    {
+        auto attr = kvp.second->getAttr();
+
+	dst_attr = &attr_list[idx];
+	dst_attr->id = attr->id;
+
+        status = transfer_attributes(objectType, 1, attr, dst_attr, false);
+
+        if (status == SAI_STATUS_BUFFER_OVERFLOW)
+        {
+            /*
+             * This is considered partial success, since we get correct list
+             * length.  Note that other items ARE processes on the list.
+             */
+
+            SWSS_LOG_NOTICE("BUFFER_OVERFLOW %s: %d",
+                    serializedObjectId.c_str(),
+                    attr->id);
+
+            /*
+             * We still continue processing other attributes for get as long as
+             * we only will be getting buffer overflow error.
+             */
+
+            final_status = status;
+            continue;
+        }
+
+        if (status != SAI_STATUS_SUCCESS)
+        {
+            // all other errors
+
+            SWSS_LOG_ERROR("get failed %s: %d: %s",
+                    serializedObjectId.c_str(),
+                    attr->id,
+                    sai_serialize_status(status).c_str());
+
+            return status;
+        }
+	++idx;
+	if (idx == max_attr_count) break;
+    }
+    *attr_count = idx;
 
     return final_status;
 }

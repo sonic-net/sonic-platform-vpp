@@ -279,6 +279,13 @@ namespace saivpp
                     _In_ uint32_t attr_count,
                     _Out_ sai_attribute_t *attr_list);
 
+            virtual sai_status_t get(
+                    _In_ sai_object_type_t objectType,
+		    _In_ const std::string &serializedObjectId,
+		    _In_ const uint32_t max_attr_count,
+		    _Out_ uint32_t *attr_count,
+		    _Out_ sai_attribute_t *attr_list);
+
             virtual sai_status_t bulkCreate(
                     _In_ sai_object_id_t switch_id,
                     _In_ sai_object_type_t object_type,
@@ -534,10 +541,6 @@ namespace saivpp
                     _Out_ std::vector<sai_attribute_t> &attrs);
 
         protected:
-
-            sai_status_t setAclEntry(
-                    _In_ sai_object_id_t entry_id,
-                    _In_ const sai_attribute_t* attr);
 
             sai_status_t setAclEntryMACsecFlowActive(
                     _In_ sai_object_id_t entry_id,
@@ -853,6 +856,107 @@ namespace saivpp
 	    int vpp_del_ip_vrf(_In_ sai_object_id_t objectId);
 
             int vpp_get_vrf_id(const char *linux_ifname, uint32_t *vrf_id);
+
+        private:
+            std::map<sai_object_id_t, std::list<sai_object_id_t>> m_acl_tbl_rules_map;
+	    std::map<sai_object_id_t, uint32_t> m_acl_swindex_map;
+            std::map<sai_object_id_t, std::list<sai_object_id_t>> m_acl_tbl_grp_mbr_map;
+            std::map<sai_object_id_t, std::list<sai_object_id_t>> m_acl_tbl_grp_ports_map;
+
+        protected:
+	    sai_status_t createAclEntry(
+		_In_ sai_object_id_t object_id,
+		_In_ sai_object_id_t switch_id,
+		_In_ uint32_t attr_count,
+		_In_ const sai_attribute_t *attr_list);
+
+	    sai_status_t setAclEntry(
+		_In_ sai_object_id_t entry_id,
+		_In_ const sai_attribute_t* attr);
+
+	    sai_status_t removeAclEntry(
+		_In_ const std::string &serializedObjectId);
+
+	    sai_status_t addRemoveAclEntrytoMap(
+		_In_ sai_object_id_t entry_id,
+		_In_ sai_object_id_t tbl_oid,
+		_In_ bool is_add);
+
+	    sai_status_t getAclTableId(
+		_In_ sai_object_id_t entry_id, sai_object_id_t *tbl_oid);
+
+	    sai_status_t AclTblConfig(
+		_In_ sai_object_id_t tbl_oid);
+
+            sai_status_t AclTblRemove(
+		_In_ sai_object_id_t tbl_oid);
+
+	    sai_status_t AclAddRemoveCheck(
+		_In_ sai_object_id_t tbl_oid);
+
+            sai_status_t aclTableRemove(
+		_In_ const std::string &serializedObjectId);
+
+	    sai_status_t aclTableCreate(
+		_In_ sai_object_id_t object_id,
+		_In_ sai_object_id_t switch_id,
+		_In_ uint32_t attr_count,
+		_In_ const sai_attribute_t *attr_list);
+
+	    sai_status_t aclDefaultAllowConfigure(
+		_In_ sai_object_id_t tbl_oid);
+
+	    sai_status_t acl_rule_range_get(
+		_In_ const sai_object_list_t   *range_list,
+		_Out_ sai_u32_range_t *range_limit_list,
+		_Out_ sai_acl_range_type_t *range_type_list,
+		_Out_ uint32_t *range_count);
+
+	    sai_status_t acl_range_attr_get (
+		_In_ const std::string &serializedObjectId,
+		_In_ uint32_t attr_count,
+		_In_ const sai_attribute_t *attr_list,
+		_Out_ sai_attribute_t *attr_range);
+
+	    sai_status_t removeAclGrp(
+		_In_ const std::string &serializedObjectId);
+
+            sai_status_t setAclGrpMbr(
+		_In_ sai_object_id_t member_oid,
+		_In_ const sai_attribute_t* attr);
+
+	    sai_status_t removeAclGrpMbr(
+		_In_ const std::string &serializedObjectId);
+
+	   sai_status_t createAclGrpMbr(
+	       _In_ sai_object_id_t object_id,
+	       _In_ sai_object_id_t switch_id,
+	       _In_ uint32_t attr_count,
+	       _In_ const sai_attribute_t *attr_list);
+
+	   sai_status_t addRemoveAclGrpMbr(
+	       _In_ sai_object_id_t member_id,
+	       _In_ sai_object_id_t tbl_grp_oid,
+	       _In_ bool is_add);
+
+	   sai_status_t getAclTableGroupId(
+	       _In_ sai_object_id_t member_id, sai_object_id_t *tbl_grp_oid);
+
+	   sai_status_t addRemovePortTblGrp(
+	       _In_ sai_object_id_t port_oid,
+	       _In_ sai_object_id_t tbl_grp_oid,
+	       _In_ bool is_add);
+
+	   sai_status_t aclBindUnbindPort(
+	       _In_ sai_object_id_t port_oid,
+	       _In_ sai_object_id_t tbl_grp_oid,
+	       _In_ bool is_input,
+	       _In_ bool is_bind);
+
+	   sai_status_t aclBindUnbindPorts(
+	       _In_ sai_object_id_t tbl_grp_oid,
+	       _In_ sai_object_id_t tbl_oid,
+	       _In_ bool is_bind);
 
         public:
             bool vpp_get_hwif_name (

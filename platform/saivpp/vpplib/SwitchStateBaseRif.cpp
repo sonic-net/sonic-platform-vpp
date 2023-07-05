@@ -433,11 +433,43 @@ sai_status_t SwitchStateBase::UpdatePort(
 {
     SWSS_LOG_ENTER();
 
+    auto attr_type = sai_metadata_get_attr_by_id(SAI_PORT_ATTR_INGRESS_ACL, attr_count, attr_list);
+
+    if (attr_type != NULL)
+    {
+	if (attr_type->value.oid == SAI_NULL_OBJECT_ID) {
+	    sai_attribute_t attr;
+
+	    attr.id = SAI_PORT_ATTR_INGRESS_ACL;
+	    if (get(SAI_OBJECT_TYPE_PORT, object_id, 1, &attr) != SAI_STATUS_SUCCESS) { 
+		aclBindUnbindPort(object_id, attr.value.oid, true, false);
+	    }
+	} else {
+	    aclBindUnbindPort(object_id, attr_type->value.oid, true, true);
+	}
+    }
+
+    attr_type = sai_metadata_get_attr_by_id(SAI_PORT_ATTR_EGRESS_ACL, attr_count, attr_list);
+
+    if (attr_type != NULL)
+    {
+	if (attr_type->value.oid == SAI_NULL_OBJECT_ID) {
+	    sai_attribute_t attr;
+
+	    attr.id = SAI_PORT_ATTR_EGRESS_ACL;
+	    if (get(SAI_OBJECT_TYPE_PORT, object_id, 1, &attr) != SAI_STATUS_SUCCESS) { 
+		aclBindUnbindPort(object_id, attr.value.oid, true, false);
+	    }
+	} else {
+	    aclBindUnbindPort(object_id, attr_type->value.oid, false, true);
+	}
+    }
+
     if (is_ip_nbr_active() == false) {
 	return SAI_STATUS_SUCCESS;
     }
 
-    auto attr_type = sai_metadata_get_attr_by_id(SAI_PORT_ATTR_ADMIN_STATE, attr_count, attr_list);
+    attr_type = sai_metadata_get_attr_by_id(SAI_PORT_ATTR_ADMIN_STATE, attr_count, attr_list);
 
     if (attr_type != NULL)
     {

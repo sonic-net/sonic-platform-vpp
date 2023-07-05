@@ -44,6 +44,9 @@
 #include <vpp_plugins/linux_cp/lcp.api_enum.h>
 #include <vpp_plugins/linux_cp/lcp.api_types.h>
 
+#include <vpp_plugins/acl/acl.api_enum.h>
+#include <vpp_plugins/acl/acl.api_types.h>
+
 #include <vlibmemory/vlib.api_types.h>
 #include <vlibmemory/memclnt.api_enum.h>
 
@@ -140,6 +143,24 @@
 #include <vpp_plugins/linux_cp/lcp.api.h>
 #undef vl_api_version
 
+/* acl API inclusion */
+
+#define vl_typedefs
+#include <vpp_plugins/acl/acl.api.h>
+#undef vl_typedefs
+
+#define  vl_endianfun
+#include <vpp_plugins/acl/acl.api.h>
+#undef vl_endianfun
+
+#define vl_calcsizefun
+#include <vpp_plugins/acl/acl.api.h>
+#undef vl_calcsizefun
+
+#define vl_api_version(n, v) static u32 acl_api_version = v;
+#include <vpp_plugins/acl/acl.api.h>
+#undef vl_api_version
+
 /* memclnt API inclusion */
 
 #define vl_typedefs /* define message structures */
@@ -173,6 +194,47 @@ void os_exit(int code) {}
 #define SAIVPP_DEBUG(format,args...) {}
 #define SAIVPP_WARN clib_warning
 #define SAIVPP_ERROR clib_error
+
+#define VPP_MAX_CTX 1
+typedef struct _vpp_index_map_ {
+    uint8_t index_map;
+    uintptr_t ptr[VPP_MAX_CTX];
+} vpp_index_map_t;
+
+static vpp_index_map_t idx_map;
+
+/*
+ * Right now configuration is done synchronously in a single thread.
+ * When the need arises for multiple requests in pipeline we can move to a pool to
+ * allocate index.
+ */
+static int alloc_index ()
+{
+    return 0;
+}
+
+static uint32_t store_ptr (void *ptr)
+{
+    int idx = alloc_index();
+
+    assert(idx >= 0);
+    idx_map.ptr[idx] = (uintptr_t) ptr;
+
+    return idx;
+}
+
+static void release_index (uint32_t idx)
+{
+}
+
+static uintptr_t get_index_ptr (uint32_t idx)
+{
+    if (idx > VPP_MAX_CTX) {
+	return (uintptr_t) NULL;
+    }
+
+    return idx_map.ptr[idx];
+}
 
 vat_main_t vat_main;
 
@@ -458,6 +520,7 @@ static void vpp_base_vpe_init(void)
     _(IP_NBR_MSG_ID(IP_NEIGHBOR_ADD_DEL_REPLY), ip_neighbor_add_del_reply)
 
 static u16 interface_msg_id_base, ip_msg_id_base, ip_nbr_msg_id_base, lcp_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
+static u16 acl_msg_id_base;
 
 static void vpp_ext_vpe_init(void)
 {
@@ -483,11 +546,47 @@ static void vl_api_lcp_itf_pair_add_del_reply_t_handler(vl_api_lcp_itf_pair_add_
     SAIVPP_DEBUG("linux_cp hostif creation %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
 }
 
+static void vl_api_acl_add_replace_reply_t_handler(vl_api_acl_add_replace_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    uint32_t *acl_index = (uint32_t *) get_index_ptr(msg->context);
+    *acl_index = ntohl(msg->acl_index);
+
+    SAIVPP_DEBUG("acl add_replace %s(%d) acl index %u", msg->retval ? "failed" : "successful",
+		 msg->retval, *acl_index);
+    release_index(msg->context);
+}
+
+static void vl_api_acl_del_reply_t_handler(vl_api_acl_del_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("acl del %s(%d) acl index %u", msg->retval ? "failed" : "successful", msg->retval,
+		 msg->acl_index);
+}
+
+static void
+vl_api_acl_interface_add_del_reply_t_handler(vl_api_acl_interface_add_del_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("acl interface set/reset  %s(%d)", msg->retval ? "failed" : "successful",
+		 msg->retval);
+}
+
+
 #define LCP_MSG_ID(id) \
     (VL_API_##id + lcp_msg_id_base)
 
+#define ACL_MSG_ID(id) \
+    (VL_API_##id + acl_msg_id_base)
+
 #define foreach_vpe_plugin_api_reply_msg                                \
     _(LCP_MSG_ID(LCP_ITF_PAIR_ADD_DEL_REPLY), lcp_itf_pair_add_del_reply) \
+    _(ACL_MSG_ID(ACL_ADD_REPLACE_REPLY), acl_add_replace_reply)	\
+    _(ACL_MSG_ID(ACL_DEL_REPLY), acl_del_reply) \
+    _(ACL_MSG_ID(ACL_INTERFACE_ADD_DEL_REPLY), acl_interface_add_del_reply)
     
 static void vpp_plugin_vpe_init(void)
 {
@@ -523,6 +622,10 @@ static void get_base_msg_id()
     msg_base_lookup_name = format (0, "lcp_%08x%c", lcp_api_version, 0);
     lcp_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
     assert(lcp_msg_id_base != (u16) ~0);
+
+    msg_base_lookup_name = format (0, "acl_%08x%c", acl_api_version, 0);
+    acl_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
+    assert(acl_msg_id_base != (u16) ~0);
 
     memclnt_msg_id_base = 0;
 }
@@ -1088,6 +1191,180 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
 
     W (ret);
     return ret;
+}
+
+static unsigned int ipv4_mask_len (uint32_t mask)
+{
+    u64 val = 0;
+
+    memcpy(&val, &mask, sizeof(mask));
+    return (unsigned int) count_set_bits(val);
+}
+
+static unsigned int ipv6_mask_len (uint8_t *mask)
+{
+    u64 val = 0, len;
+
+    memcpy(&val, mask, 8);
+    len = count_set_bits(val);
+
+    memcpy(&val, &mask[8], 8);
+    len += count_set_bits(val);
+
+    return (unsigned int) len;
+}
+
+/*
+ * acl_index is set with the index returned by the VPP API reply.
+ */
+int vpp_acl_add_replace (vpp_acl_t *in_acl, uint32_t *acl_index, bool is_replace)
+{
+    u32 idx, acl_count;
+    vat_main_t *vam = &vat_main;
+    vpp_ip_addr_t *addr;
+    vpp_acl_rule_t *in_rule;
+    vl_api_address_t *api_addr;
+    vl_api_acl_rule_t *vpp_rule;
+    vl_api_acl_add_replace_t *mp;
+    int ret;
+
+    init_vpp_client();
+
+    acl_count = in_acl->count;
+
+    __plugin_msg_base = acl_msg_id_base;
+
+    M2 (ACL_ADD_REPLACE, mp, sizeof (vl_api_acl_rule_t) * acl_count);
+
+    mp->count = htonl(acl_count);
+
+    if (is_replace) {
+	mp->acl_index = htonl(*acl_index);
+    } else {
+	mp->acl_index = htonl(~0);
+    }
+    strncpy(mp->tag, in_acl->acl_name, sizeof (mp->tag) - 1);
+    for (idx = 0; idx < acl_count; idx++) {
+	in_rule = &in_acl->rules[idx];
+	vpp_rule = &mp->r[idx];
+
+        addr = &in_rule->src_prefix;
+	api_addr = &vpp_rule->src_prefix.address;
+
+	if (addr->sa_family == AF_INET) {
+	    struct sockaddr_in *ip4 = &addr->addr.ip4;
+	    api_addr->af = ADDRESS_IP4;
+	    memcpy(api_addr->un.ip4, &ip4->sin_addr.s_addr, sizeof(api_addr->un.ip4));
+	    vpp_rule->src_prefix.len = ipv4_mask_len(in_rule->src_prefix_mask.addr.ip4.sin_addr.s_addr);
+	} else if (addr->sa_family == AF_INET6) {
+	    struct sockaddr_in6 *ip6 =  &addr->addr.ip6;
+	    api_addr->af = ADDRESS_IP6;
+	    memcpy(api_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(api_addr->un.ip6));
+	    vpp_rule->src_prefix.len = ipv6_mask_len(in_rule->src_prefix_mask.addr.ip6.sin6_addr.s6_addr);
+	} else {
+	    SAIVPP_WARN("Unknown protocol in source prefix");
+	    /* return -EINVAL; */
+	}
+
+        addr = &in_rule->dst_prefix;
+	api_addr = &vpp_rule->dst_prefix.address;
+
+	if (addr->sa_family == AF_INET) {
+	    struct sockaddr_in *ip4 = &addr->addr.ip4;
+	    api_addr->af = ADDRESS_IP4;
+	    memcpy(api_addr->un.ip4, &ip4->sin_addr.s_addr, sizeof(api_addr->un.ip4));
+	    vpp_rule->dst_prefix.len = ipv4_mask_len(in_rule->dst_prefix_mask.addr.ip4.sin_addr.s_addr);
+	} else if (addr->sa_family == AF_INET6) {
+	    struct sockaddr_in6 *ip6 =  &addr->addr.ip6;
+	    api_addr->af = ADDRESS_IP6;
+	    memcpy(api_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(api_addr->un.ip6));
+	    vpp_rule->dst_prefix.len = ipv6_mask_len(in_rule->dst_prefix_mask.addr.ip6.sin6_addr.s6_addr);
+	} else {
+	    SAIVPP_WARN("Unknown protocol in destination prefix");
+	    /* return -EINVAL; */
+	}
+
+	vpp_rule->proto = in_rule->proto;
+	vpp_rule->srcport_or_icmptype_first = htons(in_rule->srcport_or_icmptype_first);
+	vpp_rule->srcport_or_icmptype_last = htons(in_rule->srcport_or_icmptype_last);
+	vpp_rule->dstport_or_icmpcode_first = htons(in_rule->dstport_or_icmpcode_first);
+	vpp_rule->dstport_or_icmpcode_last = htons(in_rule->dstport_or_icmpcode_last);
+	vpp_rule->is_permit = in_rule->action;
+    }
+    mp->context = store_ptr(acl_index);
+
+    S (mp);
+
+    W (ret);
+
+    return ret;
+}
+
+int vpp_acl_del (uint32_t acl_index)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_acl_del_t *mp;
+    int ret;
+
+    __plugin_msg_base = acl_msg_id_base;
+
+    M (ACL_DEL, mp);
+    mp->acl_index = htonl(acl_index);
+
+    S (mp);
+    W (ret);
+
+    return ret;
+}
+
+int __vpp_acl_interface_bind_unbind (const char *hwif_name, uint32_t acl_index,
+				     bool is_input, bool is_bind)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_acl_interface_add_del_t *mp;
+    int ret;
+
+    __plugin_msg_base = acl_msg_id_base;
+    M (ACL_INTERFACE_ADD_DEL, mp);
+
+    if (hwif_name) {
+	u32 idx;
+
+	idx = get_swif_idx(vam, hwif_name);
+	if (idx != (u32) -1) {
+	    mp->sw_if_index = htonl(idx);
+	} else {
+	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+	    return -EINVAL;
+	}
+    } else {
+	return -EINVAL;
+    }
+    mp->is_input = is_input;
+    mp->is_add = is_bind;
+    mp->acl_index = htonl(acl_index);
+
+    S (mp);
+    W (ret);
+
+    if (ret == VNET_API_ERROR_ACL_IN_USE_INBOUND ||
+	ret == VNET_API_ERROR_ACL_IN_USE_OUTBOUND) {
+	SAIVPP_WARN("ACL index %u is already bound to %s", acl_index, hwif_name);
+	ret = 0;
+    }
+    return ret;
+}
+
+int vpp_acl_interface_bind (const char *hwif_name, uint32_t acl_index,
+			    bool is_input)
+{
+    __vpp_acl_interface_bind_unbind(hwif_name, acl_index, is_input, true);
+}
+
+int vpp_acl_interface_unbind (const char *hwif_name, uint32_t acl_index,
+			      bool is_input)
+{
+    __vpp_acl_interface_bind_unbind(hwif_name, acl_index, is_input, false);
 }
 
 int vpp_ip_flow_hash_set (uint32_t vrf_id, uint32_t hash_mask, int addr_family)
