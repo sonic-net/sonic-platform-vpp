@@ -18,9 +18,9 @@ The above command triggers a flurry of ACL related objects getting created in or
 ACL_TABLE represents broader ACL and one or more ACL_TABLE_ENTRY objects point to ACL_TABLE.
 There is an indirection to ACL_TABLE from one of the TABLE_GROUP_MEMBER. Now PORT object does not refer directly to either ACL_TABLE or ACL_GROUP_MEMBER, instead PORT object has binding with TABLE_GROUP. The TABLE_GROUP in turn has GROU_MEMBERs pointing back.
 
-This object relation model makes it little difficult to implement the binding of ACL to a PORT. The relation of these objects are detailed in the figure 1. This is the reason for multiple maps being used to track and configure ACL in saivpp layer.
+This object relation model makes it little difficult to implement the binding of ACL to a PORT. The relation of these objects are detailed in the figure below. This is the reason for multiple maps being used to track and configure ACL in saivpp layer.
 
-<img src="sai-acl.png" alt="SONIC-VPP SAI ACL Objects" title="SONIC-VPP ACL Objects Relation">
+<img src="sonic-acl.png" alt="SONIC-VPP SAI ACL Objects" title="SONIC-VPP ACL Objects Relation">
 
 ## VPP ACL support
 VPP supports MAC, IPv4, IPv6 ACLs. One set of APIs for configuring ACLs and other set for binding the created ACLs to an interface.
