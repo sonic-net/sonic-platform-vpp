@@ -104,7 +104,8 @@ config route add prefix 172.16.2.0/24 nexthop 172.16.3.2
 
 ip route show
 config acl add table TEST_IPV4 L3 -p Ethernet0 -s ingress
-swssconfig /tmp/test_2rules.json
+config load -y /tmp/test_2rules.json
+counterpoll acl enable
 
 exit
 ```
@@ -124,16 +125,49 @@ ip route show
 exit
 ```
 
-Test the Sonic routing
+Test the Sonic ACL by generating some traffic
 
 ```
 sudo ip netns exec host-1.0 bash
 ping -c5  172.16.2.2
-ssh 172.16.2.2
+for i in $(seq 1 5); do ssh 172.16.2.2; done
+
 exit
 ```
-
 You should see the ping failure to the host in the other network namespace and ssh connection being reset.
+
+Now check the ACL stats in the sonic-vpp1 instance
+```
+show acl table
+show acl rule
+aclshow
+```
+
+You should see acl table, rules and number of packets/bytes per rules printed(see below).
+
+```
+# show acl table
+sudo: docker: command not found
+Name       Type    Binding    Description    Stage    Status
+---------  ------  ---------  -------------  -------  --------
+TEST_IPV4  L3      Ethernet0  TEST_IPV4      ingress  Active
+# show acl rule 
+sudo: docker: command not found
+Table      Rule     Priority    Action    Match                          Status
+---------  -------  ----------  --------  -----------------------------  --------
+TEST_IPV4  ALLOW    85          FORWARD   DST_IP: 172.16.2.0/24          Active
+                                          IP_PROTOCOL: 6
+                                          L4_DST_PORT: 22
+                                          L4_SRC_PORT_RANGE: 1024-65535
+                                          SRC_IP: 172.16.1.0/24
+TEST_IPV4  TheDrop  80          DROP      IP_TYPE: IPv4ANY               Active
+# aclshow
+RULE NAME    TABLE NAME      PRIO    PACKETS COUNT    BYTES COUNT
+-----------  ------------  ------  ---------------  -------------
+ALLOW        TEST_IPV4         85                5            300
+TheDrop      TEST_IPV4         80                5            420
+
+```
 
 Use below command to stop the sonic-vpp containers
 ```

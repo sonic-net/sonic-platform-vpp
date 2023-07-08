@@ -714,6 +714,13 @@ sai_status_t SwitchStateBase::get(
 {
     SWSS_LOG_ENTER();
 
+    if (objectType == SAI_OBJECT_TYPE_ACL_COUNTER) {
+	sai_object_id_t object_id;
+
+	sai_deserialize_object_id(serializedObjectId, object_id);
+	return getAclEntryStats(object_id, attr_count, attr_list);
+    }
+
     const auto &objectHash = m_objectHash.at(objectType);
 
     auto it = objectHash.find(serializedObjectId);

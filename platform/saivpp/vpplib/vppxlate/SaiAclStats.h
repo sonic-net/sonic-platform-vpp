@@ -1,6 +1,6 @@
 /*
  *------------------------------------------------------------------
- * SaiVppStats.h
+ * SaiAclStats.h
  *
  * Copyright (c) 2023 Cisco and/or its affiliates.
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,16 +17,24 @@
  *------------------------------------------------------------------
  */
 
-#ifndef _SAI_VPP_STATS_H_
-#define _SAI_VPP_STATS_H_
+#ifndef _SAIACLSTATS_H_
+#define _SAIACLSTATS_H_
 
-typedef  void (*vpp_stat_one)(const char *, uint32_t index,  uint64_t, void *);
-typedef  void (*vpp_stat_two)(const char *, uint32_t index, uint64_t, uint64_t, void *);
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-int vpp_stats_dump(const char *query_path, vpp_stat_one one, vpp_stat_two two, void *data);
+    typedef struct vpp_ace_stats_ {
+	uint64_t packets;
+	uint64_t bytes;
+	uint32_t ace_index;
+    } vpp_ace_stats_t;
 
-// #define SAIVPP_STAT_DBG(format,args...) {}
-#define SAIVPP_STAT_DBG clib_warning
-#define SAIVPP_STAT_ERR clib_error
+    int vpp_acl_ace_stats_query(uint32_t acl_index, uint32_t ace_index,
+				vpp_ace_stats_t *stats);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -28,8 +28,11 @@ SaiVppStats.o: SaiVppStats.c SaiVppStats.h
 SaiIntfStats.o: SaiIntfStats.c SaiVppStats.h SaiIntfStats.h
 	$(CC) -g -fPIC -o$@ -c SaiIntfStats.c
 
-libvppxlate.a: SaiVppXlate.o SaiVppStats.o SaiIntfStats.o
-	ar rc $@ SaiVppXlate.o SaiVppStats.o SaiIntfStats.o
+SaiAclStats.o: SaiAclStats.c SaiVppStats.h SaiAclStats.h
+	$(CC) -g -fPIC -o$@ -c SaiAclStats.c
+
+libvppxlate.a: SaiVppXlate.o SaiVppStats.o SaiIntfStats.o SaiAclStats.o
+	ar rc $@ SaiVppXlate.o SaiVppStats.o SaiIntfStats.o SaiAclStats.o
 
 vppst: SaiIntfStats.c SaiVppStats.c
 	$(CC) -DMAIN -g -o$@ $(VPP_LIBS) SaiVppStats.c SaiIntfStats.c
