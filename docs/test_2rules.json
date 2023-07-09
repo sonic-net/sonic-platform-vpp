@@ -1,16 +1,6 @@
-[
-    {
-        "ACL_TABLE:TEST_IPV4": {
-            "policy_desc" : "Permit_traffic_from_172.16.1.0_to_172.16.2.0",
-            "type" : "L3",
-	    "binding_type": "port",
-	    "stage": "ingress",
-            "ports" : "Ethernet0"
-        },
-        "OP": "SET"
-    },
-    {
-        "ACL_RULE_TABLE:TEST_IPV4:ALLOW": {
+{
+    "ACL_RULE": {
+        "TEST_IPV4|ALLOW": {
 	    "priority" : "85",
             "SRC_IP" : "172.16.1.0/24",
             "DST_IP" : "172.16.2.0/24",
@@ -19,15 +9,11 @@
 	    "IP_PROTOCOL": "6",
             "PACKET_ACTION" : "FORWARD"
         },
-        "OP": "SET"
-    },
-    {
-        "ACL_RULE_TABLE:TEST_IPV4:TheDrop": {
+        "TEST_IPV4|TheDrop": {
             "priority" : "80",
             "IP_TYPE" : "IPv4ANY",
             "PACKET_ACTION" : "DROP"
-        },
-        "OP": "SET"
+        }
     }
-]
+}
 

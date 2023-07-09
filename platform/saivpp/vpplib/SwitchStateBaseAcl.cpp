@@ -30,6 +30,7 @@
 
 #include "SwitchStateBaseUtils.h"
 #include "vppxlate/SaiVppXlate.h"
+#include "vppxlate/SaiAclStats.h"
 
 #include <list>
 
@@ -478,6 +479,7 @@ typedef struct _acl_tbl_entries_ {
 typedef struct ordered_ace_list_ {
     uint32_t index;
     uint32_t priority;
+    sai_object_id_t ace_oid;
 } ordered_ace_list_t;
 
 static bool cmp_priority (
@@ -546,14 +548,14 @@ sai_status_t SwitchStateBase::AclTblConfig(
 	p_ace->priority = 0;
 	acl_priority_attr_get(p_ace->attrs_count, p_ace->attrs, &p_ace->priority);
 
-	ordered_aces.push_back({index, p_ace->priority});
+	ordered_aces.push_back({index, p_ace->priority, entry_id});
 	p_ace++;
 	index++;
     }
 
     if (status != SAI_STATUS_SUCCESS) {
 	free(aces);
-	ordered_aces.erase(ordered_aces.begin(), ordered_aces.end());
+	ordered_aces.clear();
 	return SAI_STATUS_FAILURE;
     }
 
@@ -566,7 +568,7 @@ sai_status_t SwitchStateBase::AclTblConfig(
     acl = (vpp_acl_t *) calloc(1, sizeof(vpp_acl_t) + (n_entries * sizeof(vpp_acl_rule_t)));
     if (!acl) {
 	free(aces);
-	ordered_aces.erase(ordered_aces.begin(), ordered_aces.end());
+	ordered_aces.clear();
 	return SAI_STATUS_FAILURE;
     }
     acl->count = (uint32_t) n_entries;
@@ -578,6 +580,7 @@ sai_status_t SwitchStateBase::AclTblConfig(
 
     vpp_acl_rule_t *rule = &acl->rules[0];
 
+    std::map<sai_object_id_t, uint32_t> acl_aces_index_map;
     for (auto ace: ordered_aces) {
 	SWSS_LOG_NOTICE("Acl entry index %u prtiority %u", ace.index, ace.priority);
 
@@ -621,14 +624,64 @@ sai_status_t SwitchStateBase::AclTblConfig(
     status = vpp_acl_add_replace(acl, &acl_swindex, acl_replace);
     if (status == SAI_STATUS_SUCCESS) {
 	m_acl_swindex_map[tbl_oid] = acl_swindex;
+
+	index = 0;
+
+	for (auto ace: ordered_aces) {
+	    p_ace = &aces[ace.index];
+	    const sai_attribute_t *attr;
+	    sai_object_id_t ace_cntr_oid;
+
+	    for (uint32_t i = 0; i < p_ace->attrs_count; i++) {
+		attr = &p_ace->attrs[i];
+
+		if (attr->id == SAI_ACL_ENTRY_ATTR_ACTION_COUNTER) {
+		    ace_cntr_oid = attr->value.aclaction.parameter.oid;
+
+		    auto ace_it = m_ace_cntr_info_map.find(ace_cntr_oid);
+
+		    if (ace_it != m_ace_cntr_info_map.end()) {
+			m_ace_cntr_info_map.erase(ace_it);
+		    }
+	
+		    // For stats we need to find vpp rule index from acl_entry_counter (ace_counter)
+		    m_ace_cntr_info_map[ace_cntr_oid] = { tbl_oid, ace.ace_oid, acl_swindex, index };
+		}
+	    }
+	    index++;
+	}
     }
     SWSS_LOG_NOTICE("ACL table %s %s status %d", tbl_sid.c_str(),
 		    acl_replace ? "replace" : "add", status);
     free(aces);
     free(acl);
-    ordered_aces.erase(ordered_aces.begin(), ordered_aces.end());
+    ordered_aces.clear();
 
     return status;
+}
+
+sai_status_t SwitchStateBase::aclGetVppIndices(
+    _In_ sai_object_id_t ace_cntr_oid,
+    _Out_ uint32_t *acl_index,
+    _Out_ uint32_t *ace_index)
+{
+    auto vpp_ace_it = m_ace_cntr_info_map.find(ace_cntr_oid);
+    if (vpp_ace_it == m_ace_cntr_info_map.end()) {
+	SWSS_LOG_WARN("VPP ace entry %s not found in vpp_ace_cntr_info_map",
+		      sai_serialize_object_id(ace_cntr_oid).c_str());
+	return SAI_STATUS_FAILURE;
+    }
+    auto & ace_info = vpp_ace_it->second;
+
+    *acl_index = ace_info.acl_index;
+    *ace_index = ace_info.ace_index;
+
+    SWSS_LOG_NOTICE("VPP acl index %u ace index %u for acl_counter %s acl_table %s",
+		    *acl_index, *ace_index,
+		    sai_serialize_object_id(ace_cntr_oid).c_str(),
+		    sai_serialize_object_id(ace_info.tbl_oid).c_str());
+
+    return SAI_STATUS_SUCCESS;
 }
 
 sai_status_t SwitchStateBase::aclTableCreate(
@@ -1238,4 +1291,33 @@ sai_status_t SwitchStateBase::aclBindUnbindPorts(
     }
 
     return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::getAclEntryStats(
+    _In_ sai_object_id_t ace_cntr_oid,
+    _In_ uint32_t attr_count,
+    _Out_ sai_attribute_t *attr_list)
+{
+    SWSS_LOG_ENTER();
+
+    sai_status_t status = SAI_STATUS_FAILURE;
+    uint32_t acl_index, ace_index;
+
+    if (aclGetVppIndices(ace_cntr_oid, &acl_index, &ace_index) == SAI_STATUS_SUCCESS) {
+	vpp_ace_stats_t ace_stats;
+
+	if (vpp_acl_ace_stats_query(acl_index, ace_index, &ace_stats) == 0) {
+
+	    for (uint32_t i = 0; i < attr_count; i++) {
+		if (attr_list[i].id == SAI_ACL_COUNTER_ATTR_PACKETS) {
+		    attr_list[i].value.u64 = ace_stats.packets;
+		} else if (attr_list[i].id == SAI_ACL_COUNTER_ATTR_BYTES) {
+		    attr_list[i].value.u64 = ace_stats.bytes;
+		}
+	    }
+	    status = SAI_STATUS_SUCCESS;
+	}
+    }
+
+    return status;
 }

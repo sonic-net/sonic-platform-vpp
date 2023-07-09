@@ -43,6 +43,13 @@
     sai_status_t _status = (status);                            \
     if (_status != SAI_STATUS_SUCCESS) { SWSS_LOG_ERROR("ERROR status %d", status); return _status; } }
 
+typedef struct vpp_ace_cntr_info_ {
+    sai_object_id_t tbl_oid;
+    sai_object_id_t ace_oid;
+    uint32_t acl_index;
+    uint32_t ace_index;
+} vpp_ace_cntr_info_t;
+
 namespace saivpp
 {
     class SwitchStateBase:
@@ -862,6 +869,7 @@ namespace saivpp
 	    std::map<sai_object_id_t, uint32_t> m_acl_swindex_map;
             std::map<sai_object_id_t, std::list<sai_object_id_t>> m_acl_tbl_grp_mbr_map;
             std::map<sai_object_id_t, std::list<sai_object_id_t>> m_acl_tbl_grp_ports_map;
+	    std::map<sai_object_id_t, vpp_ace_cntr_info_t> m_ace_cntr_info_map;
 
         protected:
 	    sai_status_t createAclEntry(
@@ -958,11 +966,21 @@ namespace saivpp
 	       _In_ sai_object_id_t tbl_oid,
 	       _In_ bool is_bind);
 
+	   sai_status_t getAclEntryStats(
+	       _In_ sai_object_id_t ace_cntr_oid,
+	       _In_ uint32_t attr_count,
+	       _Out_ sai_attribute_t *attr_list);
+
         public:
-            bool vpp_get_hwif_name (
-		    _In_ sai_object_id_t object_id,
-                    _In_ uint32_t vlan_id,
-		    _Out_ std::string& ifname);
+           sai_status_t aclGetVppIndices(
+	       _In_ sai_object_id_t ace_oid,
+	       _Out_ uint32_t *acl_index,
+	       _Out_ uint32_t *ace_index);
+
+           bool vpp_get_hwif_name (
+	       _In_ sai_object_id_t object_id,
+	       _In_ uint32_t vlan_id,
+	       _Out_ std::string& ifname);
 
         protected:
             bool is_sonic_vpp_switch ();

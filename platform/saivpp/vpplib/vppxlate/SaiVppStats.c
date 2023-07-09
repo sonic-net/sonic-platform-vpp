@@ -86,7 +86,10 @@ vpp_stats_dump (const char *query_path, vpp_stat_one one, vpp_stat_two two, void
 		if (sname)
 		  {
 		    sname++;
-		    one(sname, res[i].simple_counter_vec[k][j], data);
+		    if (one)
+		      {
+			one(sname, j, res[i].simple_counter_vec[k][j], data);
+		      }
 		  }
 	      }
 	  break;
@@ -105,7 +108,11 @@ vpp_stats_dump (const char *query_path, vpp_stat_one one, vpp_stat_two two, void
 		if (sname)
 		  {
 		    sname++;
-		    two(sname, res[i].combined_counter_vec[k][j].packets, res[i].combined_counter_vec[k][j].bytes, data);
+		    if (two)
+		      {
+			two(sname, j, res[i].combined_counter_vec[k][j].packets,
+			    res[i].combined_counter_vec[k][j].bytes, data);
+		      }
 		  }
 	      }
 	  break;

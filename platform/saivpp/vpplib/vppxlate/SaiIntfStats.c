@@ -40,7 +40,8 @@
 #define TX_MULTICAST "tx-multicast"
 #define TX_BROADCAST "tx-broadcast"
 
-void handle_stat_one (const char *stat_name, uint64_t count, void *data)
+static void handle_stat_one (const char *stat_name, uint32_t index,
+			     uint64_t count, void *data)
 {
   vpp_interface_stats_t *st_p = (vpp_interface_stats_t *) data;
 
@@ -82,7 +83,8 @@ void handle_stat_one (const char *stat_name, uint64_t count, void *data)
     }
 }
 
-void handle_stat_two (const char *stat_name, uint64_t count1, uint64_t count2, void *data)
+static void handle_stat_two (const char *stat_name, uint32_t index,
+			     uint64_t count1, uint64_t count2, void *data)
 {
   vpp_interface_stats_t *st_p = (vpp_interface_stats_t *) data;
 

@@ -203,6 +203,8 @@ typedef struct _vpp_index_map_ {
 
 static vpp_index_map_t idx_map;
 
+static int vpp_acl_counters_enable_disable(bool enable);
+
 /*
  * Right now configuration is done synchronously in a single thread.
  * When the need arises for multiple requests in pipeline we can move to a pool to
@@ -567,6 +569,14 @@ static void vl_api_acl_del_reply_t_handler(vl_api_acl_del_reply_t *msg)
 }
 
 static void
+vl_api_acl_stats_intf_counters_enable_reply_t_handler (vl_api_acl_stats_intf_counters_enable_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("acl counters enable %s", msg->retval ? "failed" : "successful");
+}
+
+static void
 vl_api_acl_interface_add_del_reply_t_handler(vl_api_acl_interface_add_del_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
@@ -586,6 +596,7 @@ vl_api_acl_interface_add_del_reply_t_handler(vl_api_acl_interface_add_del_reply_
     _(LCP_MSG_ID(LCP_ITF_PAIR_ADD_DEL_REPLY), lcp_itf_pair_add_del_reply) \
     _(ACL_MSG_ID(ACL_ADD_REPLACE_REPLY), acl_add_replace_reply)	\
     _(ACL_MSG_ID(ACL_DEL_REPLY), acl_del_reply) \
+    _(ACL_MSG_ID(ACL_STATS_INTF_COUNTERS_ENABLE_REPLY), acl_stats_intf_counters_enable_reply) \
     _(ACL_MSG_ID(ACL_INTERFACE_ADD_DEL_REPLY), acl_interface_add_del_reply)
     
 static void vpp_plugin_vpe_init(void)
@@ -916,7 +927,9 @@ int init_vpp_client()
             SAIVPP_DEBUG("Interface dump available");
         }
         dump_interface_table(vam);
-        // vl_socket_client_disconnect();
+
+	vpp_acl_counters_enable_disable(true);
+
 	vpp_client_init = 1;
 	return 0;
     } else {
@@ -1310,6 +1323,23 @@ int vpp_acl_del (uint32_t acl_index)
 
     M (ACL_DEL, mp);
     mp->acl_index = htonl(acl_index);
+
+    S (mp);
+    W (ret);
+
+    return ret;
+}
+
+static int vpp_acl_counters_enable_disable (bool enable)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_acl_stats_intf_counters_enable_t *mp;
+    int ret;
+
+    __plugin_msg_base = acl_msg_id_base;
+
+    M (ACL_STATS_INTF_COUNTERS_ENABLE, mp);
+    mp->enable = enable;
 
     S (mp);
     W (ret);
