@@ -863,20 +863,16 @@ sai_status_t SwitchStateBase::process_interface_loopback (
     if (isLoopback) {
         std::string vppIfName = "loop" + std::to_string(getInstanceFromHostIfname(interfaceName));
 
-        if ((is_add && (lpbInstMap.find(vppIfName) == lpbInstMap.end())) ||
-            (!is_add))
-        {
-            vpp_add_del_lpb_intf_ip_addr(serializedObjectId, is_add);
-        } else
+        if (is_add && (lpbInstMap.find(vppIfName) != lpbInstMap.end()))
         {
             // interface already exists - store dual stack IP
-            if (is_add)
-            {
-                lpbIpToIfMap[destinationIP] = vppIfName;
-                lpbIpToHostIfMap[destinationIP] = interfaceName;
-                SWSS_LOG_DEBUG("interfaceName:%s exists new-ip:%s",
-                    interfaceName.c_str(), destinationIP.c_str());
-            }
+            lpbIpToIfMap[destinationIP] = vppIfName;
+            lpbIpToHostIfMap[destinationIP] = interfaceName;
+            SWSS_LOG_DEBUG("interfaceName:%s exists new-ip:%s",
+                interfaceName.c_str(), destinationIP.c_str());
+        } else
+        {
+            vpp_add_del_lpb_intf_ip_addr(serializedObjectId, is_add);
         }
     }
 
