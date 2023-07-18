@@ -831,6 +831,12 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr_norif (
     }
 }
 
+int getInstanceFromHostIfname(const std::string& interfaceName) {
+    std::string instanceStr = interfaceName.substr(8); // Remove "Loopback" prefix
+    int instance = std::stoi(instanceStr);
+    return instance;
+}
+
 sai_status_t SwitchStateBase::process_interface_loopback (
    _In_ const std::string &serializedObjectId,
    _In_ bool &isLoopback,
@@ -841,7 +847,7 @@ sai_status_t SwitchStateBase::process_interface_loopback (
     sai_route_entry_t route_entry;
     sai_deserialize_route_entry(serializedObjectId, route_entry);
     std::string destinationIP = extractDestinationIP(serializedObjectId);
-    std::string interfaceName;
+    std::string interfaceName = "";
 
     if (is_add)
     {
@@ -855,10 +861,59 @@ sai_status_t SwitchStateBase::process_interface_loopback (
     SWSS_LOG_NOTICE("interfaceName:%s isLoopback:%u", interfaceName.c_str(), isLoopback);
 
     if (isLoopback) {
-        vpp_add_del_lpb_intf_ip_addr(serializedObjectId, is_add);
+        std::string vppIfName = "loop" + std::to_string(getInstanceFromHostIfname(interfaceName));
+
+        if ((is_add && (lpbInstMap.find(vppIfName) == lpbInstMap.end())) ||
+            (!is_add))
+        {
+            vpp_add_del_lpb_intf_ip_addr(serializedObjectId, is_add);
+        } else
+        {
+            // interface already exists - store dual stack IP
+            if (is_add)
+            {
+                lpbIpToIfMap[destinationIP] = vppIfName;
+                lpbIpToHostIfMap[destinationIP] = interfaceName;
+                SWSS_LOG_DEBUG("interfaceName:%s exists new-ip:%s",
+                    interfaceName.c_str(), destinationIP.c_str());
+            }
+        }
     }
 
     return SAI_STATUS_SUCCESS;
+}
+
+void SwitchStateBase::eraseDualStackEntries(const std::string& destinationIP) {
+  // Find the entries in both maps based on the destination IP
+  auto ifMapIter = lpbIpToIfMap.find(destinationIP);
+  auto hostIfMapIter = lpbIpToHostIfMap.find(destinationIP);
+
+  // Check if entries exist in both maps
+  if (ifMapIter != lpbIpToIfMap.end() && hostIfMapIter != lpbIpToHostIfMap.end()) {
+    // Store the interface and host interface names for comparison
+    const std::string& interfaceName = ifMapIter->second;
+    const std::string& hostIfName = hostIfMapIter->second;
+
+    // Erase entries with matching interface and host interface names
+    for (auto it = lpbIpToIfMap.begin(); it != lpbIpToIfMap.end(); ) {
+      if (it->second == interfaceName) {
+        it = lpbIpToIfMap.erase(it);
+      } else {
+        ++it;
+      }
+    }
+
+    for (auto it = lpbIpToHostIfMap.begin(); it != lpbIpToHostIfMap.end(); ) {
+      if (it->second == hostIfName) {
+        it = lpbIpToHostIfMap.erase(it);
+      } else {
+        ++it;
+      }
+    }
+
+  } else {
+    SWSS_LOG_DEBUG("Entries not found for destination IP:%s", destinationIP.c_str());
+  }
 }
 
 sai_status_t SwitchStateBase::vpp_add_del_lpb_intf_ip_addr (
@@ -962,8 +1017,7 @@ sai_status_t SwitchStateBase::vpp_add_del_lpb_intf_ip_addr (
 
         // Remove the IP/interface mappings from the maps
         lpbInstMap.erase(interfaceName);
-        lpbIpToIfMap.erase(destinationIP);
-        lpbIpToHostIfMap.erase(destinationIP);
+        eraseDualStackEntries(destinationIP);
 
         // Mark the loopback instance available
         markLoopbackInstanceDeleted(instance);

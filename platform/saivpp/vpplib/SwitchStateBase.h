@@ -773,7 +773,8 @@ namespace saivpp
             sai_status_t vpp_add_del_lpb_intf_ip_addr (
                     _In_ const std::string &serializedObjectId,
                     _In_ bool is_add);
-
+            void eraseDualStackEntries (
+                    _In_ const std::string& destinationIP);
             sai_status_t vpp_get_router_intf_name (
                     _In_ sai_ip_prefix_t& ip_prefix,
                     _In_ sai_object_id_t rif_id,
