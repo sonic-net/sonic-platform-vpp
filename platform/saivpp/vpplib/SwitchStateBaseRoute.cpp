@@ -190,8 +190,6 @@ sai_status_t SwitchStateBase::IpRouteAddRemove(
         }
         ip_route->nexthop_cnt = nxthop_group->nmembers;
 
-	init_vpp_client();
-
 	ret = ip_route_add_del(ip_route, is_add);
 
 	SWSS_LOG_NOTICE("%s ip route in VPP %s status %d table %u", (is_add ? "Add" : "Remove"),
