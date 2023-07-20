@@ -78,6 +78,7 @@ void SwitchStateBase::populate_if_mapping()
 	hwif_name = std::string(vpp_name);
 
 	m_hostif_hwif_map[tap_name] = hwif_name;
+	m_hwif_hostif_map[hwif_name] = tap_name;
     }
     mapping_init = 1;
     fclose(fp);
@@ -98,6 +99,24 @@ const char * SwitchStateBase::tap_to_hwif_name (const char *name)
 	return "Unknown";
     }
     SWSS_LOG_DEBUG("Found hwif %s info entry for hostif device: %s", it->second.c_str(), tap_name.c_str());
+    return it->second.c_str();
+}
+
+const char * SwitchStateBase::hwif_to_tap_name (const char *name)
+{
+    populate_if_mapping();
+
+    std::string tap_name = std::string(name);
+
+    auto it = m_hwif_hostif_map.find(tap_name);
+
+    if (it == m_hwif_hostif_map.end())
+    {
+        SWSS_LOG_ERROR("failed to find hostif info entry for hwif device: %s", tap_name.c_str());
+
+	return "Unknown";
+    }
+    SWSS_LOG_DEBUG("Found  hostif %s info entry for hwif device: %s", it->second.c_str(), tap_name.c_str());
     return it->second.c_str();
 }
 
@@ -705,14 +724,22 @@ sai_status_t SwitchStateBase::vpp_create_hostif_tap_interface(
     }
 
     SWSS_LOG_ERROR("created TAP device for %s, fd: %d", name.c_str(), tapfd);
+    const char *dev = name.c_str();
+    const char *hwif_name = tap_to_hwif_name(dev);
+
+    configure_lcp_interface(hwif_name, dev, true);
+
     {
-        const char *dev = name.c_str();
-        init_vpp_client();
-        configure_lcp_interface(tap_to_hwif_name(dev), dev, true);
+	bool link_up = false;
+
+      	interface_get_state(hwif_name, &link_up);
+
+	auto state = link_up ? SAI_PORT_OPER_STATUS_UP : SAI_PORT_OPER_STATUS_DOWN;
+
+	send_port_oper_status_notification(obj_id, state, true);
+	SWSS_LOG_NOTICE("VPP interface %s(%s) oper state %s", hwif_name, dev,
+			(link_up ? "UP" : "DOWN"));
     }
-
-    send_port_oper_status_notification(obj_id, SAI_PORT_OPER_STATUS_UP, true);
-
     if (is_sonic_vpp_switch()) {
         sai_attribute_t attr;
 

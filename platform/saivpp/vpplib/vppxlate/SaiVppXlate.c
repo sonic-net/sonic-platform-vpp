@@ -195,7 +195,7 @@ void os_exit(int code) {}
 #define SAIVPP_WARN clib_warning
 #define SAIVPP_ERROR clib_error
 
-#define VPP_MAX_CTX 1
+#define VPP_MAX_CTX 2
 typedef struct _vpp_index_map_ {
     uint8_t index_map;
     uintptr_t ptr[VPP_MAX_CTX];
@@ -203,7 +203,66 @@ typedef struct _vpp_index_map_ {
 
 static vpp_index_map_t idx_map;
 
+static vpp_event_queue_t vpp_ev_queue, *vpp_evq_p;
+
+static void vpp_ev_enqueue (vpp_event_info_t *ev)
+{
+    *vpp_evq_p->tail = ev;
+    ev->next = NULL;
+    vpp_evq_p->tail = &ev->next;
+}
+
+vpp_event_info_t * vpp_ev_dequeue ()
+{
+    vpp_event_info_t *evp;
+
+    evp = vpp_evq_p->head;
+    if (evp) {
+	vpp_evq_p->head = vpp_evq_p->head->next;
+    }
+    if (vpp_evq_p->head == NULL) {
+	vpp_evq_p->tail = &vpp_evq_p->head;
+    }
+
+    return evp;
+}
+
+void vpp_ev_free (vpp_event_info_t *ev)
+{
+    free(ev);
+}
+
+static void vpp_evq_init ()
+{
+    vpp_evq_p = &vpp_ev_queue;
+
+    vpp_evq_p->head = NULL;
+    vpp_evq_p->tail = &vpp_evq_p->head;
+    vpp_evq_p->free = vpp_ev_free;
+}
+
 static int vpp_acl_counters_enable_disable(bool enable);
+static int vpp_intf_events_enable_disable(bool enable);
+
+static pthread_mutex_t vpp_mutex;
+
+void vpp_mutex_lock_init ()
+{
+    pthread_mutex_init(&vpp_mutex, NULL);
+}
+
+void vpp_mutex_lock ()
+{
+    pthread_mutex_lock(&vpp_mutex);
+}
+
+void vpp_mutex_unlock ()
+{
+    pthread_mutex_unlock(&vpp_mutex);
+}
+
+#define VPP_LOCK() vpp_mutex_lock()
+#define VPP_UNLOCK() vpp_mutex_unlock()
 
 /*
  * Right now configuration is done synchronously in a single thread.
@@ -212,7 +271,7 @@ static int vpp_acl_counters_enable_disable(bool enable);
  */
 static int alloc_index ()
 {
-    return 0;
+    return 1;
 }
 
 static uint32_t store_ptr (void *ptr)
@@ -239,6 +298,7 @@ static uintptr_t get_index_ptr (uint32_t idx)
 }
 
 vat_main_t vat_main;
+uword *interface_name_by_sw_index = NULL;
 
 f64
 vat_time_now (vat_main_t * vam)
@@ -324,15 +384,71 @@ vl_api_control_ping_reply_t_handler (vl_api_control_ping_reply_t *mp)
     vam->socket_client_main->control_pings_outstanding--;
 }
 
+static void
+vl_api_want_interface_events_reply_t_handler (vl_api_want_interface_events_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sw interface events enable %s(%d)",
+		 msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_sw_interface_event_t_handler (vl_api_sw_interface_event_t *mp)
+{
+    uint32_t flags, sw_if_index;
+    uword *ptr;
+
+    sw_if_index = htonl(mp->sw_if_index);
+    ptr = hash_get(interface_name_by_sw_index, sw_if_index);
+    if (NULL == ptr) {
+	SAIVPP_WARN("vpp cannot get interface name for sw index %u", sw_if_index);
+	return;
+    }
+    const char *hw_ifname = (const char *) ptr[0];
+
+    flags = htonl(mp->flags);
+    if (flags & IF_STATUS_API_FLAG_ADMIN_UP &&
+	!(flags & IF_STATUS_API_FLAG_LINK_UP)) {
+	return;
+    }
+    bool link_up;
+    if (flags & IF_STATUS_API_FLAG_LINK_UP) {
+	link_up = true;
+    } else {
+	link_up = false;
+    }
+    SAIVPP_WARN("Sending vpp link %s event for interface %s index %u", 
+		link_up ? "UP" : "DOWN", hw_ifname, sw_if_index);
+
+    vpp_event_info_t *evinfo;
+    evinfo = calloc(1, sizeof(*evinfo));
+
+    if (evinfo) {
+	evinfo->type = VPP_INTF_LINK_STATUS;
+	vpp_intf_status_t *stp = &evinfo->data.intf_status;
+
+	stp->link_up = link_up;
+	strncpy(stp->hwif_name, hw_ifname, sizeof(stp->hwif_name) -1);
+
+	vpp_ev_enqueue(evinfo);
+    }
+}
 
 static void
 vl_api_sw_interface_details_t_handler (vl_api_sw_interface_details_t *mp)
 {
+  if (mp->context) {
+      bool *link_up = (bool *) get_index_ptr(mp->context);
+      *link_up = ntohl(mp->flags) & IF_STATUS_API_FLAG_LINK_UP ? true : false;
+      return;
+  }
   vat_main_t *vam = &vat_main;
   u8 *s = format (0, "%s%c", mp->interface_name, 0);
 
   hash_set_mem (vam->sw_if_index_by_interface_name, s,
 		ntohl (mp->sw_if_index));
+  hash_set (interface_name_by_sw_index, ntohl (mp->sw_if_index), s);
 
   /* In sub interface case, fill the sub interface table entry */
   if (mp->sw_if_index != mp->sup_sw_if_index)
@@ -516,6 +632,8 @@ static void vpp_base_vpe_init(void)
     _(INTERFACE_MSG_ID(SW_INTERFACE_SET_FLAGS_REPLY), sw_interface_set_flags_reply) \
     _(INTERFACE_MSG_ID(SW_INTERFACE_SET_MTU_REPLY), sw_interface_set_mtu_reply) \
     _(INTERFACE_MSG_ID(HW_INTERFACE_SET_MTU_REPLY), hw_interface_set_mtu_reply) \
+    _(INTERFACE_MSG_ID(WANT_INTERFACE_EVENTS), want_interface_events_reply) \
+    _(INTERFACE_MSG_ID(SW_INTERFACE_EVENT), sw_interface_event) \
     _(IP_MSG_ID(IP_TABLE_ADD_DEL_REPLY), ip_table_add_del_reply) \
     _(IP_MSG_ID(IP_ROUTE_ADD_DEL_REPLY), ip_route_add_del_reply) \
     _(IP_MSG_ID(SET_IP_FLOW_HASH_V2_REPLY), set_ip_flow_hash_v2_reply)	\
@@ -650,14 +768,14 @@ typedef struct _vsclient_main_ {
     u32 my_client_index;
 } vsclient_main_t;
 
-int
-vsc_socket_connect (vat_main_t * vam)
+static int
+vsc_socket_connect (vat_main_t * vam, char *client_name)
 {
     int rv;
     api_main_t *am = vlibapi_get_main ();
     vam->socket_client_main = &socket_client_main;
     if ((rv = vl_socket_client_connect ((char *) vam->socket_name,
-                                        "sonic_vpp_api_client",
+                                        client_name,
                                         0 /* default socket rx, tx buffer */ )))
         return rv;
 
@@ -683,6 +801,8 @@ api_sw_interface_dump (vat_main_t *vam)
     sw_interface_subif_t *sub = NULL;
     int ret;
 
+    VPP_LOCK();
+
     /* Toss the old name table */
     hash_foreach_pair (p, vam->sw_if_index_by_interface_name, ({
                 vec_add2 (nses, ns, 1);
@@ -696,6 +816,9 @@ api_sw_interface_dump (vat_main_t *vam)
         vec_free (ns->name);
 
     vec_free (nses);
+
+    /* Interface name is from the index_table which is already freed */
+    hash_free (interface_name_by_sw_index);
 
     vec_foreach (sub, vam->sw_if_subif_table)
     {
@@ -721,6 +844,9 @@ api_sw_interface_dump (vat_main_t *vam)
     S (mp_ping);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -785,6 +911,8 @@ static int config_lcp_hostif (vat_main_t *vam,
     vl_api_lcp_itf_pair_add_del_t *mp;
     int ret;
 
+    VPP_LOCK();
+
     __plugin_msg_base = lcp_msg_id_base;
 
     M (LCP_ITF_PAIR_ADD_DEL, mp);
@@ -795,6 +923,9 @@ static int config_lcp_hostif (vat_main_t *vam,
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -804,6 +935,8 @@ static int delete_lcp_hostif (vat_main_t *vam,
 {
     vl_api_lcp_itf_pair_add_del_t *mp;
     int ret;
+
+    VPP_LOCK();
 
     __plugin_msg_base = lcp_msg_id_base;
 
@@ -815,6 +948,9 @@ static int delete_lcp_hostif (vat_main_t *vam,
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -823,6 +959,8 @@ static int __create_loopback_instance (vat_main_t *vam, u32 instance)
     vl_api_create_loopback_instance_t *mp;
     int ret;
     u8 mac_address[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    VPP_LOCK();
 
     __plugin_msg_base = interface_msg_id_base;
 
@@ -836,6 +974,9 @@ static int __create_loopback_instance (vat_main_t *vam, u32 instance)
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -843,6 +984,8 @@ static int __delete_loopback (vat_main_t *vam, const char *hwif_name, u32 instan
 {
     vl_api_delete_loopback_t *mp;
     int ret;
+
+    VPP_LOCK();
 
     __plugin_msg_base = interface_msg_id_base;
 
@@ -853,12 +996,16 @@ static int __delete_loopback (vat_main_t *vam, const char *hwif_name, u32 instan
         mp->sw_if_index = htonl(idx);
     } else {
         SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+	VPP_UNLOCK();
         return -EINVAL;
     }
 
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -866,6 +1013,8 @@ static int __create_sub_interface (vat_main_t *vam, vl_api_interface_index_t if_
 {
     vl_api_create_subif_t *mp;
     int ret;
+
+    VPP_LOCK();
 
     __plugin_msg_base = interface_msg_id_base;
 
@@ -879,6 +1028,9 @@ static int __create_sub_interface (vat_main_t *vam, vl_api_interface_index_t if_
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -887,6 +1039,8 @@ static int __delete_sub_interface (vat_main_t *vam, vl_api_interface_index_t if_
     vl_api_create_subif_t *mp;
     int ret;
 
+    VPP_LOCK();
+
     __plugin_msg_base = interface_msg_id_base;
 
     M (DELETE_SUBIF, mp);
@@ -894,6 +1048,9 @@ static int __delete_sub_interface (vat_main_t *vam, vl_api_interface_index_t if_
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -904,6 +1061,9 @@ int init_vpp_client()
     if (vpp_client_init) return 0;
     
     vat_main_t *vam = &vat_main;
+
+    vpp_mutex_lock_init();
+
     clib_mem_init_thread_safe(0, 128 << 20);
     vlib_main_init();
     clib_time_init (&vam->clib_time);
@@ -913,8 +1073,9 @@ int init_vpp_client()
     vpp_base_vpe_init();
     vam->socket_name = format (0, "%s%c", API_SOCKET_FILE, 0);
     vam->sw_if_index_by_interface_name = hash_create_string (0, sizeof (uword));
+    interface_name_by_sw_index = hash_create (0, sizeof (uword));
     
-    if (vsc_socket_connect(vam) == 0) {
+    if (vsc_socket_connect(vam, "sonic_vpp_api_client") == 0) {
         int rc;
 
         SAIVPP_DEBUG("vpp socket connect successful\n");
@@ -930,6 +1091,14 @@ int init_vpp_client()
 
 	vpp_acl_counters_enable_disable(true);
 
+	/* 
+	 * SONiC periodically polls the port status so currently there is no need for
+	 * async notification. This also simplifies the synchronous design of saivpp.
+	 * Revisit the async mechanism if there is greater reason.
+	 */
+	vpp_intf_events_enable_disable(true);
+
+	vpp_evq_init();
 	vpp_client_init = 1;
 	return 0;
     } else {
@@ -1004,6 +1173,8 @@ static int __set_interface_vrf (vat_main_t *vam, vl_api_interface_index_t if_idx
     vl_api_sw_interface_set_table_t *mp;
     int ret;
 
+    VPP_LOCK();
+
     __plugin_msg_base = interface_msg_id_base;
 
     M (SW_INTERFACE_SET_TABLE, mp);
@@ -1014,6 +1185,9 @@ static int __set_interface_vrf (vat_main_t *vam, vl_api_interface_index_t if_idx
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -1033,10 +1207,35 @@ int set_interface_vrf (const char *hwif_name, u32 sub_id, u32 vrf_id, bool is_ip
     return __set_interface_vrf(vam, idx, vrf_id, is_ipv6);
 }
 
-static int __ip_vrf_add_del (vat_main_t *vam, u32 vrf_id, const char *vrf_name, bool is_ipv6, bool is_add)
+static int vpp_intf_events_enable_disable (bool enable)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_want_interface_events_t *mp;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = interface_msg_id_base;
+
+    M (WANT_INTERFACE_EVENTS, mp);
+    mp->enable_disable = enable;
+    mp->pid = htonl(getpid());
+
+    S (mp);
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+static int __ip_vrf_add_del (vat_main_t *vam, u32 vrf_id,
+			     const char *vrf_name, bool is_ipv6, bool is_add)
 {
     vl_api_ip_table_add_del_t *mp;
     int ret;
+
+    VPP_LOCK();
 
     __plugin_msg_base = ip_msg_id_base;
 
@@ -1048,8 +1247,10 @@ static int __ip_vrf_add_del (vat_main_t *vam, u32 vrf_id, const char *vrf_name, 
     S (mp);
 
     W (ret);
-    return ret;
 
+    VPP_UNLOCK();
+
+    return ret;
 }
 
 int ip_vrf_add (u32 vrf_id, const char *vrf_name, bool is_ipv6)
@@ -1072,6 +1273,8 @@ static int __ip_nbr_add_del (vat_main_t *vam, vl_api_address_t *nbr_addr, u32 if
     vl_api_ip_neighbor_add_del_t *mp;
     int ret;
 
+    VPP_LOCK();
+
     __plugin_msg_base = ip_nbr_msg_id_base;
 
     M (IP_NEIGHBOR_ADD_DEL, mp);
@@ -1084,6 +1287,9 @@ static int __ip_nbr_add_del (vat_main_t *vam, vl_api_address_t *nbr_addr, u32 if
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -1130,6 +1336,8 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
     vl_api_ip_route_add_del_t *mp;
     int ret;
 
+    VPP_LOCK();
+
     path_count = prefix->nexthop_cnt;
 
     __plugin_msg_base = ip_msg_id_base;
@@ -1149,6 +1357,7 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
 	api_addr->af = ADDRESS_IP6;
 	memcpy(api_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(api_addr->un.ip6));
     } else {
+	VPP_UNLOCK();
 	return -EINVAL;
     }
     ip_route->prefix.len = prefix->prefix_len;
@@ -1182,6 +1391,7 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
 	    memcpy(nh_addr->ip6, &ip6->sin6_addr.s6_addr, sizeof(nh_addr->ip6));
 	    fib_path->proto = FIB_API_PATH_NH_PROTO_IP6;
 	} else {
+	    VPP_UNLOCK();
 	    return -EINVAL;
 	}
 	if (nexthop->type == VPP_NEXTHOP_NORMAL) {
@@ -1203,6 +1413,9 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -1242,6 +1455,8 @@ int vpp_acl_add_replace (vpp_acl_t *in_acl, uint32_t *acl_index, bool is_replace
     int ret;
 
     init_vpp_client();
+
+    VPP_LOCK();
 
     acl_count = in_acl->count;
 
@@ -1310,6 +1525,8 @@ int vpp_acl_add_replace (vpp_acl_t *in_acl, uint32_t *acl_index, bool is_replace
 
     W (ret);
 
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -1319,6 +1536,8 @@ int vpp_acl_del (uint32_t acl_index)
     vl_api_acl_del_t *mp;
     int ret;
 
+    VPP_LOCK();
+
     __plugin_msg_base = acl_msg_id_base;
 
     M (ACL_DEL, mp);
@@ -1326,6 +1545,8 @@ int vpp_acl_del (uint32_t acl_index)
 
     S (mp);
     W (ret);
+
+    VPP_UNLOCK();
 
     return ret;
 }
@@ -1336,6 +1557,8 @@ static int vpp_acl_counters_enable_disable (bool enable)
     vl_api_acl_stats_intf_counters_enable_t *mp;
     int ret;
 
+    VPP_LOCK();
+
     __plugin_msg_base = acl_msg_id_base;
 
     M (ACL_STATS_INTF_COUNTERS_ENABLE, mp);
@@ -1343,6 +1566,8 @@ static int vpp_acl_counters_enable_disable (bool enable)
 
     S (mp);
     W (ret);
+
+    VPP_UNLOCK();
 
     return ret;
 }
@@ -1353,6 +1578,8 @@ int __vpp_acl_interface_bind_unbind (const char *hwif_name, uint32_t acl_index,
     vat_main_t *vam = &vat_main;
     vl_api_acl_interface_add_del_t *mp;
     int ret;
+
+    VPP_LOCK();
 
     __plugin_msg_base = acl_msg_id_base;
     M (ACL_INTERFACE_ADD_DEL, mp);
@@ -1365,9 +1592,11 @@ int __vpp_acl_interface_bind_unbind (const char *hwif_name, uint32_t acl_index,
 	    mp->sw_if_index = htonl(idx);
 	} else {
 	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+	    VPP_UNLOCK();
 	    return -EINVAL;
 	}
     } else {
+	VPP_UNLOCK();
 	return -EINVAL;
     }
     mp->is_input = is_input;
@@ -1382,6 +1611,8 @@ int __vpp_acl_interface_bind_unbind (const char *hwif_name, uint32_t acl_index,
 	SAIVPP_WARN("ACL index %u is already bound to %s", acl_index, hwif_name);
 	ret = 0;
     }
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -1403,6 +1634,8 @@ int vpp_ip_flow_hash_set (uint32_t vrf_id, uint32_t hash_mask, int addr_family)
     vl_api_set_ip_flow_hash_v2_t *mp;
     int ret;
 
+    VPP_LOCK();
+
     __plugin_msg_base = ip_msg_id_base;
 
     M (SET_IP_FLOW_HASH_V2, mp);
@@ -1420,6 +1653,8 @@ int vpp_ip_flow_hash_set (uint32_t vrf_id, uint32_t hash_mask, int addr_family)
     S (mp);
     W (ret);
 
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -1430,6 +1665,8 @@ int interface_ip_address_add_del (const char *hwif_name, vpp_ip_route_t *prefix,
     vl_api_sw_interface_add_del_address_t *mp;
     vl_api_address_t *api_addr;
     int ret;
+
+    VPP_LOCK();
 
     __plugin_msg_base = interface_msg_id_base;
 
@@ -1447,6 +1684,7 @@ int interface_ip_address_add_del (const char *hwif_name, vpp_ip_route_t *prefix,
 	api_addr->af = ADDRESS_IP6;
 	memcpy(api_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(api_addr->un.ip6));
     } else {
+	VPP_UNLOCK();
 	return -EINVAL;
     }
     mp->prefix.len = prefix->prefix_len;
@@ -1462,6 +1700,7 @@ int interface_ip_address_add_del (const char *hwif_name, vpp_ip_route_t *prefix,
 	    return -EINVAL;
 	}
     } else {
+	VPP_UNLOCK();
 	return -EINVAL;
     }
 
@@ -1471,6 +1710,9 @@ int interface_ip_address_add_del (const char *hwif_name, vpp_ip_route_t *prefix,
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -1479,6 +1721,8 @@ int interface_set_state (const char *hwif_name, bool is_up)
     vat_main_t *vam = &vat_main;
     vl_api_sw_interface_set_flags_t *mp;
     int ret;
+
+    VPP_LOCK();
 
     __plugin_msg_base = interface_msg_id_base;
 
@@ -1491,9 +1735,11 @@ int interface_set_state (const char *hwif_name, bool is_up)
 	    mp->sw_if_index = htonl(idx);
 	} else {
 	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+	    VPP_UNLOCK();
 	    return -EINVAL;
 	}
     } else {
+	VPP_UNLOCK();
 	return -EINVAL;
     }
     mp->flags = htonl ((is_up) ? IF_STATUS_API_FLAG_ADMIN_UP : 0);
@@ -1501,6 +1747,75 @@ int interface_set_state (const char *hwif_name, bool is_up)
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int interface_get_state (const char *hwif_name, bool *link_is_up)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_sw_interface_dump_t *mp;
+    vl_api_control_ping_t *mp_ping;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = interface_msg_id_base;
+
+    M (SW_INTERFACE_DUMP, mp);
+
+    if (hwif_name) {
+	u32 idx;
+
+	idx = get_swif_idx(vam, hwif_name);
+	if (idx != (u32) -1) {
+	    mp->sw_if_index = htonl(idx);
+	} else {
+	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+	    VPP_UNLOCK();
+	    return -EINVAL;
+	}
+    } else {
+	VPP_UNLOCK();
+	return -EINVAL;
+    }
+    mp->context = store_ptr(link_is_up);
+
+    S (mp);
+
+    /* Use a control ping for synchronization */
+    __plugin_msg_base = memclnt_msg_id_base;
+
+    PING (NULL, mp_ping);
+    S (mp_ping);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int vpp_sync_for_events ()
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_control_ping_t *mp_ping;
+    int ret;
+
+    VPP_LOCK();
+
+    /* Use a control ping for synchronization */
+    __plugin_msg_base = memclnt_msg_id_base;
+
+    PING (NULL, mp_ping);
+    S (mp_ping);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -1509,6 +1824,8 @@ int sw_interface_set_mtu (const char *hwif_name, uint32_t mtu, int type)
     vat_main_t *vam = &vat_main;
     vl_api_sw_interface_set_mtu_t *mp;
     int ret;
+
+    VPP_LOCK();
 
     __plugin_msg_base = interface_msg_id_base;
 
@@ -1521,9 +1838,11 @@ int sw_interface_set_mtu (const char *hwif_name, uint32_t mtu, int type)
 	    mp->sw_if_index = htonl(idx);
 	} else {
 	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+	    VPP_UNLOCK();
 	    return -EINVAL;
 	}
     } else {
+	VPP_UNLOCK();
 	return -EINVAL;
     }
     switch (type) {
@@ -1535,12 +1854,16 @@ int sw_interface_set_mtu (const char *hwif_name, uint32_t mtu, int type)
 	mp->mtu[MTU_PROTO_API_IP6] = htonl(mtu);
 	break;
     default:
+	VPP_UNLOCK();
 	return -EINVAL;
     }
 
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }
 
@@ -1549,6 +1872,8 @@ int hw_interface_set_mtu (const char *hwif_name, uint32_t mtu)
     vat_main_t *vam = &vat_main;
     vl_api_hw_interface_set_mtu_t *mp;
     int ret;
+
+    VPP_LOCK();
 
     __plugin_msg_base = interface_msg_id_base;
 
@@ -1561,9 +1886,11 @@ int hw_interface_set_mtu (const char *hwif_name, uint32_t mtu)
 	    mp->sw_if_index = htonl(idx);
 	} else {
 	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+	    VPP_UNLOCK();
 	    return -EINVAL;
 	}
     } else {
+	VPP_UNLOCK();
 	return -EINVAL;
     }
     mp->mtu = htons(mtu);
@@ -1571,5 +1898,8 @@ int hw_interface_set_mtu (const char *hwif_name, uint32_t mtu)
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
     return ret;
 }

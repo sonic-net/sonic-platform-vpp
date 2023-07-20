@@ -25,8 +25,8 @@ typedef  void (*vpp_stat_two)(const char *, uint32_t index, uint64_t, uint64_t, 
 
 int vpp_stats_dump(const char *query_path, vpp_stat_one one, vpp_stat_two two, void *data);
 
-// #define SAIVPP_STAT_DBG(format,args...) {}
-#define SAIVPP_STAT_DBG clib_warning
+#define SAIVPP_STAT_DBG(format,args...) {}
+// #define SAIVPP_STAT_DBG clib_warning
 #define SAIVPP_STAT_ERR clib_error
 
 #endif

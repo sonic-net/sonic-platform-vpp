@@ -91,6 +91,36 @@ extern "C" {
         VPP_IP_API_FLOW_HASH_FLOW_LABEL = 128,
     } vpp_ip_flow_hash_mask_e;
 
+    typedef struct vpp_intf_status_ {
+	char hwif_name[64];
+	bool link_up;
+    } vpp_intf_status_t;
+
+    typedef enum {
+	VPP_INTF_LINK_STATUS = 1,
+    } vpp_event_type_e;
+
+    typedef union vpp_event_data_ {
+	vpp_intf_status_t intf_status;
+    } vpp_event_data_t;
+
+    typedef struct vpp_event_info_ {
+	struct vpp_event_info_ *next;
+	vpp_event_type_e type;
+	vpp_event_data_t data;
+    } vpp_event_info_t;
+
+    typedef void (*vpp_event_free_fn)(vpp_event_info_t *);
+
+    typedef struct vpp_event_queue_ {
+	vpp_event_info_t *head;
+	vpp_event_info_t **tail;
+	vpp_event_free_fn free;
+    } vpp_event_queue_t;
+
+    extern vpp_event_info_t * vpp_ev_dequeue();
+    extern void vpp_ev_free(vpp_event_info_t *evp);
+
     extern int init_vpp_client();
     extern int refresh_interfaces_list();
     extern int configure_lcp_interface(const char *hwif_name, const char *hostif_name, bool is_add);
@@ -121,6 +151,8 @@ extern "C" {
 				      bool is_input);
     extern int vpp_acl_interface_unbind(const char *hwif_name, uint32_t acl_index,
 					bool is_input);
+    extern int interface_get_state(const char *hwif_name, bool *link_is_up);
+    extern int vpp_sync_for_events();
 
 #ifdef __cplusplus
 }
