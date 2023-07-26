@@ -27,8 +27,8 @@ cd ./build/sonic-buildimage
 # Below is the build label information
 SONIC_CHECKOUT_LABEL=${SONIC_CHECKOUT_LABEL:=$WORKING_LABEL}
 
-#320487	20230721.7	master	Azure.sonic-buildimage.official.vs	succeeded	2023-07-21T08:07:21	2023-07-21T13:03:56	287056110e
-WORKING_LABEL=287056110e
+#323306	20230725.7	master	Azure.sonic-buildimage.official.vs	succeeded	2023-07-25T08:24:26	2023-07-25T14:01:29	dc139cfc32
+WORKING_LABEL=dc139cfc32
 git checkout $SONIC_CHECKOUT_LABEL
 
 make init
@@ -38,6 +38,9 @@ make init
 #    make init
 #fi
 cp -r $VPPLIBPATH $PWD/src/sonic-sairedis/
+
+# Fix sonic-utlities breakage due to incorrect version of urllib
+sed -i -e "s/'responses'/'responses==0.23.1'/g" ./src/sonic-utilities/setup.py
 
 # Replace vslib with vpplib which contains saivpp code.
 sed -i -e 's/vslib/vpplib/g' ./src/sonic-sairedis/Makefile.am
