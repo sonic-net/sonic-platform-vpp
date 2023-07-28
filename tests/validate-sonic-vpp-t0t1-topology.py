@@ -63,10 +63,11 @@ def runSonic(action, verboselogArg, topology):
 
     tags = action
 
-    if action == "build" or action == "tear":
+    if action == "build" or action == "tear" or action == "test":
         tags = action + topology #buildt0, buildt1, teart0, teart1
 
     cmd = ['ansible-playbook', '-i', 'inventory-t0t1.yaml',  ansiblePlaybook, '--extra-vars', '@inventory-t0t1.yaml', '--tags', tags, verboselogArg]
+    print("cmd : ", cmd)
 
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
