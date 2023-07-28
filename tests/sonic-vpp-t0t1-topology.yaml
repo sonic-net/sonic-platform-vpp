@@ -1,0 +1,222 @@
+- name: SONiC Software Data Plane Automation - VM Bring up
+  hosts: clusters
+  tasks:
+   - name:  Git clone repo
+     git:
+       repo: https://github.com/sonic-net/sonic-mgmt.git
+       dest: /home/cisco/sonic-mgmt
+       clone: yes
+     register: command_result
+     tags:
+     - initialize 
+   - name: Bring up bridge network      
+     shell: | 
+       cd sonic-mgmt/ansible
+       sudo -H ./setup-management-network.sh
+     tags:
+     - initialize
+     - buildt0
+     - buildt1     
+   - name: Start sonic mgmt container
+     shell: | 
+       cd /home/cisco/sonic-mgmt/
+       ./setup-container.sh -n sonic-mgmt-vpp -d /data
+     tags:
+     - initialize 
+     - buildt0
+     - buildt1
+   - name: Setup DUT and topology
+     ansible.builtin.shell: |
+       set timeout 7200
+       spawn docker exec --user cisco -ti sonic-mgmt-vpp bash
+       expect ":~$ "
+       send "cd /data/sonic-mgmt/ansible\n"
+       expect ":/data/sonic-mgmt/ansible$ "
+       send " ./testbed-cli.sh -t vtestbed.yaml -m veos_vtb -k ceos add-topo vms-kvm-{{ topology }} password.txt\n"
+       expect ":/data/sonic-mgmt/ansible$ "
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - buildt0
+     - buildt1
+   - name: Copy sonic_vpp_cfg.sh to T0 DUT
+     ansible.builtin.shell: |
+       set timeout 60
+       spawn sftp -o StrictHostKeyChecking=no admin@10.250.0.101
+       expect "admin@localhost's password:"
+       send "{{ dut_password }}\n"
+       expect "sftp>"
+       send "put /home/cisco/sonic-vpp/sonic_vpp_cfg.sh\n"
+       expect "sftp>"
+       send "\n"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - buildt0 
+   - name: Copy sonic_vpp_cfg.sh to T1 DUT
+     ansible.builtin.shell: |
+       set timeout 60
+       spawn sftp -o StrictHostKeyChecking=no admin@10.250.0.105
+       expect "admin@localhost's password:"
+       send "{{ dut_password }}\n"
+       expect "sftp>"
+       send "put /home/cisco/sonic-vpp/sonic_vpp_cfg.sh\n"
+       expect "sftp>"
+       send "\n"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - buildt1     
+   - name: Configure mgmt interface on T0 DUT
+     ansible.builtin.shell: |
+       set timeout 60
+       spawn ssh -o StrictHostKeyChecking=no admin@10.250.0.101
+       expect "admin@10.250.0.101's password:"
+       send "{{ dut_password }}\n"
+       expect "admin@vlab-01:~$ "
+       send "sudo config interface ip add eth0 10.250.0.101/24 10.250.0.1\n"
+       expect "admin@vlab-01:~$ "
+       send "sudo config save -y\n"
+       expect "admin@vlab-01:~$ "
+       #send "sudo SONIC_VPP_SWITCH=y PERPORT_BUF=4096 LANES=4 sonic_vpp_cfg.sh -p -i $(DLM=''; for idx in `seq 1 32`; do echo -n "${DLM}eth$idx"; DLM=','; done)\n"
+       send "sudo SONIC_VPP_SWITCH=y PERPORT_BUF=4096 LANES=4 sonic_vpp_cfg.sh -p -i eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8,eth9,eth10,eth11,eth12,eth13,eth14,eth15,eth16,eth17,eth18,eth19,eth20,eth21,eth22,eth23,eth24,eth25,eth26,eth27,eth28,eth29,eth30,eth31,eth32\n"
+       expect "admin@vlab-03:~$"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - buildt0
+   - name: Configure mgmt interface on T1 DUT
+     ansible.builtin.shell: |
+       set timeout 60
+       spawn ssh -o StrictHostKeyChecking=no admin@10.250.0.105
+       expect "admin@10.250.0.105's password:"
+       send "{{ dut_password }}\n"
+       expect "admin@vlab-03:~$ "
+       send "sudo config interface ip add eth0 10.250.0.105/24 10.250.0.1\n"
+       expect "admin@vlab-03:~$ "
+       send "sudo config save -y\n"
+       expect "admin@vlab-03:~$ "
+       #send "sudo SONIC_VPP_SWITCH=y PERPORT_BUF=4096 LANES=4 sonic_vpp_cfg.sh -p -i $(DLM=''; for idx in `seq 1 32`; do echo -n "${DLM}eth$idx"; DLM=','; done)\n"
+       send "sudo SONIC_VPP_SWITCH=y PERPORT_BUF=4096 LANES=4 sonic_vpp_cfg.sh -p -i eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8,eth9,eth10,eth11,eth12,eth13,eth14,eth15,eth16,eth17,eth18,eth19,eth20,eth21,eth22,eth23,eth24,eth25,eth26,eth27,eth28,eth29,eth30,eth31,eth32\n"
+       expect "admin@vlab-03:~$ "
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - buildt1     
+   - name: Pause for 4 minutes for DUT to reboot      
+     ansible.builtin.pause:
+       minutes: 4
+     tags:
+     - buildt0
+     - buildt1
+   - name: Load original configuration on T0 DUT
+     ansible.builtin.shell: |
+       set timeout 60
+       spawn ssh -o StrictHostKeyChecking=no admin@10.250.0.101
+       expect "admin@10.250.0.101's password:"
+       send "{{ dut_password }}\n"
+       expect "admin@vlab-01:~$ "  
+       send "sudo config load /etc/sonic/config_db.json.orig -y\n"  
+       expect "admin@vlab-01:~$ "  
+       send "\n"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - buildt0    
+   - name: Load original configuration on T1 DUT
+     ansible.builtin.shell: |
+       set timeout 60
+       spawn ssh -o StrictHostKeyChecking=no admin@10.250.0.105
+       expect "admin@10.250.0.105's password:"
+       send "{{ dut_password }}\n"
+       expect "admin@vlab-03:~$ "  
+       send "sudo config load /etc/sonic/config_db.json.orig -y\n"  
+       expect "admin@vlab-03:~$ "  
+       send "\n"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - buildt1
+   - name: Configure minigraph
+     ansible.builtin.shell: |
+       set timeout 360
+       spawn docker exec --user cisco -ti sonic-mgmt-vpp bash
+       expect ":~$ "
+       send "cd /data/sonic-mgmt/ansible\n"
+       expect ":/data/sonic-mgmt/ansible$ "
+       send "./testbed-cli.sh -t vtestbed.yaml -m veos_vtb deploy-mg vms-kvm-{{ topology }} veos_vtb password.txt \n"
+       expect ":/data/sonic-mgmt/ansible$ "
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - buildt0
+     - buildt1
+   - name: Run T0 Sanity
+     ansible.builtin.shell: |
+       set timeout 1800
+       spawn docker exec --user cisco -ti sonic-mgmt-vpp bash
+       expect ":~$ "
+       send "cd /data/sonic-mgmt/tests\n"
+       expect ":/data/sonic-mgmt/tests$ "
+       send "./run_tests.sh -n vms-kvm-{{ topology }} -d vlab-01 -c telemetry/test_telemetry.py -f vtestbed.yaml -i ../ansible/veos_vtb -e \"--neighbor_type=eos\" \n"
+       expect ":/data/sonic-mgmt/tests$ "
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - testt0
+   - name: Run T1 Sanity
+     ansible.builtin.shell: |
+       set timeout 1800
+       spawn docker exec --user cisco -ti sonic-mgmt-vpp bash
+       expect ":~$ "
+       send "cd /data/sonic-mgmt/tests\n"
+       expect ":/data/sonic-mgmt/tests$ "
+       send "./run_tests.sh -n vms-kvm-{{ topology }} -d vlab-03 -c telemetry/test_telemetry.py -f vtestbed.yaml -i ../ansible/veos_vtb -e \"--neighbor_type=eos\" \n"
+       expect ":/data/sonic-mgmt/tests$ "
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - testt1     
+   - name: Remove Topology
+     ansible.builtin.shell: |
+       set timeout 300
+       spawn docker exec --user cisco -ti sonic-mgmt-vpp bash
+       expect ":~$ "
+       send "cd /data/sonic-mgmt/ansible\n"
+       expect ":/data/sonic-mgmt/ansible$ "
+       send "./testbed-cli.sh -t vtestbed.yaml -m veos_vtb -k ceos remove-topo vms-kvm-{{ topology }} password.txt\n"
+       expect ":/data/sonic-mgmt/ansible$ "
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - teart0
+     - teart1    
+   - name: Stop sonic mgmt container
+     shell: | 
+       docker rm -f sonic-mgmt-vpp
+     tags:
+     - teart0
+     - teart1 
+   - name: Delete bridge link
+     shell: | 
+       sudo ip link set br1 down
+       sudo brctl delbr br1
+     tags:
+     - teart0
+     - teart1
+   - name: Delete sonic-mgmt directory
+     shell: | 
+       sudo rm -fr /home/cisco/sonic-mgmt
+     tags:
+     - delete         
