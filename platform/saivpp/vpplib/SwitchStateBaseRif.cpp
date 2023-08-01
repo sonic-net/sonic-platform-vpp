@@ -1416,6 +1416,8 @@ sai_status_t SwitchStateBase::vpp_create_router_interface(
     {
 	snprintf(host_subifname, sizeof(host_subifname), "%s.%u", dev, vlan_id);
 
+	init_vpp_client();
+
 	/* The host(tap) subinterface is also created as part of the vpp subinterface creation */
 	create_sub_interface(tap_to_hwif_name(dev), vlan_id, vlan_id);
 
@@ -1680,6 +1682,7 @@ sai_status_t SwitchStateBase::vpp_remove_router_interface(sai_object_id_t rif_id
 
     const char *dev = if_name.c_str();
 
+    init_vpp_client();
     delete_sub_interface(tap_to_hwif_name(dev), vlan_id);
     /* Get new list of physical interfaces from VPP */
     refresh_interfaces_list();
@@ -1755,3 +1758,4 @@ sai_status_t SwitchStateBase::removeVrf(
 
     return SAI_STATUS_SUCCESS;
 }
+
