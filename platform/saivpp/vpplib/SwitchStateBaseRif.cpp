@@ -886,6 +886,39 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr_norif (
     }
 }
 
+enum class LpbOpType {
+    NOP_LPB_IF = 0,
+    ADD_IP_LPB_IF = 1,
+    DEL_IP_LPB_IF = 2,
+    ADD_LPB_IF = 3,
+    DEL_LPB_IF = 4,
+};
+
+LpbOpType getLoopbackOperationType (
+    _In_ bool is_add,
+    _In_ const std::string vppIfName,
+    _In_ sai_route_entry_t route_entry)
+{
+    if (is_add && (!vppIfName.empty()) &&
+        (vppIfName.find("loop") != std::string::npos))
+    {
+        return LpbOpType::ADD_IP_LPB_IF;
+    } else if (!is_add &&
+        !get_intf_name_for_prefix(route_entry).empty())
+    {
+        return LpbOpType::DEL_IP_LPB_IF;
+    } else if (!is_add &&
+        get_intf_name_for_prefix(route_entry).empty())
+    {
+        return LpbOpType::DEL_LPB_IF;
+    } else if (is_add && vppIfName.empty())
+    {
+        return LpbOpType::ADD_LPB_IF;
+    } else {
+        return LpbOpType::NOP_LPB_IF;
+    }
+}
+
 sai_status_t SwitchStateBase::process_interface_loopback (
    _In_ const std::string &serializedObjectId,
    _In_ bool &isLoopback,
@@ -896,29 +929,115 @@ sai_status_t SwitchStateBase::process_interface_loopback (
     sai_route_entry_t route_entry;
     sai_deserialize_route_entry(serializedObjectId, route_entry);
     std::string destinationIP = extractDestinationIP(serializedObjectId);
-    std::string interfaceName;
+    std::string hostIfName = "";
 
     if (is_add)
     {
-        interfaceName = get_intf_name_for_prefix(route_entry);
+        hostIfName = get_intf_name_for_prefix(route_entry);
     } else
     {
-        interfaceName = lpbIpToHostIfMap[destinationIP];
+        hostIfName = lpbIpToHostIfMap[destinationIP];
     }
 
-    isLoopback = (interfaceName.find("Loopback") != std::string::npos);
-    SWSS_LOG_NOTICE("interfaceName:%s isLoopback:%u", interfaceName.c_str(), isLoopback);
+    isLoopback = (hostIfName.find("Loopback") != std::string::npos);
+    SWSS_LOG_NOTICE("hostIfName:%s isLoopback:%u", hostIfName.c_str(), isLoopback);
 
     if (isLoopback) {
-        vpp_add_del_lpb_intf_ip_addr(serializedObjectId, is_add);
+        std::string vppIfName = lpbHostIfToVppIfMap[hostIfName];
+        LpbOpType lpbOp = getLoopbackOperationType(is_add, vppIfName, route_entry);
+
+        switch (lpbOp) {
+            case LpbOpType::ADD_IP_LPB_IF:
+
+                // interface exists - add ip to interface
+                SWSS_LOG_NOTICE("hostIfName:%s exists new-ip:%s",
+                    hostIfName.c_str(), destinationIP.c_str());
+
+                // update interafce with ip add
+                vpp_interface_ip_address_update(vppIfName.c_str(),
+                    serializedObjectId, true);
+
+                lpbIpToIfMap[destinationIP] = vppIfName;
+                lpbIpToHostIfMap[destinationIP] = hostIfName;
+                break;
+
+            case LpbOpType::DEL_IP_LPB_IF:
+
+                // interface exists - remove ip from interface
+                SWSS_LOG_NOTICE("hostIfName:%s exists new-ip:%s",
+                    hostIfName.c_str(), destinationIP.c_str());
+
+                // update interafce with ip remove
+                vpp_interface_ip_address_update(vppIfName.c_str(),
+                    serializedObjectId, false);
+
+                lpbIpToIfMap.erase(destinationIP);
+                lpbIpToHostIfMap.erase(destinationIP);
+                break;
+
+            case LpbOpType::DEL_LPB_IF:
+
+                // interface exists - delete interface
+                vpp_del_lpb_intf_ip_addr(serializedObjectId);
+                break;
+
+            case LpbOpType::ADD_LPB_IF:
+
+                // interface does not exist - create interface
+                vpp_add_lpb_intf_ip_addr(serializedObjectId);
+                break;
+
+            default:
+
+                SWSS_LOG_INFO("No matching loopback hostIfName:%s new-ip:%s",
+                    hostIfName.c_str(), destinationIP.c_str());
+                break;
+        }
     }
 
     return SAI_STATUS_SUCCESS;
 }
 
-sai_status_t SwitchStateBase::vpp_add_del_lpb_intf_ip_addr (
+sai_status_t SwitchStateBase::vpp_interface_ip_address_update (
+    _In_ const char *vppIfname,
     _In_ const std::string &serializedObjectId,
     _In_ bool is_add)
+{
+    SWSS_LOG_ENTER();
+
+    sai_route_entry_t route_entry;
+    sai_deserialize_route_entry(serializedObjectId, route_entry);
+    std::string destinationIP = extractDestinationIP(serializedObjectId);
+
+    vpp_ip_route_t ip_route;
+    create_route_prefix(&route_entry, &ip_route);
+
+    if (route_entry.destination.addr_family == SAI_IP_ADDR_FAMILY_IPV6)
+    {
+        char prefixIp6Str[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET6, &(ip_route.prefix_addr.addr.ip6.sin6_addr),
+            prefixIp6Str, INET6_ADDRSTRLEN);
+
+    } else if (route_entry.destination.addr_family == SAI_IP_ADDR_FAMILY_IPV4)
+    {
+        char prefixIp4Str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(ip_route.prefix_addr.addr.ip4.sin_addr),
+            prefixIp4Str, INET_ADDRSTRLEN);
+    } else {
+        SWSS_LOG_ERROR("Could not determine IP address family!  destinationIP:%s",
+            destinationIP.c_str());
+    }
+
+    int ret = interface_ip_address_add_del(vppIfname, &ip_route, is_add);
+    if (ret != 0) {
+        SWSS_LOG_ERROR("interface_ip_address_add returned error");
+    }
+
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::vpp_add_lpb_intf_ip_addr (
+    _In_ const std::string &serializedObjectId)
 {
     SWSS_LOG_ENTER();
 
@@ -927,104 +1046,105 @@ sai_status_t SwitchStateBase::vpp_add_del_lpb_intf_ip_addr (
     std::string ip_prefix_str;
     std::string destinationIP = extractDestinationIP(serializedObjectId);
 
-    if (is_add)
-    {
-        // Retrieve the current instance for the interface
-        uint32_t instance = getNextLoopbackInstance();
+    // Retrieve the current instance for the interface
+    uint32_t instance = getNextLoopbackInstance();
 
-        // Generate the loopback interface name
-        std::string interfaceName = "loop" + std::to_string(instance);
+    // Generate the loopback interface name
+    std::string vppIfName = "loop" + std::to_string(instance);
 
-        // Store the current instance interface pair
-        lpbInstMap[interfaceName] = instance;
+    // Store the current instance interface pair
+    lpbInstMap[vppIfName] = instance;
 
-        // Store the ip/interfaceName pair
-        lpbIpToIfMap[destinationIP] = interfaceName;
-        const char *hw_ifname = interfaceName.c_str();
+    // Store the ip/vppIfName pair
+    lpbIpToIfMap[destinationIP] = vppIfName;
 
-        SWSS_LOG_NOTICE("create_loopback_instance interfaceName:%s hwif_name:%s instance:%u ",
-            interfaceName.c_str(), hw_ifname, instance);
+    SWSS_LOG_NOTICE("vpp_add_lpb vppIfName:%s instance:%u",
+        vppIfName.c_str(), instance);
 
-        // Create the loopback instance
-        int ret = create_loopback_instance(hw_ifname, instance);
-        if (ret != 0) {
-            SWSS_LOG_ERROR("create_loopback_instance returned error");
-        }
+    // Get new list of physical interfaces from VPP
+    refresh_interfaces_list();
 
-        /* Get new list of physical interfaces from VPP */
-        refresh_interfaces_list();
-
-        vpp_ip_route_t ip_route;
-        create_route_prefix(&route_entry, &ip_route);
-
-        char prefixIp4Str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(ip_route.prefix_addr.addr.ip4.sin_addr), prefixIp4Str, INET_ADDRSTRLEN);
-
-        SWSS_LOG_DEBUG("hw_ifname:%s is_add:%u", hw_ifname, is_add);
-        ret = interface_ip_address_add_del(hw_ifname, &ip_route, is_add);
-        if (ret != 0) {
-            SWSS_LOG_ERROR("interface_ip_address_add_del returned error");
-        }
-
-        //Set state up
-        bool is_up = true;
-        interface_set_state(hw_ifname, is_up);
-
-        const std::string hostIfname = get_intf_name_for_prefix(route_entry);
-        SWSS_LOG_NOTICE("get_intf_name_for_prefix:%s", hostIfname.c_str());
-        lpbIpToHostIfMap[destinationIP] = hostIfname;
-
-        // remove host looback interface before creating lcp tap
-        bool lpb_add = false;
-        const std::string destinationIp = destinationIP;
-        int result = configureLoopbackInterface(lpb_add, hostIfname, destinationIp, ip_route.prefix_len);
-        if (result != 0)
-        {
-            SWSS_LOG_ERROR("Failed to configure loopback interface remove");
-        }
-
-        // create lcp tap between vpp and host
-        {
-            const char *sonic_name = hostIfname.c_str();
-            const char *vpp_name = interfaceName.c_str();
-
-            SWSS_LOG_DEBUG("configure_lcp_interface vpp_name:%s sonic_name:%s", vpp_name, sonic_name);
-            configure_lcp_interface(vpp_name, sonic_name, is_add);
-        }
-
-        // add back host looback interface after creating lcp tap
-        lpb_add = true;
-        result = configureLoopbackInterface(lpb_add, hostIfname, destinationIp, ip_route.prefix_len);
-        if (result != 0)
-        {
-            SWSS_LOG_ERROR("Failed to configure loopback interface add");
-        }
-
-        return SAI_STATUS_SUCCESS;
-
-    } else
-    {
-        std::string interfaceName = lpbIpToIfMap[destinationIP];
-        const std::string hostIfname = lpbIpToHostIfMap[destinationIP];
-        uint32_t instance = lpbInstMap[interfaceName];
-        const char *hw_ifname = interfaceName.c_str();
-
-        // Delete the loopback instance
-        delete_loopback(hw_ifname, instance);
-
-        // refresh interfaces list as we have deleted the loopback interface
-        refresh_interfaces_list();
-
-        // Remove the IP/interface mappings from the maps
-        lpbInstMap.erase(interfaceName);
-        lpbIpToIfMap.erase(destinationIP);
-        lpbIpToHostIfMap.erase(destinationIP);
-
-        // Mark the loopback instance available
-        markLoopbackInstanceDeleted(instance);
-
-        return SAI_STATUS_SUCCESS;
+    // Create the loopback instance
+    int ret = create_loopback_instance(vppIfName.c_str(), instance);
+    if (ret != 0) {
+        SWSS_LOG_ERROR("create_loopback_instance returned error");
     }
+
+    // Get new list of physical interfaces from VPP
+    refresh_interfaces_list();
+
+    // Update vpp interface ip address
+    vpp_interface_ip_address_update(vppIfName.c_str(), serializedObjectId, true);
+
+    //Set state up
+    bool is_up = true;
+    interface_set_state(vppIfName.c_str(), is_up);
+
+    const std::string hostIfname = get_intf_name_for_prefix(route_entry);
+    SWSS_LOG_NOTICE("get_intf_name_for_prefix:%s", hostIfname.c_str());
+    lpbIpToHostIfMap[destinationIP] = hostIfname;
+    lpbHostIfToVppIfMap[hostIfname] = vppIfName;
+
+    vpp_ip_route_t ip_route;
+    create_route_prefix(&route_entry, &ip_route);
+    // remove host looback interface before creating lcp tap
+    bool lpb_add = false;
+    const std::string destinationIp = destinationIP;
+    int result = configureLoopbackInterface(lpb_add, hostIfname, destinationIp, ip_route.prefix_len);
+    if (result != 0)
+    {
+        SWSS_LOG_ERROR("Failed to configure loopback interface remove");
+    }
+
+    // create lcp tap between vpp and host
+    {
+        init_vpp_client();
+        SWSS_LOG_DEBUG("configure_lcp_interface vpp_name:%s sonic_name:%s",
+            vppIfName.c_str(), hostIfname.c_str());
+        configure_lcp_interface(vppIfName.c_str(), hostIfname.c_str(), true);
+    }
+
+    // add back host looback interface after creating lcp tap
+    lpb_add = true;
+    result = configureLoopbackInterface(lpb_add, hostIfname, destinationIp, ip_route.prefix_len);
+    if (result != 0)
+    {
+        SWSS_LOG_ERROR("Failed to configure loopback interface add");
+    }
+
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::vpp_del_lpb_intf_ip_addr (
+    _In_ const std::string &serializedObjectId)
+{
+    SWSS_LOG_ENTER();
+
+    sai_route_entry_t route_entry;
+    sai_deserialize_route_entry(serializedObjectId, route_entry);
+    std::string destinationIP = extractDestinationIP(serializedObjectId);
+
+    std::string vppIfName = lpbIpToIfMap[destinationIP];
+    const std::string hostIfname = lpbIpToHostIfMap[destinationIP];
+    uint32_t instance = lpbInstMap[vppIfName];
+
+    // Update vpp interface ip address
+    vpp_interface_ip_address_update(vppIfName.c_str(), serializedObjectId, false);
+
+    // Delete the loopback instance
+    delete_loopback(vppIfName.c_str(), instance);
+
+    // refresh interfaces list as we have deleted the loopback interface
+    refresh_interfaces_list();
+
+    // Remove the IP/interface mappings from the maps
+    lpbInstMap.erase(vppIfName);
+    lpbIpToIfMap.erase(destinationIP);
+    lpbIpToHostIfMap.erase(destinationIP);
+    lpbHostIfToVppIfMap.erase(hostIfname);
+
+    // Mark the loopback instance available
+    markLoopbackInstanceDeleted(instance);
 
     return SAI_STATUS_SUCCESS;
 }
@@ -1296,6 +1416,8 @@ sai_status_t SwitchStateBase::vpp_create_router_interface(
     {
 	snprintf(host_subifname, sizeof(host_subifname), "%s.%u", dev, vlan_id);
 
+	init_vpp_client();
+
 	/* The host(tap) subinterface is also created as part of the vpp subinterface creation */
 	create_sub_interface(tap_to_hwif_name(dev), vlan_id, vlan_id);
 
@@ -1560,6 +1682,7 @@ sai_status_t SwitchStateBase::vpp_remove_router_interface(sai_object_id_t rif_id
 
     const char *dev = if_name.c_str();
 
+    init_vpp_client();
     delete_sub_interface(tap_to_hwif_name(dev), vlan_id);
     /* Get new list of physical interfaces from VPP */
     refresh_interfaces_list();
@@ -1635,3 +1758,4 @@ sai_status_t SwitchStateBase::removeVrf(
 
     return SAI_STATUS_SUCCESS;
 }
+
