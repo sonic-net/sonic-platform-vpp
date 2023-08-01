@@ -711,6 +711,7 @@ namespace saivpp
 	    std::unordered_map<std::string, uint32_t> lpbInstMap;
 	    std::unordered_map<std::string, std::string> lpbIpToHostIfMap;
 	    std::unordered_map<std::string, std::string> lpbIpToIfMap;
+            std::unordered_map<std::string, std::string> lpbHostIfToVppIfMap;
 
             std::map<sai_object_id_t, std::list<sai_object_id_t>> m_nxthop_grp_mbr_map;
 
@@ -768,14 +769,18 @@ namespace saivpp
 		    _In_ const std::string& ip_prefix_key,
                     _In_ sai_route_entry_t& route_entry,
                     _In_ bool is_add);
+            sai_status_t vpp_interface_ip_address_update (
+                    _In_ const char *hw_ifname,
+                    _In_ const std::string &serializedObjectId,
+                    _In_ bool is_add);
             sai_status_t process_interface_loopback (
                     _In_ const std::string &serializedObjectId,
                     _In_ bool &isLoopback,
                     _In_ bool is_add);
-            sai_status_t vpp_add_del_lpb_intf_ip_addr (
-                    _In_ const std::string &serializedObjectId,
-                    _In_ bool is_add);
-
+            sai_status_t vpp_add_lpb_intf_ip_addr (
+                    _In_ const std::string &serializedObjectId);
+            sai_status_t vpp_del_lpb_intf_ip_addr (
+                    _In_ const std::string &serializedObjectId);
             sai_status_t vpp_get_router_intf_name (
                     _In_ sai_ip_prefix_t& ip_prefix,
                     _In_ sai_object_id_t rif_id,
