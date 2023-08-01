@@ -362,6 +362,61 @@ bool SwitchStateBase::vpp_get_hwif_name (
     return true;
 }
 
+void SwitchStateBase::vppProcessEvents ()
+{
+    const struct timespec req = {2, 0};
+    vpp_event_info_t *evp;
+    int ret;
+
+    while(m_run_vpp_events_thread) {
+	nanosleep(&req, NULL);
+	ret = vpp_sync_for_events();
+	SWSS_LOG_NOTICE("Checking for any VPP events status %d", ret);
+	while ((evp = vpp_ev_dequeue())) {
+	    if (evp->type == VPP_INTF_LINK_STATUS) {
+		asyncIntfStateUpdate(evp->data.intf_status.hwif_name,
+				     evp->data.intf_status.link_up);
+		SWSS_LOG_NOTICE("Received port link event for %s state %s",
+				evp->data.intf_status.hwif_name,
+				evp->data.intf_status.link_up ? "UP" : "DOWN");
+	    }
+	    vpp_ev_free(evp);
+	}
+    }
+}
+
+sai_status_t SwitchStateBase::vpp_dp_initialize()
+{
+    init_vpp_client();
+    m_vpp_thread = std::make_shared<std::thread>(&SwitchStateBase::vppProcessEvents, this);
+
+    VppEventsThreadStarted = true;
+
+    SWSS_LOG_NOTICE("VPP DP initialized");
+
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::asyncIntfStateUpdate(const char *hwif_name, bool link_up)
+{
+    std::string tap_str;
+    const char *tap;
+
+    tap = hwif_to_tap_name(hwif_name);
+    auto port_oid = getPortIdFromIfName(std::string(tap));
+
+    if (port_oid == SAI_NULL_OBJECT_ID) {
+	SWSS_LOG_NOTICE("Failed find port oid for tap interface %s", tap);
+	return SAI_STATUS_SUCCESS;
+    }
+
+    auto state = link_up ? SAI_PORT_OPER_STATUS_UP : SAI_PORT_OPER_STATUS_DOWN;
+
+    send_port_oper_status_notification(port_oid, state, false);
+
+    return SAI_STATUS_SUCCESS;
+}
+
 sai_status_t SwitchStateBase::vpp_set_interface_state (
         _In_ sai_object_id_t object_id,
 	_In_ uint32_t vlan_id,
@@ -983,7 +1038,7 @@ sai_status_t SwitchStateBase::vpp_add_del_lpb_intf_ip_addr (
         {
             const char *sonic_name = hostIfname.c_str();
             const char *vpp_name = interfaceName.c_str();
-            init_vpp_client();
+
             SWSS_LOG_DEBUG("configure_lcp_interface vpp_name:%s sonic_name:%s", vpp_name, sonic_name);
             configure_lcp_interface(vpp_name, sonic_name, is_add);
         }
@@ -1291,8 +1346,6 @@ sai_status_t SwitchStateBase::vpp_create_router_interface(
     {
 	snprintf(host_subifname, sizeof(host_subifname), "%s.%u", dev, vlan_id);
 
-	init_vpp_client();
-
 	/* The host(tap) subinterface is also created as part of the vpp subinterface creation */
 	create_sub_interface(tap_to_hwif_name(dev), vlan_id, vlan_id);
 
@@ -1557,7 +1610,6 @@ sai_status_t SwitchStateBase::vpp_remove_router_interface(sai_object_id_t rif_id
 
     const char *dev = if_name.c_str();
 
-    init_vpp_client();
     delete_sub_interface(tap_to_hwif_name(dev), vlan_id);
     /* Get new list of physical interfaces from VPP */
     refresh_interfaces_list();

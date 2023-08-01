@@ -143,6 +143,8 @@ namespace saivpp
                     _In_ uint32_t attr_count,
                     _In_ const sai_attribute_t *attr_list);
 
+	    sai_status_t vpp_dp_initialize();
+
         protected:
 
             virtual sai_status_t create_port_dependencies(
@@ -790,6 +792,10 @@ namespace saivpp
                     _In_ std::string& ip_prefix);
             void vpp_intf_remove_prefix_entry(const std::string& intf_name);
 
+            sai_status_t asyncIntfStateUpdate(
+		    _In_ const char *hwif_name,
+		    _In_ bool link_up);
+
             sai_status_t vpp_set_interface_state (
                     _In_ sai_object_id_t object_id,
                     _In_ uint32_t vlan_id,
@@ -987,12 +993,20 @@ namespace saivpp
             bool is_sonic_vpp_switch ();
 	    void populate_if_mapping();
 	    const char *tap_to_hwif_name(const char *name);
+            const char *hwif_to_tap_name(const char *name);
+
+            void vppProcessEvents ();
+            void startVppEventsThread();
 
         private:
 	    std::map<std::string, std::string> m_hostif_hwif_map;
+	    std::map<std::string, std::string> m_hwif_hostif_map;
 	    int mapping_init = 0;
             bool vpp_switch_env_read = false;
             bool sonic_vpp_switch = false;
+            bool m_run_vpp_events_thread = true;
+            bool VppEventsThreadStarted = false;
+	    std::shared_ptr<std::thread> m_vpp_thread;
 
         private:
             static int currentMaxInstance;

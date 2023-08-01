@@ -52,6 +52,8 @@ SwitchStateBase::SwitchStateBase(
 
     m_macsecManager.cleanup_macsec_device();
 
+    vpp_dp_initialize();
+
     if (warmBootState)
     {
         for (auto& kvp: warmBootState->m_objectHash)
