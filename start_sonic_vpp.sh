@@ -192,7 +192,7 @@ NETPORTS_PATH="/run/sonic-vpp/$SONIC_VPP-netports_bus"
 DPDK_DISABLE="y"
 
 UIO_DRV=${UIO_DRV:=vfio-pci}
-NO_LINUX_NL=${NO_LINUX_NL:="n"}
+NO_LINUX_NL=${NO_LINUX_NL:="y"}
 
 if [ "$CMD" == "start" ]; then
     if [ "$NETPORTS" == "" ]; then

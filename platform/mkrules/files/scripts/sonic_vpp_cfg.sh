@@ -174,9 +174,9 @@ done
 echo "Writing syncd_vpp_env contents"
 echo "VPP_PORT_LIST=$NETPORTS" > $VPP_ENV_FILE
 
-if [ "$NO_LINUX_NL" == "y" ]; then
-    echo "NO_LINUX_NL=y" >> $VPP_ENV_FILE
-fi
+NO_LINUX_NL=${NO_LINUX_NL:="y"}
+
+echo "NO_LINUX_NL=$NO_LINUX_NL" >> $VPP_ENV_FILE
 
 if [ "$VPP_CONF_DB" == "y" ]; then
     echo "VPP_CONF_DB=y" >> $VPP_ENV_FILE
