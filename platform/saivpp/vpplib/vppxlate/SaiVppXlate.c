@@ -964,7 +964,7 @@ static int __create_loopback_instance (vat_main_t *vam, u32 instance)
 
     __plugin_msg_base = interface_msg_id_base;
 
-    M (CREATE_LOOPBACK_INSTANCE, mp);
+    M (CREATE_LOOPBACK, mp);
     mp->is_specified = true;
     mp->user_instance = instance;
     /* Set MAC address */
