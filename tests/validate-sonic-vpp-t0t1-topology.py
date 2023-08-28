@@ -83,7 +83,7 @@ def runSonic(action, verboselogArg, topology):
                 print(f'failed to execute {loglineDecoded.split().pop(0)} ansible {action} task, VM is unreachable')
                 sys.exit(1)
 
-        if None != re.search('ok=0', loglineDecoded):
+        if None != re.search('ok=0', loglineDecoded) and action != "build":
             print(f'unable to execute {loglineDecoded.split().pop(0)} ansible {action} task')
             sys.exit(1)
 

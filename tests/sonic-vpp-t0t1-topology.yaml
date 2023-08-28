@@ -14,15 +14,12 @@
        cd sonic-mgmt/ansible
        sudo -H ./setup-management-network.sh
      tags:
-     - initialize
-     - buildt0
-     - buildt1     
+     - initialize    
    - name: Start sonic mgmt container
      shell: | 
        cd /home/cisco/sonic-mgmt/
        ./setup-container.sh -n sonic-mgmt-vpp -d /data
      tags:
-     - initialize 
      - buildt0
      - buildt1
    - name: Setup DUT and topology
@@ -40,6 +37,30 @@
      tags:
      - buildt0
      - buildt1
+   - name: Verify DUT is reachable for T1
+     shell: |
+       ping -c5 10.250.0.105
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - buildt1
+   - name: Verify DUT is reachable for T0
+     shell: |
+       ping -c5 10.250.0.101
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - buildt0     
+   - name: Cleanup SSH known hosts T1
+     shell: | 
+       sudo ssh-keygen -f "/home/{{ ansible_user }}/.ssh/known_hosts" -R "10.250.0.105"
+     tags:
+     - buildt1     
+   - name: Cleanup SSH known hosts T0
+     shell: | 
+       sudo ssh-keygen -f "/home/{{ ansible_user }}/.ssh/known_hosts" -R "10.250.0.101"
+     tags:
+     - buildt0     
    - name: Copy sonic_vpp_cfg.sh to T0 DUT
      ansible.builtin.shell: |
        set timeout 60
@@ -59,7 +80,7 @@
      ansible.builtin.shell: |
        set timeout 60
        spawn sftp -o StrictHostKeyChecking=no admin@10.250.0.105
-       expect "admin@localhost's password:"
+       expect "admin@10.250.0.105's password:"
        send "{{ dut_password }}\n"
        expect "sftp>"
        send "put /home/cisco/sonic-vpp/sonic_vpp_cfg.sh\n"
@@ -108,9 +129,9 @@
        executable: /usr/bin/expect
      tags:
      - buildt1     
-   - name: Pause for 4 minutes for DUT to reboot      
+   - name: Pause for 5 minutes for DUT to reboot      
      ansible.builtin.pause:
-       minutes: 4
+       minutes: 5
      tags:
      - buildt0
      - buildt1
@@ -143,6 +164,12 @@
      args:
        executable: /usr/bin/expect
      tags:
+     - buildt1
+   - name: Pause for 2 minutes for DUT to reboot      
+     ansible.builtin.pause:
+       minutes: 2
+     tags:
+     - buildt0
      - buildt1
    - name: Configure minigraph
      ansible.builtin.shell: |
@@ -213,8 +240,7 @@
        sudo ip link set br1 down
        sudo brctl delbr br1
      tags:
-     - teart0
-     - teart1
+     - delete         
    - name: Delete sonic-mgmt directory
      shell: | 
        sudo rm -fr /home/cisco/sonic-mgmt
