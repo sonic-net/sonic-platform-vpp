@@ -26,8 +26,8 @@ cd ./build/sonic-buildimage
 
 # Below is the build label information
 
-#327510	20230731.7	master	Azure.sonic-buildimage.official.vs	succeeded	2023-07-31T08:36:27	2023-07-31T13:56:49	141132c94b
-WORKING_LABEL=141132c94b
+#348554 20230828.7      master  Azure.sonic-buildimage.official.vs      succeeded       2023-08-28T08:07:21     2023-08-28T12:54:41     c8465c0d9a
+WORKING_LABEL=c8465c0d9a
 
 SONIC_CHECKOUT_LABEL=${SONIC_CHECKOUT_LABEL:=$WORKING_LABEL}
 
