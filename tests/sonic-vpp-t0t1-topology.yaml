@@ -13,12 +13,16 @@
      shell: | 
        cd sonic-mgmt/ansible
        sudo -H ./setup-management-network.sh
+     register: command_result 
+     failed_when: command_result.rc != 0     
      tags:
      - initialize    
    - name: Start sonic mgmt container
      shell: | 
        cd /home/cisco/sonic-mgmt/
        ./setup-container.sh -n sonic-mgmt-vpp -d /data
+     register: command_result 
+     failed_when: command_result.rc != 0        
      tags:
      - buildt0
      - buildt1
@@ -34,6 +38,8 @@
        exit 0
      args:
        executable: /usr/bin/expect
+     register: command_result 
+     failed_when: "'unreachable=0' not in command_result.stdout or 'failed=0' not in command_result.stdout"
      tags:
      - buildt0
      - buildt1
@@ -135,7 +141,21 @@
      tags:
      - buildt0
      - buildt1
-   - name: Load original configuration on T0 DUT
+   - name: Verify DUT is reachable for T1 after configuring mgmt interface
+     shell: |
+       ping -c5 10.250.0.105
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - buildt1
+   - name: Verify DUT is reachable for T0
+     shell: |
+       ping -c5 10.250.0.101
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - buildt0      
+   - name: Load original configuration on T0 DUT after configuring mgmt interface
      ansible.builtin.shell: |
        set timeout 60
        spawn ssh -o StrictHostKeyChecking=no admin@10.250.0.101
@@ -165,7 +185,7 @@
        executable: /usr/bin/expect
      tags:
      - buildt1
-   - name: Pause for 2 minutes for DUT to reboot      
+   - name: Pause for 2 minutes for original configuration to be in place      
      ansible.builtin.pause:
        minutes: 2
      tags:
@@ -183,6 +203,8 @@
        exit 0
      args:
        executable: /usr/bin/expect
+     register: command_result 
+     failed_when: "'unreachable=0' not in command_result.stdout or 'failed=0' not in command_result.stdout"       
      tags:
      - buildt0
      - buildt1
@@ -226,6 +248,8 @@
        exit 0
      args:
        executable: /usr/bin/expect
+     register: command_result 
+     failed_when: "'unreachable=0' not in command_result.stdout or 'failed=0' not in command_result.stdout"       
      tags:
      - teart0
      - teart1    
