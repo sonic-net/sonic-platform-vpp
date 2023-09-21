@@ -217,6 +217,8 @@
        expect ":/data/sonic-mgmt/tests$ "
        send "./run_tests.sh -n vms-kvm-{{ topology }} -d vlab-01 -c telemetry/test_telemetry.py -f vtestbed.yaml -i ../ansible/veos_vtb -e \"--neighbor_type=eos\" \n"
        expect ":/data/sonic-mgmt/tests$ "
+       send "./run_tests.sh -n vms-kvm-{{ topology }} -d vlab-01 -c bgp/test_bgp_fact.py  -f vtestbed.yaml -i ../ansible/veos_vtb -e \"--neighbor_type=eos\" \n"
+       expect ":/data/sonic-mgmt/tests$ "
        exit 0
      args:
        executable: /usr/bin/expect
@@ -230,6 +232,8 @@
        send "cd /data/sonic-mgmt/tests\n"
        expect ":/data/sonic-mgmt/tests$ "
        send "./run_tests.sh -n vms-kvm-{{ topology }} -d vlab-03 -c telemetry/test_telemetry.py -f vtestbed.yaml -i ../ansible/veos_vtb -e \"--neighbor_type=eos\" \n"
+       expect ":/data/sonic-mgmt/tests$ "
+       send "./run_tests.sh -n vms-kvm-{{ topology }} -d vlab-03 -c bgp/test_bgp_fact.py  -f vtestbed.yaml -i ../ansible/veos_vtb -e \"--neighbor_type=eos\" \n"
        expect ":/data/sonic-mgmt/tests$ "
        exit 0
      args:
