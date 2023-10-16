@@ -1,0 +1,17 @@
+clusters:
+  hosts:
+    cluster1:
+      ansible_user: {{ username }}
+      ansible_ssh_pass: {{ password }}
+      ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+      #ansible_become: yes 
+      ansible_become_method: sudo
+      ansible_become_password: {{ password }}
+      ansible_host: {{ host }}
+
+      dut_password: password
+      topology: {{ topology }}
+
+
+
+
