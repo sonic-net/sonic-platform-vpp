@@ -21,6 +21,7 @@ VPP_GENERIC_QUAD(ACL_COUNTER,acl_counter);
 VPP_GENERIC_QUAD(ACL_RANGE,acl_range);
 VPP_GENERIC_QUAD(ACL_TABLE_GROUP,acl_table_group);
 VPP_GENERIC_QUAD(ACL_TABLE_GROUP_MEMBER,acl_table_group_member);
+VPP_GENERIC_QUAD(ACL_TABLE_CHAIN_GROUP,acl_table_chain_group);
 
 const sai_acl_api_t vpp_acl_api = {
 
@@ -30,4 +31,5 @@ const sai_acl_api_t vpp_acl_api = {
     VPP_GENERIC_QUAD_API(acl_range)
     VPP_GENERIC_QUAD_API(acl_table_group)
     VPP_GENERIC_QUAD_API(acl_table_group_member)
+    VPP_GENERIC_QUAD_API(acl_table_chain_group)
 };

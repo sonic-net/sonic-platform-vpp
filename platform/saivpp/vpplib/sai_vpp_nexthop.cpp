@@ -16,8 +16,10 @@
 #include "sai_vpp.h"
 
 VPP_GENERIC_QUAD(NEXT_HOP,next_hop);
+VPP_BULK_QUAD(NEXT_HOP,next_hops);
 
 const sai_next_hop_api_t vpp_next_hop_api = {
 
     VPP_GENERIC_QUAD_API(next_hop)
+    VPP_BULK_QUAD_API(next_hops)
 };

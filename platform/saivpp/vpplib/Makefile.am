@@ -71,6 +71,7 @@ libsaivpp_la_SOURCES = \
 					  sai_vpp_acl.cpp \
 					  sai_vpp_ars.cpp \
 					  sai_vpp_ars_profile.cpp \
+					  sai_vpp_twamp.cpp \
 					  sai_vpp_bfd.cpp \
 					  sai_vpp_bmtor.cpp \
 					  sai_vpp_bridge.cpp \
@@ -82,6 +83,7 @@ libsaivpp_la_SOURCES = \
 					  sai_vpp_dash_outbound_routing.cpp \
 					  sai_vpp_dash_outbound_ca_to_pa.cpp \
 					  sai_vpp_dash_inbound_routing.cpp \
+					  sai_vpp_dash_meter.cpp \
 					  sai_vpp_dash_eni.cpp \
 					  sai_vpp_dash_direction_lookup.cpp \
 					  sai_vpp_dash_acl.cpp \

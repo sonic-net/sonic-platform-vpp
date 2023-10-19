@@ -30,6 +30,7 @@ VPP_GENERIC_QUAD(PORT_SERDES,port_serdes);
 VPP_GENERIC_STATS(PORT,port);
 VPP_GENERIC_STATS(PORT_POOL,port_pool);
 VPP_BULK_QUAD(PORT,ports);
+VPP_BULK_QUAD(PORT_SERDES,port_serdess);
 
 const sai_port_api_t vpp_port_api = {
 
@@ -45,4 +46,5 @@ const sai_port_api_t vpp_port_api = {
 
     VPP_GENERIC_QUAD_API(port_serdes)
     VPP_BULK_QUAD_API(ports)
+    VPP_BULK_QUAD_API(port_serdess)
 };
