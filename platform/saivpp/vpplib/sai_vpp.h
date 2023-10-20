@@ -31,6 +31,7 @@ extern "C" {
 PRIVATE extern const sai_acl_api_t                     vpp_acl_api;
 PRIVATE extern const sai_ars_api_t                     vpp_ars_api;
 PRIVATE extern const sai_ars_profile_api_t             vpp_ars_profile_api;
+PRIVATE extern const sai_twamp_api_t                   vpp_twamp_api;
 PRIVATE extern const sai_bfd_api_t                     vpp_bfd_api;
 PRIVATE extern const sai_bmtor_api_t                   vpp_bmtor_api;
 PRIVATE extern const sai_generic_programmable_api_t    vpp_generic_programmable_api;
@@ -43,6 +44,7 @@ PRIVATE extern const sai_dash_vnet_api_t               vpp_dash_vnet_api;
 PRIVATE extern const sai_dash_outbound_routing_api_t   vpp_dash_outbound_routing_api;
 PRIVATE extern const sai_dash_outbound_ca_to_pa_api_t  vpp_dash_outbound_ca_to_pa_api;
 PRIVATE extern const sai_dash_inbound_routing_api_t    vpp_dash_inbound_routing_api;
+PRIVATE extern const sai_dash_meter_api_t              vpp_dash_meter_api;
 PRIVATE extern const sai_dash_eni_api_t                vpp_dash_eni_api;
 PRIVATE extern const sai_dash_direction_lookup_api_t   vpp_dash_direction_lookup_api;
 PRIVATE extern const sai_dash_acl_api_t                vpp_dash_acl_api;
