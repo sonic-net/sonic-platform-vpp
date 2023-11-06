@@ -14,6 +14,8 @@ stages:
     pool: sonicbld
     timeoutInMinutes: 360
     steps:
+    - bash: |
+        sudo rm -rf build/sonic-buildimage/fsroot-vpp
     - checkout: self
       clean: true
     - bash: |
