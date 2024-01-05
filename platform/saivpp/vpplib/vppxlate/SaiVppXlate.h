@@ -118,6 +118,36 @@ extern "C" {
 	vpp_event_free_fn free;
     } vpp_event_queue_t;
 
+/* VTR config options for API support */
+typedef enum
+{
+  L2_VTR_DISABLED,
+  L2_VTR_PUSH_1,
+  L2_VTR_PUSH_2,
+  L2_VTR_POP_1,
+  L2_VTR_POP_2,
+  L2_VTR_TRANSLATE_1_1,
+  L2_VTR_TRANSLATE_1_2,
+  L2_VTR_TRANSLATE_2_1,
+  L2_VTR_TRANSLATE_2_2
+} vpp_l2_vtr_op_t;
+
+/*
+ * VLAN tagging type
+ */
+typedef enum
+{
+  VLAN_DOT1AD,
+  VLAN_DOT1Q
+} vpp_vlan_type_t;
+//    typedef struct vpp_sw_int_set_l2_brdige_ {
+//        uint32_t  bridge_id;
+//        uint32_t  sw_if_index;
+//        uint32_t  port_type;
+//        uint8_t   shg;
+//        bool      l2_mode_enable;
+//    } vpp_sw_int_set_l2_brdige_t;
+
     extern vpp_event_info_t * vpp_ev_dequeue();
     extern void vpp_ev_free(vpp_event_info_t *evp);
 
@@ -153,6 +183,10 @@ extern "C" {
 					bool is_input);
     extern int interface_get_state(const char *hwif_name, bool *link_is_up);
     extern int vpp_sync_for_events();
+    extern int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add);
+    extern int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_enable);
+    extern int set_l2_interface_vlan_tag_rewrite(const char *hwif_name, uint32_t tag1, uint32_t tag2, uint32_t push_dot1q, uint32_t vtr_op);
+    extern int bridge_domain_get_member_count (uint32_t bd_id, uint32_t *member_count);
 
 #ifdef __cplusplus
 }
