@@ -2,9 +2,10 @@
 
 <img src="vlan-bridge-topo.png" alt="VLAN BRIDGING Simple Test Topology" width="1024" height="600" title="VLAN BRIDGING Simple Test Topology">
 
-Host1-10.0.1.1/24  |                                             | Host1-10.0.1.1/24
-Host2-10.0.2.1/24  |-----SONiC-BR1------Trunk------SONiC-BR2-----| Host2-10.0.2.1/24
-Host3-10.0.3.1/24  |                                             | Host3-10.0.3.1/24
+
+Host1-10.0.1.1/24  |-------|                            |--------| Host1-10.0.1.2/24
+Host2-10.0.2.1/24  |-----SONiC-BR1------Trunk------SONiC-BR2-----| Host2-10.0.2.2/24
+Host3-10.0.3.1/24  |-------|                            |--------| Host3-10.0.3.2/24
 
 Pre-requisites for testing this out
     Make sure the docker is installed on the Linux system. iproute2 and sudo packages should be installed.
@@ -184,15 +185,17 @@ Show command outputs
 ```
 show interface status
 ```
+```
   Interface        Lanes    Speed    MTU    FEC          Alias    Vlan    Oper    Admin    Type    Asym PFC
------------  -----------  -------  -----  -----  -------------  ------  ------  -------  ------  ----------
+  +--------------------------------------------------------------------------------------------------------+
   Ethernet0  25,26,27,28     100G   9100    N/A   fortyGigE0/0  routed      up       up     N/A         N/A
   Ethernet1  29,30,31,32     100G   9100    N/A   fortyGigE0/4  routed      up     down     N/A         N/A
   Ethernet2  33,34,35,36     100G   9100    N/A   fortyGigE0/8  routed      up     down     N/A         N/A
   Ethernet3  37,38,39,40     100G   9100    N/A  fortyGigE0/12  routed      up     down     N/A         N/A
-
+```
 ```
 show vlan brief
+```
 ```
 +-----------+--------------+-----------+----------------+-------------+
 |   VLAN ID | IP Address   | Ports     | Port Tagging   | Proxy ARP   |
@@ -207,14 +210,18 @@ show vlan brief
 |           |              | Ethernet3 | tagged         |             |
 +-----------+--------------+-----------+----------------+-------------+
 ```
+```
 vppctl show bridge
+```
 ```
   BD-ID   Index   BSN  Age(min)  Learning  U-Forwrd   UU-Flood   Flooding  ARP-Term  arp-ufwd Learn-co Learn-li   BVI-Intf 
    10       1      0     off        on        on       flood        on       off       off        0    16777216     N/A    
    20       2      0     off        on        on       flood        on       off       off        0    16777216     N/A    
    30       3      0     off        on        on       flood        on       off       off        1    16777216     N/A    
 ```
+```
 vppctl show bridge 10 detail
+```
 ```
   BD-ID   Index   BSN  Age(min)  Learning  U-Forwrd   UU-Flood   Flooding  ARP-Term  arp-ufwd Learn-co Learn-li   BVI-Intf 
    10       1      0     off        on        on       flood        on       off       off        0    16777216     N/A    
@@ -224,7 +231,9 @@ span-l2-input l2-input-classify l2-input-feat-arc l2-policer-classify l2-input-a
            host-ac4              1     1    0    -      *            push-1 dot1q 10       
       host-veth_trunk.10         13    1    0    -      *                 none             
 ```
+```
 vppctl show bridge 20 detail
+```
 ```
   BD-ID   Index   BSN  Age(min)  Learning  U-Forwrd   UU-Flood   Flooding  ARP-Term  arp-ufwd Learn-co Learn-li   BVI-Intf 
    20       2      0     off        on        on       flood        on       off       off        0    16777216     N/A    
@@ -234,7 +243,9 @@ span-l2-input l2-input-classify l2-input-feat-arc l2-policer-classify l2-input-a
            host-ac5              2     1    0    -      *            push-1 dot1q 20       
       host-veth_trunk.20         11    1    0    -      *                 none             
 ```
+```
 vppctl show bridge 30 detail
+```
 ```
   BD-ID   Index   BSN  Age(min)  Learning  U-Forwrd   UU-Flood   Flooding  ARP-Term  arp-ufwd Learn-co Learn-li   BVI-Intf 
    30       3      0     off        on        on       flood        on       off       off        1    16777216     N/A    

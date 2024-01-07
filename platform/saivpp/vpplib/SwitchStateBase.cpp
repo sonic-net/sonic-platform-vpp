@@ -250,7 +250,7 @@ sai_status_t SwitchStateBase::create(
     {
        sai_object_id_t object_id;
        sai_deserialize_object_id(serializedObjectId, object_id);
-       return vpp_create_vlan_member(object_id, switch_id, attr_count, attr_list);
+       return createVlanMember(object_id, switch_id, attr_count, attr_list);
     }
 
     return create_internal(object_type, serializedObjectId, switch_id, attr_count, attr_list);

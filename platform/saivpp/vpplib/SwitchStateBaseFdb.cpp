@@ -642,7 +642,7 @@ void SwitchStateBase::send_fdb_event_notification(
     m_switchConfig->m_eventQueue->enqueue(std::make_shared<Event>(EVENT_TYPE_NOTIFICATION, payload));
 }
 
-sai_status_t SwitchStateBase:: vpp_create_vlan_member(
+sai_status_t SwitchStateBase:: createVlanMember(
         _In_ sai_object_id_t object_id,
         _In_ sai_object_id_t switch_id,
         _In_ uint32_t attr_count,
@@ -653,11 +653,11 @@ sai_status_t SwitchStateBase:: vpp_create_vlan_member(
     auto sid = sai_serialize_object_id(object_id);
 
     CHECK_STATUS(create_internal(SAI_OBJECT_TYPE_VLAN_MEMBER, sid, switch_id, attr_count, attr_list));
-    return vpp_create_1q_bridge_domain_port(attr_count, attr_list);
+    return vpp_create_vlan_member(attr_count, attr_list);
 
 }
 
-sai_status_t SwitchStateBase::vpp_create_1q_bridge_domain_port(
+sai_status_t SwitchStateBase::vpp_create_vlan_member(
         _In_ uint32_t attr_count,
         _In_ const sai_attribute_t *attr_list)
 {

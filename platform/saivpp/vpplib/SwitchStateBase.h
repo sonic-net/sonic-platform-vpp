@@ -146,12 +146,12 @@ namespace saivpp
 	    sai_status_t vpp_dp_initialize();
             sai_status_t vpp_create_default_1q_bridge();
 
-	    sai_status_t vpp_create_vlan_member(
+	    sai_status_t createVlanMember(
 		    _In_ sai_object_id_t object_id,
 		    _In_ sai_object_id_t switch_id,
 		    _In_ uint32_t attr_count,
 		    _In_ const sai_attribute_t *attr_list);
-            sai_status_t vpp_create_1q_bridge_domain_port(
+            sai_status_t vpp_create_vlan_member(
                     _In_ uint32_t attr_count,
                     _In_ const sai_attribute_t *attr_list);
             sai_status_t removeVlanMember(
