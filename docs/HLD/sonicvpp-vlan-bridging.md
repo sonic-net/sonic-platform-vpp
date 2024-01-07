@@ -70,7 +70,7 @@ SONiC supports 802.1ad and 802.1q bridging support. This document's first versio
 <a id="item-6"></a>
 ## Testing
  
-![Vlan Bridge Topology](../vlan-bridg-topo.png) 
+![Vlan Bridge Topology](../vlan-bridge-topo.png) 
  
  
 ## Troubleshooting
@@ -81,5 +81,5 @@ For vpp data path troubleshooting a user can invoke vppctl to connec to VPP and 
 ## References
 
 [SONiC system architecture](https://github.com/sonic-net/SONiC/wiki/Architecture)\
-[What is VPP](https://s3-docs.fd.io/vpp/23.06/)\
+[What is VPP](https://s3-docs.fd.io/vpp/23.06/)
 
