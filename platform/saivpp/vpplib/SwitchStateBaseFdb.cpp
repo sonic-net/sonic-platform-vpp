@@ -686,30 +686,27 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
         return SAI_STATUS_FAILURE;
     }
 
-    auto &all_bridge_ports = m_objectHash.at(SAI_OBJECT_TYPE_BRIDGE_PORT);
-    bool port_id_found = false;
     const char *hwifname = nullptr;
-    for (auto& bp: all_bridge_ports)
+    auto br_port_attrs = m_objectHash.at(SAI_OBJECT_TYPE_BRIDGE_PORT).at(sai_serialize_object_id(br_port_id));
+    auto meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_BRIDGE_PORT, SAI_BRIDGE_PORT_ATTR_PORT_ID);
+    auto bp_attr = br_port_attrs[meta->attridname];
+    auto port_id = bp_attr->getAttr()->value.oid;
+    obj_type = objectTypeQuery(port_id);
+
+    if (obj_type != SAI_OBJECT_TYPE_PORT)
     {
-        if (bp.first == sai_serialize_object_id(br_port_id))
-        {
-            for (auto& attr: bp.second)
-            {
-                 port_id = attr.second->getAttr()->value.oid;
-                 if (port_id)
-                 {
-                     port_id_found = true;
-	             std::string if_name;
-	             bool found = getTapNameFromPortId(port_id, if_name);
-	             if (found == true)
-                     {
-	                 hwifname = tap_to_hwif_name(if_name.c_str());
-	             }
-                }
-            }
-        }
+        SWSS_LOG_NOTICE("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT but is: %s",
+                sai_serialize_object_id(port_id).c_str(),
+                sai_serialize_object_type(obj_type).c_str());
+        return SAI_STATUS_FAILURE;
     }
-    if (port_id_found == false || hwifname == NULL) {
+
+    std::string if_name;
+    bool found = getTapNameFromPortId(port_id, if_name);
+    if (found == true)
+    {
+        hwifname = tap_to_hwif_name(if_name.c_str());
+    }else {
         SWSS_LOG_NOTICE("No ports found for bridge port id :%s",sai_serialize_object_id(br_port_id).c_str());
         return SAI_STATUS_FAILURE;
     }
@@ -747,7 +744,7 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
         return SAI_STATUS_FAILURE;
     }
     tagging_mode = attr_tag_mode->value.u32;
-    if (tagging_mode != SAI_VLAN_TAGGING_MODE_UNTAGGED)
+    if (tagging_mode == SAI_VLAN_TAGGING_MODE_TAGGED)
     {
         /*
          create vpp subinterface and set it as bridge port
@@ -763,15 +760,15 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
         hw_ifname = host_subifname;
 
         //Create bridge and set the l2 port
-        set_sw_interface_l2_bridge(hw_ifname,bridge_id, true);
+        set_sw_interface_l2_bridge(hw_ifname, bridge_id, true);
 
         //Set interface state up
         interface_set_state(hw_ifname, true);
-    }else {
+    }else if (tagging_mode == SAI_VLAN_TAGGING_MODE_UNTAGGED) {
         hw_ifname = hwifname;
 
         //Create bridge and set the l2 port
-        set_sw_interface_l2_bridge(hw_ifname,bridge_id, true);
+        set_sw_interface_l2_bridge(hw_ifname, bridge_id, true);
 
         //Set the vlan member to bridge and tags rewrite
         vpp_l2_vtr_op_t vtr_op = L2_VTR_PUSH_1;
@@ -779,7 +776,11 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
         uint32_t tag1 = (uint32_t)vlan_id;
         uint32_t tag2 = ~0;
         set_l2_interface_vlan_tag_rewrite(hw_ifname, tag1, tag2, push_dot1q, vtr_op);
+    }else {
+        SWSS_LOG_ERROR("Tagging Mode %d not implemented", tagging_mode);
+        return SAI_STATUS_FAILURE;
     }
+
 
     return SAI_STATUS_SUCCESS;
 }
@@ -817,9 +818,9 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
     }
     sai_object_id_t vlan_oid = attr.value.oid;
 
-    sai_object_type_t ot = objectTypeQuery(vlan_oid);
+    sai_object_type_t obj_type = objectTypeQuery(vlan_oid);
 
-    if (ot != SAI_OBJECT_TYPE_VLAN)
+    if (obj_type != SAI_OBJECT_TYPE_VLAN)
     {
         SWSS_LOG_ERROR("attr SAI_VLAN_MEMBER_ATTR_VLAN_ID is not valid");
         return SAI_STATUS_FAILURE;
@@ -848,8 +849,8 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
 
     sai_object_id_t br_port_oid = attr.value.oid;
 
-    ot = objectTypeQuery(br_port_oid);
-    if (ot != SAI_OBJECT_TYPE_BRIDGE_PORT)
+    obj_type = objectTypeQuery(br_port_oid);
+    if (obj_type != SAI_OBJECT_TYPE_BRIDGE_PORT)
     {
         SWSS_LOG_ERROR("SAI_VLAN_MEMBER_ATTR_BRIDGE_PORT_ID=%s expected to be BRIDGE PORT but is: %s",
                 sai_serialize_object_id(br_port_oid).c_str(),
@@ -857,34 +858,31 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
 
         return SAI_STATUS_FAILURE;
     }
-    auto &all_bridge_ports = m_objectHash.at(SAI_OBJECT_TYPE_BRIDGE_PORT);
-    bool port_id_found = false;
+
     const char *hw_ifname = nullptr;
-    sai_object_id_t port_id;
-    for (auto& bp: all_bridge_ports)
+    auto br_port_attrs = m_objectHash.at(SAI_OBJECT_TYPE_BRIDGE_PORT).at(sai_serialize_object_id(br_port_oid));
+    auto meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_BRIDGE_PORT, SAI_BRIDGE_PORT_ATTR_PORT_ID);
+    auto bp_attr = br_port_attrs[meta->attridname];
+    auto port_id = bp_attr->getAttr()->value.oid;
+    obj_type = objectTypeQuery(port_id);
+
+    if (obj_type != SAI_OBJECT_TYPE_PORT)
     {
-        if (bp.first == sai_serialize_object_id(br_port_oid))
-        {
-            for (auto& pattr: bp.second)
-            {
-                 port_id = pattr.second->getAttr()->value.oid;
-                 if (port_id)
-                 {
-                     port_id_found = true;
-                     std::string if_name;
-                     bool found = getTapNameFromPortId(port_id, if_name);
-                     if (found == true)
-                     {
-                         hw_ifname = tap_to_hwif_name(if_name.c_str());
-                     }
-                }
-            }
-        }
+        SWSS_LOG_NOTICE("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT but is: %s",
+                sai_serialize_object_id(port_id).c_str(),
+                sai_serialize_object_type(obj_type).c_str());
+        return SAI_STATUS_FAILURE;
     }
-    if (port_id_found == false || hw_ifname == NULL) {
+    std::string if_name;
+    bool found = getTapNameFromPortId(port_id, if_name);
+    if (found == true)
+    {
+        hw_ifname = tap_to_hwif_name(if_name.c_str());
+    }else {
         SWSS_LOG_NOTICE("No ports found for bridge port id :%s",sai_serialize_object_id(br_port_oid).c_str());
         return SAI_STATUS_FAILURE;
     }
+
 
     attr.id = SAI_VLAN_MEMBER_ATTR_VLAN_TAGGING_MODE;
     status = get(SAI_OBJECT_TYPE_VLAN_MEMBER, vlan_member_oid, 1, &attr);
@@ -921,6 +919,10 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
 
         // Get new list of physical interfaces from VPP
         refresh_interfaces_list();
+    }else {
+
+        SWSS_LOG_ERROR("Tagging mode %d not implemented", tagging_mode);
+        return SAI_STATUS_FAILURE;
     }
 
     //Check if the bridge has zero ports left, if so remove the bridge as well

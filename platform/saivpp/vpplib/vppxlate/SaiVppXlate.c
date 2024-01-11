@@ -2084,10 +2084,10 @@ int set_l2_interface_vlan_tag_rewrite(const char *hwif_name, uint32_t tag1, uint
         VPP_UNLOCK();
         return -EINVAL;
     }
-    mp->vtr_op = htonl (vtr_op);
-    mp->push_dot1q = htonl (push_dot1q);
-    mp->tag1 = htonl (tag1);
-    mp->tag2 = htonl (tag2);
+    mp->vtr_op = htonl(vtr_op);
+    mp->push_dot1q = htonl(push_dot1q);
+    mp->tag1 = htonl(tag1);
+    mp->tag2 = htonl(tag2);
 
     S (mp);
 

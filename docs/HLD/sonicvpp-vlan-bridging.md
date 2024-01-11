@@ -56,7 +56,7 @@ SONiC supports 802.1ad and 802.1q bridging support. This document's first versio
    config vlan member add  <portname> creates a tagged port bridge port. This will be translated to vpp in three steps
    1. creates a bridge with given vlan id as bridge id if the bridge with given aid does not exist.
    2. vpp trunk port operation is achieved through vlan subinterface. A subinterface is created for this vlan id. Note
-      that this subinterface is only specific to vpp and does not appear in SONiC control plan data bases.
+      that this subinterface is only specific to vpp and does not appear in SONiC control plane data bases.
    3. set the vlan subinterface as bridge port
 
  
