@@ -2,10 +2,10 @@
 
 <img src="vlan-bridge-topo.png" alt="VLAN BRIDGING Simple Test Topology" width="1024" height="600" title="VLAN BRIDGING Simple Test Topology">
 
-                                   _________                                     _________
-Host1-10.0.1.1/24|-------Ethernet0|         |                                   |         |Ethernet0-------|Host1-10.0.1.2/24
-Host2-10.0.2.1/24|-------Ethernet0|SONiC-BR1|Ethernet3------Trunk------Ethernet3|SONiC-BR2|Ethernet1-------|Host2-10.0.2.2/24
-Host3-10.0.3.1/24|-------Ethernet0|_________|                                   |_________|Ethernet2-------|Host3-10.0.3.2/24
+
+Host1-10.0.1.1/24|-------Ethernet0|_______________________________________________________|Ethernet0-------|Host1-10.0.1.2/24
+Host2-10.0.2.1/24|-------Ethernet1|SONiC-BR1|Ethernet3------Trunk------Ethernet3|SONiC-BR2|Ethernet1-------|Host2-10.0.2.2/24
+Host3-10.0.3.1/24|-------Ethernet2|_______________________________________________________|Ethernet2-------|Host3-10.0.3.2/24
 
 Pre-requisites for testing this out
     Make sure the docker is installed on the Linux system. iproute2 and sudo packages should be installed.
