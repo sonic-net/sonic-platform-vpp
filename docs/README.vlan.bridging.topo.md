@@ -109,7 +109,7 @@ sudo ./start_sonic_vpp.sh start -n sonic-br1 -i ac1,ac2,ac3,trunk
 
 start the second sonic container and pass the veth interfaces to sonic-vpp
 ```
-sudo ./start_sonic_vpp.sh start -n sonic-br2 -i ac3,ac4,ac5,veth_trunk
+sudo ./start_sonic_vpp.sh start -n sonic-br2 -i ac4,ac5,ac6,veth_trunk
 ```
 
 Get into sonic-br1 container and configure vlan and vlan bridging
@@ -169,7 +169,19 @@ ping -c5  10.0.2.2
 exit
 
 sudo ip netns exec host-3.0 bash
-ping -c5  10.0.2.2
+ping -c5  10.0.3.2
+exit
+
+sudo ip netns exec host-4.0 bash
+ping -c5  10.0.1.1
+exit
+
+sudo ip netns exec host-5.0 bash
+ping -c5  10.0.2.1
+exit
+
+sudo ip netns exec host-6.0 bash
+ping -c5  10.0.3.1
 exit
 ```
 

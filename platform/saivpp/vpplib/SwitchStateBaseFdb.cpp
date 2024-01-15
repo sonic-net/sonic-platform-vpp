@@ -662,7 +662,6 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
         _In_ const sai_attribute_t *attr_list)
 {
     sai_object_id_t br_port_id;
-    sai_object_id_t port_id;
 
     SWSS_LOG_ENTER();
 
@@ -854,7 +853,7 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
     {
         SWSS_LOG_ERROR("SAI_VLAN_MEMBER_ATTR_BRIDGE_PORT_ID=%s expected to be BRIDGE PORT but is: %s",
                 sai_serialize_object_id(br_port_oid).c_str(),
-                sai_serialize_object_type(ot).c_str());
+                sai_serialize_object_type(obj_type).c_str());
 
         return SAI_STATUS_FAILURE;
     }
