@@ -246,6 +246,13 @@ sai_status_t SwitchStateBase::create(
         return createVoqSystemNeighborEntry(serializedObjectId, switch_id, attr_count, attr_list);
     }
 
+    if (object_type == SAI_OBJECT_TYPE_VLAN_MEMBER)
+    {
+       sai_object_id_t object_id;
+       sai_deserialize_object_id(serializedObjectId, object_id);
+       return createVlanMember(object_id, switch_id, attr_count, attr_list);
+    }
+
     return create_internal(object_type, serializedObjectId, switch_id, attr_count, attr_list);
 }
 
@@ -513,6 +520,12 @@ sai_status_t SwitchStateBase::remove(
         sai_object_id_t objectId;
         sai_deserialize_object_id(serializedObjectId, objectId);
         return removeMACsecSA(objectId);
+    }
+    else if (object_type == SAI_OBJECT_TYPE_VLAN_MEMBER)
+    {
+        sai_object_id_t objectId;
+        sai_deserialize_object_id(serializedObjectId, objectId);
+        return removeVlanMember(objectId);
     }
 
     return remove_internal(object_type, serializedObjectId);

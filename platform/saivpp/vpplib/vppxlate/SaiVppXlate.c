@@ -50,6 +50,32 @@
 #include <vlibmemory/vlib.api_types.h>
 #include <vlibmemory/memclnt.api_enum.h>
 
+#include <vnet/l2/l2.api_enum.h>
+#include <vnet/l2/l2.api_types.h>
+
+/* l2 API inclusion */
+
+#define vl_typedefs
+#include <vnet/l2/l2.api.h>
+#undef vl_typedefs
+
+#define  vl_endianfun
+#include <vnet/l2/l2.api.h>
+#undef vl_endianfun
+
+#define vl_print(handle, ...)  vlib_cli_output (handle, __VA_ARGS__)
+#define vl_printfun
+#include <vnet/l2/l2.api.h>
+#undef vl_printfun
+
+#define vl_calcsizefun
+#include <vnet/l2/l2.api.h>
+#undef vl_calcsizefun
+
+#define vl_api_version(n, v) static u32 l2_api_version = v;
+#include <vnet/l2/l2.api.h>
+#undef vl_api_version
+
 /* interface API inclusion */
 
 #define vl_typedefs
@@ -584,6 +610,47 @@ vl_api_ip_neighbor_add_del_reply_t_handler (vl_api_ip_neighbor_add_del_reply_t *
     SAIVPP_DEBUG("ip neighbor add/del %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
 }
 
+static void
+vl_api_bridge_domain_add_del_reply_t_handler (vl_api_bridge_domain_add_del_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("l2 add/del %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("l2 add del reply handler called %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+static void
+vl_api_sw_interface_set_l2_bridge_reply_t_handler (vl_api_sw_interface_set_l2_bridge_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sw inteface set l2 bridge reply handler %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("l2 add del reply handler called %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+static void
+vl_api_l2_interface_vlan_tag_rewrite_reply_t_handler (vl_api_l2_interface_vlan_tag_rewrite_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("l2 interface vlan tag rewrite reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("l2 add del reply handler called %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+
+static void
+vl_api_bridge_domain_details_t_handler (vl_api_bridge_domain_details_t *mp)
+{
+
+  if (mp->context) {
+      u32 *member_count = (u32 *) get_index_ptr(mp->context);
+      *member_count = ntohl(mp->n_sw_ifs);
+      SAIVPP_WARN("bridge member count: %d",ntohl(mp->n_sw_ifs));
+      return;
+  }
+  return;
+}
+
 #define vl_api_get_first_msg_id_reply_t_handler vl_noop_handler
 #define vl_api_get_first_msg_id_reply_t_handler_json vl_noop_handler
 
@@ -594,6 +661,7 @@ vl_api_ip_neighbor_add_del_reply_t_handler (vl_api_ip_neighbor_add_del_reply_t *
     _(MEMCLNT_MSG_ID(CONTROL_PING_REPLY), control_ping_reply)
 
 static u16 interface_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
+static u16 l2_msg_id_base;
 
 static void vpp_base_vpe_init(void)
 {
@@ -621,6 +689,9 @@ static void vpp_base_vpe_init(void)
 #define IP_NBR_MSG_ID(id) \
     (VL_API_##id + ip_nbr_msg_id_base)
 
+#define L2_MSG_ID(id) \
+    (VL_API_##id + l2_msg_id_base)
+
 #define foreach_vpe_ext_api_reply_msg                                   \
     _(INTERFACE_MSG_ID(SW_INTERFACE_DETAILS), sw_interface_details)     \
     _(INTERFACE_MSG_ID(CREATE_LOOPBACK_INSTANCE_REPLY), create_loopback_instance_reply) \
@@ -637,7 +708,11 @@ static void vpp_base_vpe_init(void)
     _(IP_MSG_ID(IP_TABLE_ADD_DEL_REPLY), ip_table_add_del_reply) \
     _(IP_MSG_ID(IP_ROUTE_ADD_DEL_REPLY), ip_route_add_del_reply) \
     _(IP_MSG_ID(SET_IP_FLOW_HASH_V2_REPLY), set_ip_flow_hash_v2_reply)	\
-    _(IP_NBR_MSG_ID(IP_NEIGHBOR_ADD_DEL_REPLY), ip_neighbor_add_del_reply)
+    _(IP_NBR_MSG_ID(IP_NEIGHBOR_ADD_DEL_REPLY), ip_neighbor_add_del_reply) \
+    _(L2_MSG_ID(BRIDGE_DOMAIN_ADD_DEL_REPLY), bridge_domain_add_del_reply) \
+    _(L2_MSG_ID(SW_INTERFACE_SET_L2_BRIDGE_REPLY), sw_interface_set_l2_bridge_reply) \
+    _(L2_MSG_ID(L2_INTERFACE_VLAN_TAG_REWRITE_REPLY), l2_interface_vlan_tag_rewrite_reply) \
+    _(L2_MSG_ID(BRIDGE_DOMAIN_DETAILS), bridge_domain_details)
 
 static u16 interface_msg_id_base, ip_msg_id_base, ip_nbr_msg_id_base, lcp_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
 static u16 acl_msg_id_base;
@@ -755,6 +830,12 @@ static void get_base_msg_id()
     msg_base_lookup_name = format (0, "acl_%08x%c", acl_api_version, 0);
     acl_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
     assert(acl_msg_id_base != (u16) ~0);
+
+    msg_base_lookup_name = format (0, "l2_%08x%c", l2_api_version, 0);
+    l2_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
+    assert(l2_msg_id_base != (u16) ~0);
+    //SAIVPP_ERROR("DELME: l2_msg_id_base %s msg_base_lookup_name:%s l2_api_version:%08x\n", l2_msg_id_base,msg_base_lookup_name,l2_api_version);
+    //printf("DELME: New change added l2_msg_id_base %s\n", l2_msg_id_base);
 
     memclnt_msg_id_base = 0;
 }
@@ -1896,6 +1977,157 @@ int hw_interface_set_mtu (const char *hwif_name, uint32_t mtu)
     mp->mtu = htons(mtu);
 
     S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_bridge_domain_add_del_t *mp;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M(BRIDGE_DOMAIN_ADD_DEL, mp);
+    mp->is_add = is_add;
+    mp->bd_id = htonl(bridge_id);
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_mode)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_sw_interface_set_l2_bridge_t *mp;
+    vl_api_l2_port_type_t     port_type = L2_API_PORT_TYPE_NORMAL;
+    u32 shg = 0;
+    int ret;
+
+    VPP_LOCK();
+
+    if (l2_mode && (bridge_id == 0))
+    {
+      SAIVPP_ERROR("Invalide Bridge id\n");
+      VPP_UNLOCK();
+      return -EINVAL;
+    }
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (SW_INTERFACE_SET_L2_BRIDGE, mp);
+    if (hwif_name) {
+	u32 idx;
+
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1) {
+            mp->rx_sw_if_index = htonl(idx);
+        } else {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    } else {
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+    mp->bd_id = htonl (bridge_id);
+    mp->shg = (u8) shg;
+    mp->port_type = htonl (port_type);
+    mp->enable = l2_mode;
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+ 
+    return ret;
+}
+
+int set_l2_interface_vlan_tag_rewrite(const char *hwif_name, uint32_t tag1, uint32_t tag2, uint32_t push_dot1q, uint32_t vtr_op)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_l2_interface_vlan_tag_rewrite_t * mp;
+    u32 sw_if_index;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (L2_INTERFACE_VLAN_TAG_REWRITE, mp);
+    if (hwif_name) {
+        u32 idx;
+
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1) {
+            mp->sw_if_index = htonl(idx);
+        } else {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    } else {
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+    mp->vtr_op = htonl(vtr_op);
+    mp->push_dot1q = htonl(push_dot1q);
+    mp->tag1 = htonl(tag1);
+    mp->tag2 = htonl(tag2);
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int bridge_domain_get_member_count (uint32_t bd_id, uint32_t *member_count)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_bridge_domain_dump_t *mp;
+    vl_api_control_ping_t *mp_ping;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (BRIDGE_DOMAIN_DUMP, mp);
+
+    if (bd_id == 0 || bd_id == ~0) {
+        SAIVPP_ERROR("Invalid bridge id \n");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    mp->bd_id = htonl(bd_id);
+    mp->sw_if_index = htonl(~0);
+    mp->context = store_ptr(member_count);
+
+    S (mp);
+
+    /* Use a control ping for synchronization */
+    __plugin_msg_base = memclnt_msg_id_base;
+
+    PING (NULL, mp_ping);
+    S (mp_ping);
 
     W (ret);
 
