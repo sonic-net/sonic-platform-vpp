@@ -55,7 +55,7 @@ def checkTopology(topology):
         sys.exit(1)
 
 def checkRouting(routing):
-    if not (routing == "static" or routing == "bgp"):
+    if not (routing == "static" or routing == "bgp" or routing == "vlan"):
         print("Invalid routing protocol specified")
         sys.exit(1)
 
@@ -154,6 +154,8 @@ def runSonic(action, topology, routing, verboselogArg):
     #playbook file is first argument taken
     if action == "build":
         ansiblePlaybook = "sonic-sw-dp-bring-up.yaml"
+        if routing == "vlan":
+            ansiblePlaybook = "sonic-sw-dp-vlan-bring-up.yaml"
         print("ansiblePlaybook : ", ansiblePlaybook, "\n")
         if topology == "multiHop":
            topology = topology + ',' + routing
@@ -162,6 +164,8 @@ def runSonic(action, topology, routing, verboselogArg):
 
     elif action == "tear":
         ansiblePlaybook = "sonic-sw-dp-bring-down.yaml"
+        if routing == "vlan":
+            ansiblePlaybook = "sonic-sw-dp-vlan-bring-down.yaml"
         print("ansiblePlaybook : ", ansiblePlaybook, "\n")
         execute(ansiblePlaybook, topology, verboselogArg)
         print("SUCCESSFUL in tearing down...\n")    
@@ -173,7 +177,7 @@ def runSonic(action, topology, routing, verboselogArg):
 parser = argparse.ArgumentParser()
 parser.add_argument("--action", type=str, help="enter action -  {'build' | 'tear'}", nargs='?', default="build,tear")
 parser.add_argument("--topology", type=str, help="enter topology - {'singleHop' | 'multiHop'}", nargs='?', default="multiHop")
-parser.add_argument("--routing", type=str, help="enter routing protocol - {'static' | 'bgp'}", nargs='?', default="bgp")
+parser.add_argument("--routing", type=str, help="enter routing protocol - {'static' | 'bgp' | 'vlan'}", nargs='?', default="bgp")
 parser.add_argument("--IPPool", type=str, help="enter IPPool - example : '172.16.0.0/16'", nargs='?', default="172.16.0.0/16") 
 parser.add_argument("--IPV6Pool", type=str, help="enter IPV6Pool - example : '2001:0db8::/64'", nargs='?', default="2001:0db8::/64") 
 parser.add_argument("--host", type=str, help="enter host - example : '10.64.98.181'", nargs='?',required=True )   

@@ -1,0 +1,266 @@
+# Copyright (c) 2024 Cisco and/or its affiliates.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: SONiC Software Data Plane Automation - VLAN Topology Bring up
+  hosts: clusters
+  #remote_user: cisco
+  tasks:
+   - name: Ping my hosts
+     ansible.builtin.ping:
+     tags:
+     - multiHop
+   - name: Load SONiC VPP Container Image
+     shell: | 
+       cd sonic-vpp
+       docker load < docker-sonic-vpp.gz
+     register: command_result
+     failed_when: command_result.stderr != ''
+     tags:
+     - multiHop
+   - name: SONiC VPP image Verifcation
+     shell: docker images | grep "sonic-vpp\|pause"
+     changed_when: False
+     register: command_result
+     failed_when: command_result.stdout == ''
+     tags:
+     - multiHop
+   - name:  Create veth interface pairs for host
+     shell: | 
+       ip link add name veth_ac1 type veth peer name ac1
+       ip link add name veth_ac2 type veth peer name ac2
+       ip link add name veth_ac3 type veth peer name ac3
+       ip link add name veth_ac4 type veth peer name ac4
+       ip link add name veth_ac5 type veth peer name ac5
+       ip link add name veth_ac6 type veth peer name ac6
+     register: command_result
+     failed_when: command_result.rc != 0 and "File exists" not in command_result.stderr 
+     tags:
+     - multiHop
+   - name:  Create veth interface pairs for vpp 
+     shell: | 
+       ip link add name veth_trunk type veth peer name trunk
+     register: command_result
+     failed_when: command_result.rc != 0 and "File exists" not in command_result.stderr 
+     tags:
+     - multiHop
+   - name: Configure host 1 network namepaces 
+     shell: | 
+       ip netns add host-1.0
+       ip link set dev veth_ac1 netns host-1.0
+       ip netns exec host-1.0 ip link set dev veth_ac1 up
+       ip netns exec host-1.0 ip addr add "{{ host_1_0_ip }}"/24 dev veth_ac1
+
+     register: command_result
+     failed_when: command_result.rc != 0 and "File exists" not in command_result.stderr 
+     tags:
+     - multiHop
+   - name: Configure host 2 network namepaces 
+     shell: | 
+       ip netns add host-2.0
+       ip link set dev veth_ac2 netns host-2.0
+       ip netns exec host-2.0 ip link set dev veth_ac2 up
+       ip netns exec host-2.0 ip addr add "{{ host_2_0_ip }}"/24 dev veth_ac2
+
+     register: command_result
+     failed_when: command_result.rc != 0 and "File exists" not in command_result.stderr 
+     tags:
+     - multiHop
+   - name: Configure host 3 network namepaces 
+     shell: | 
+       ip netns add host-3.0
+       ip link set dev veth_ac3 netns host-3.0
+       ip netns exec host-3.0 ip link set dev veth_ac3 up
+       ip netns exec host-3.0 ip addr add "{{ host_3_0_ip }}"/24 dev veth_ac3
+
+     register: command_result
+     failed_when: command_result.rc != 0 and "File exists" not in command_result.stderr 
+     tags:
+     - multiHop
+   - name: Configure host 4 network namepaces 
+     shell: | 
+       ip netns add host-4.0
+       ip link set dev veth_ac4 netns host-4.0
+       ip netns exec host-4.0 ip link set dev veth_ac4 up
+       ip netns exec host-4.0 ip addr add "{{ host_4_0_ip }}"/24 dev veth_ac4
+
+     register: command_result
+     failed_when: command_result.rc != 0 and "File exists" not in command_result.stderr 
+     tags:
+     - multiHop
+   - name: Configure host 5 network namepaces 
+     shell: | 
+       ip netns add host-5.0
+       ip link set dev veth_ac5 netns host-5.0
+       ip netns exec host-5.0 ip link set dev veth_ac5 up
+       ip netns exec host-5.0 ip addr add "{{ host_5_0_ip }}"/24 dev veth_ac5
+
+     register: command_result
+     failed_when: command_result.rc != 0 and "File exists" not in command_result.stderr 
+     tags:
+     - multiHop
+   - name: Configure host 6 network namepaces 
+     shell: | 
+       ip netns add host-6.0
+       ip link set dev veth_ac6 netns host-6.0
+       ip netns exec host-6.0 ip link set dev veth_ac6 up
+       ip netns exec host-6.0 ip addr add "{{ host_6_0_ip }}"/24 dev veth_ac6
+
+     register: command_result
+     failed_when: command_result.rc != 0 and "File exists" not in command_result.stderr 
+     tags:
+     - multiHop
+   - name: Start SONiC VPP Container 1
+     shell: | 
+       cd sonic-vpp
+       ./start_sonic_vpp.sh start -n sonic-br1 -i ac1,ac2,ac3,trunk
+     register: command_result
+     failed_when: command_result.stdout == ''
+     tags:
+     - multiHop
+   - name: Start SONiC VPP Container 2
+     shell: | 
+       cd sonic-vpp
+       ./start_sonic_vpp.sh start -n sonic-br2 -i ac4,ac5,ac6,veth_trunk
+     register: command_result
+     failed_when: command_result.stdout == ''
+     tags:
+     - multiHop
+   - name: Pause for 1 minutes for SONiC to bootup
+     ansible.builtin.pause:
+       minutes: 1
+     tags:
+     - singleHop
+     - multiHop
+   - name: Configure SONiC VPP Addresses - Container 1
+     shell: | 
+       docker exec -it sonic-br1 config interface startup Ethernet0
+       docker exec -it sonic-br1 config interface startup Ethernet1
+       docker exec -it sonic-br1 config interface startup Ethernet2
+       docker exec -it sonic-br1 config interface startup Ethernet3
+
+       docker exec -it sonic-br1 config vlan add 10
+       docker exec -it sonic-br1 config vlan member add -u 10 Ethernet0
+       docker exec -it sonic-br1 config vlan member add 10 Ethernet3
+
+       docker exec -it sonic-br1 config vlan add 20
+       docker exec -it sonic-br1 config vlan member add -u 20 Ethernet1
+       docker exec -it sonic-br1 config vlan member add 20 Ethernet3
+
+       docker exec -it sonic-br1 config vlan add 30
+       docker exec -it sonic-br1 config vlan member add -u 30 Ethernet2
+       docker exec -it sonic-br1 config vlan member add 30 Ethernet3
+
+     register: command_result
+     failed_when: command_result.stderr != ''
+     tags:
+     - multiHop
+   - name: Configure SONiC VPP Addresses - Container 2
+     shell: | 
+       docker exec -it sonic-br2 config interface startup Ethernet0
+       docker exec -it sonic-br2 config interface startup Ethernet1
+       docker exec -it sonic-br2 config interface startup Ethernet2
+       docker exec -it sonic-br2 config interface startup Ethernet3
+
+       docker exec -it sonic-br2 config vlan add 10
+       docker exec -it sonic-br2 config vlan member add -u 10 Ethernet0
+       docker exec -it sonic-br2 config vlan member add 10 Ethernet3
+
+       docker exec -it sonic-br2 config vlan add 20
+       docker exec -it sonic-br2 config vlan member add -u 20 Ethernet1
+       docker exec -it sonic-br2 config vlan member add 20 Ethernet3
+
+       docker exec -it sonic-br2 config vlan add 30
+       docker exec -it sonic-br2 config vlan member add -u 30 Ethernet2
+       docker exec -it sonic-br2 config vlan member add 30 Ethernet3
+
+     register: command_result
+     failed_when: command_result.stderr != ''
+     tags:
+     - multiHop
+   - name: Pause for 1 minutes for routing to settle
+     ansible.builtin.pause:
+       minutes: 1
+     tags:
+     - multiHop
+   - name: Verify SONiC Routing 1
+     shell: | 
+       ip netns exec host-1.0 ping -c5  "{{ host_4_0_ip }}"
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - multiHop
+   - name: Print message
+     ansible.builtin.debug:
+       msg: "{{ command_result }}"
+     tags:
+     - multiHop
+   - name: Verify SONiC Routing 2
+     shell: | 
+       ip netns exec host-2.0 ping -c5  "{{ host_5_0_ip }}"
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - multiHop
+   - name: Print message
+     ansible.builtin.debug:
+       msg: "{{ command_result }}"
+     tags:
+     - multiHop
+   - name: Verify SONiC Routing 3
+     shell: | 
+       ip netns exec host-3.0 ping -c5  "{{ host_6_0_ip }}"
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - multiHop
+   - name: Print message
+     ansible.builtin.debug:
+       msg: "{{ command_result }}"
+     tags:
+     - multiHop
+   - name: Verify SONiC Routing 4
+     shell: | 
+       ip netns exec host-4.0 ping -c5  "{{ host_1_0_ip }}"
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - multiHop
+   - name: Print message
+     ansible.builtin.debug:
+       msg: "{{ command_result }}"
+     tags:
+     - multiHop
+   - name: Verify SONiC Routing 5
+     shell: | 
+       ip netns exec host-5.0 ping -c5  "{{ host_2_0_ip }}"
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - multiHop
+   - name: Print message
+     ansible.builtin.debug:
+       msg: "{{ command_result }}"
+     tags:
+     - multiHop
+   - name: Verify SONiC Routing 6
+     shell: | 
+       ip netns exec host-6.0 ping -c5  "{{ host_3_0_ip }}"
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - multiHop
+   - name: Print message
+     ansible.builtin.debug:
+       msg: "{{ command_result }}"
+     tags:
+     - multiHop
