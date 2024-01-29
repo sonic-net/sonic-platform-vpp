@@ -734,7 +734,31 @@ static void get_intf_vlanid (std::string& sub_ifname, int *vlan_id, std::string&
         *vlan_id = std::stoi(vlan);
     }
 }
+static void get_vlan_intf_vlanid(std::string& if_name, std::string& vlan_prefix, int* vlan_id)
+{
+    // Check if the if_name starts with vlan_prefix
+    if (if_name.compare(0, vlan_prefix.length(), vlan_prefix) != 0) {
+        // If it doesn't start with vlan_prefix, set vlan_id to 0
+        *vlan_id = 0;
+        return;
+    }
 
+    // Find the position of the first digit in the string
+    size_t pos = if_name.find_first_of("0123456789");
+
+    // Check if a digit is found
+    if (pos == std::string::npos) {
+        // If no digit is found, set vlan_id to 0
+        *vlan_id = 0;
+        return;
+    }
+
+    // Extract the numeric part using substr
+    std::string numeric_part = if_name.substr(pos);
+
+    // Convert the numeric part to an integer using stoi
+    *vlan_id = std::stoi(numeric_part);
+}
 static void vpp_serialize_intf_data (std::string& k1, std::string& k2, std::string &serializedData)
 {
     serializedData.append(k1);
@@ -790,8 +814,14 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr_norif (
     int vlan_id = 0;
     std::string if_name;
 
-    get_intf_vlanid(full_if_name, &vlan_id, if_name);
-
+    std::string vlan_prefix = "Vlan";
+    if (full_if_name.compare(0, vlan_prefix.length(), vlan_prefix) == 0)
+    {
+        get_vlan_intf_vlanid(full_if_name, vlan_prefix, &vlan_id);
+        SWSS_LOG_NOTICE("It's Vlan interface. Vlan id: %d", vlan_id);
+    } else {
+        get_intf_vlanid(full_if_name, &vlan_id, if_name);
+    }
     linux_ifname= full_if_name.c_str();
 
     std::string addr_family = ((is_v6) ? "v6" : "v4");
@@ -864,15 +894,22 @@ sai_status_t SwitchStateBase::vpp_add_del_intf_ip_addr_norif (
         }
     }
 
-    const char *hwifname = tap_to_hwif_name(if_name.c_str());
+    const char *hwifname;
     char hw_subifname[32];
+    char hw_bviifname[32];
     const char *hw_ifname;
-
-    if (vlan_id) {
-	snprintf(hw_subifname, sizeof(hw_subifname), "%s.%u", hwifname, vlan_id);
-	hw_ifname = hw_subifname;
+    if (full_if_name.compare(0, vlan_prefix.length(), vlan_prefix) == 0)
+    {
+       snprintf(hw_bviifname, sizeof(hw_bviifname), "%s%d","bvi",vlan_id);
+       hw_ifname = hw_bviifname;
     } else {
-	hw_ifname = hwifname;
+       hwifname = tap_to_hwif_name(if_name.c_str());
+       if (vlan_id) {
+	   snprintf(hw_subifname, sizeof(hw_subifname), "%s.%u", hwifname, vlan_id);
+	   hw_ifname = hw_subifname;
+       } else {
+	   hw_ifname = hwifname;
+       }
     }
 
     int ret = interface_ip_address_add_del(hw_ifname, &vpp_ip_prefix, is_add);
@@ -1350,7 +1387,11 @@ sai_status_t SwitchStateBase::vpp_create_router_interface(
 
         return SAI_STATUS_FAILURE;
     }
-
+    if (attr_type->value.s32 == SAI_ROUTER_INTERFACE_TYPE_VLAN)
+    {
+	SWSS_LOG_NOTICE("Invoking BVI interface create for attr type %d", attr_type->value.s32);
+        return vpp_create_bvi_interface(attr_count, attr_list);
+    }
     if (attr_type->value.s32 != SAI_ROUTER_INTERFACE_TYPE_SUB_PORT &&
 	attr_type->value.s32 != SAI_ROUTER_INTERFACE_TYPE_PORT)
     {
@@ -1619,6 +1660,11 @@ sai_status_t SwitchStateBase::vpp_remove_router_interface(sai_object_id_t rif_id
         SWSS_LOG_ERROR("attr SAI_ROUTER_INTERFACE_ATTR_TYPE was not passed");
 
         return SAI_STATUS_FAILURE;
+    }
+    if (attr.value.s32 == SAI_ROUTER_INTERFACE_TYPE_VLAN)
+    {
+	SWSS_LOG_NOTICE("Invoking BVI interface create for attr type %d", attr.value.s32);
+        return vpp_delete_bvi_interface(rif_id);
     }
     rif_type = attr.value.s32;
 
