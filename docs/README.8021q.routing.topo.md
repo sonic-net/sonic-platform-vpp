@@ -1,25 +1,28 @@
-# VLAN BRIDGING Test
+# 8021Q VLAN Routing Test
 
 <img src="./8021Q-Bridge-Routing-Topo.png" alt="VLAN Routing Simple Test Topology" width="1024" height="600" title="VLAN Routing Simple Test Topology">
 
-SONiC-BR1
----------
-Host1-10.0.1.1/24|-------Ethernet0|-bvi10-10.0.1.10/24-|Ethernet3-Trunk vlan 10
-Host2-10.0.2.1/24|-------Ethernet1|-bvi20-10.0.2.20/24-|Ethernet3-Trunk vlan 10
-Host3-10.0.3.1/24|-------Ethernet2|------SONiC-BR1-----|Ethernet3-Trunk vlan 10
+SONiC-A connections
+```
+Host1-10.0.1.1/24--Ethernet0|-bvi10-10.0.1.10/24-|Ethernet3-Trunk vlan 10
+Host2-10.0.2.1/24--Ethernet1|-bvi20-10.0.2.20/24-|Ethernet3-Trunk vlan 10
+Host3-10.0.3.1/24--Ethernet2|------SONiC-A-----|Ethernet3-Trunk vlan 10
+```
 
-SONiC-BR2
----------
- Ethernet0 Trunk vlan 10|SONic-BR2|Ethernet1 Trunk vlan 10
- Ethernet0 Trunk vlan 20|SONiC-BR2|Ethernet1 Trunk vlan 20
- Ethernet0 Trunk vlan 30|SONiC-BR2|Ethernet1 Trunk vlan 30
 
-SONiC-BR3
----------
-Ethernet3 Trunk vlan 10|SONIC-BR3|Ethernet0-------|Host1-10.0.1.2/24
-Ethernet3 Trunk vlan 20|SONIC-BR3|Ethernet1-------|Host2-10.0.2.2/24
-Ethernet3 Trunk vlan 30|SONiC-BR3|Ethernet2-------|Host3-10.0.3.2/24
+SONiC-B connections
+```
+Ethernet0 Trunk vlan 10|SONic-B|Ethernet1 Trunk vlan 10
+Ethernet0 Trunk vlan 20|SONiC-B|Ethernet1 Trunk vlan 20
+Ethernet0 Trunk vlan 30|SONiC-B|Ethernet1 Trunk vlan 30
+```
 
+SONiC-C connections
+```
+Ethernet3 Trunk vlan 10|SONIC-C|Ethernet0-------|Host1-10.0.1.2/24
+Ethernet3 Trunk vlan 20|SONIC-C|Ethernet1-------|Host2-10.0.2.2/24
+Ethernet3 Trunk vlan 30|SONiC-C|Ethernet2-------|Host3-10.0.3.2/24
+```
 
 Pre-requisites for testing
 
