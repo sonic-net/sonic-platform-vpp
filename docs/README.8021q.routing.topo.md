@@ -19,9 +19,9 @@ Ethernet0 Trunk vlan 30|SONiC-B|Ethernet1 Trunk vlan 30
 
 SONiC-C connections
 ```
-Ethernet3 Trunk vlan 10|SONIC-C|Ethernet0-------|Host1-10.0.1.2/24
-Ethernet3 Trunk vlan 20|SONIC-C|Ethernet1-------|Host2-10.0.2.2/24
-Ethernet3 Trunk vlan 30|SONiC-C|Ethernet2-------|Host3-10.0.3.2/24
+Ethernet3 Trunk vlan 10|SONIC-C|Ethernet0-------|Host4-10.0.1.2/24
+Ethernet3 Trunk vlan 20|SONIC-C|Ethernet1-------|Host5-10.0.2.2/24
+Ethernet3 Trunk vlan 30|SONiC-C|Ethernet2-------|Host6-10.0.3.2/24
 ```
 
 Pre-requisites for testing
