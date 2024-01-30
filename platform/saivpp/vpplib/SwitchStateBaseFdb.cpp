@@ -759,7 +759,7 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
         hw_ifname = host_subifname;
 
         //Create bridge and set the l2 port
-        set_sw_interface_l2_bridge(hw_ifname, bridge_id, true);
+        set_sw_interface_l2_bridge(hw_ifname,bridge_id, true, VPP_API_PORT_TYPE_NORMAL);
 
         //Set interface state up
         interface_set_state(hw_ifname, true);
@@ -767,7 +767,7 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
         hw_ifname = hwifname;
 
         //Create bridge and set the l2 port
-        set_sw_interface_l2_bridge(hw_ifname, bridge_id, true);
+        set_sw_interface_l2_bridge(hw_ifname,bridge_id, true, VPP_API_PORT_TYPE_NORMAL);
 
         //Set the vlan member to bridge and tags rewrite
         vpp_l2_vtr_op_t vtr_op = L2_VTR_PUSH_1;
@@ -904,14 +904,14 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
         set_l2_interface_vlan_tag_rewrite(hw_ifname, tag1, tag2, push_dot1q, vtr_op);
 
         //Remove interface from bridge, interface type should be changed to others types like l3.
-        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false);
+        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false, VPP_API_PORT_TYPE_NORMAL);
     }else if (tagging_mode == SAI_VLAN_TAGGING_MODE_TAGGED) {
 
         // set interface l2 tag-rewrite GigabitEthernet0/8/0.200 disable
         snprintf(host_subifname, sizeof(host_subifname), "%s.%u", hw_ifname, vlan_id);
         hw_ifname = host_subifname;
         // Remove the l2 port from bridge
-        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false);
+        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false, VPP_API_PORT_TYPE_NORMAL);
 
         // delete subinterface
         delete_sub_interface(hw_ifname, vlan_id);
