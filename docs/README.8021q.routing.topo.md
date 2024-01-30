@@ -132,7 +132,7 @@ sudo ./start_sonic_vpp.sh start -n SONIC-A -i ac1,ac2,ac3,trunk1
 
 start the second sonic container and pass the veth interfaces to sonic-vpp
 ```
-sudo ./start_sonic_vpp.sh start -n SONIC-B -i veth_trunk1, veth_trunk2
+sudo ./start_sonic_vpp.sh start -n SONIC-B -i veth_trunk1,veth_trunk2
 ```
 
 start the third sonic container and pass the veth interfaces to sonic-vpp
@@ -141,6 +141,7 @@ sudo ./start_sonic_vpp.sh start -n SONIC-C -i ac4,ac5,ac6,trunk2
 ```
 
 Get into SONIC-A container and configure vlan and vlan bridging
+
 SONIC-A:
 ```
 docker exec -it SONIC-A /bin/bash
@@ -166,7 +167,8 @@ config interface ip add Vlan10 10.0.1.10/24
 config interface ip add Vlan20 10.0.2.20/24
 ```
 
-Get into SONIC-B container and configure vlan , vlan bridging
+Get into SONIC-B container and configure vlan, vlan bridging
+
 SONIC-B:
 ```
 docker exec -it SONIC-B /bin/bash
@@ -187,10 +189,11 @@ config vlan member add 30 Ethernet0
 config vlan member add 30 Ethernet1
 ```
 
-Get into SONIC-C container and configure vlan , vlan bridging
-sonic-brC:
+Get into SONIC-C container and configure vlan, vlan bridging
+
+SONIC-C:
 ```
-docker exec -it sonic-br3 /bin/bash
+docker exec -it SONIC-C /bin/bash
 show interface status
 config interface startup Ethernet0
 config interface startup Ethernet1
