@@ -86,40 +86,51 @@ Configure IP addresses inside the host net namepaces
 sudo ip netns exec host-1.0 bash
 ip link set dev veth_ac1 up
 ip addr add 10.0.1.1/24 dev veth_ac1
+ip addr add fd12:3456:789a:1::2/64 dev veth_ac1
 ip route add 10.0.2.0/24 via 10.0.1.10
 ip address show
 ip route show
 exit
+
 sudo ip netns exec host-2.0 bash
 ip link set dev veth_ac2 up
 ip addr add 10.0.2.1/24 dev veth_ac2
+ip addr add fd12:3456:789a:2::2/64 dev veth_ac2
 ip route add 10.0.1.0/24 via 10.0.2.20
 ip address show
 ip route show
 exit
+
 sudo ip netns exec host-3.0 bash
 ip link set dev veth_ac3 up
 ip addr add 10.0.3.1/24 dev veth_ac3
+ip addr add fd12:3456:789a:3::2/64 dev veth_ac3
 ip address show
 ip route show
 exit
+
 sudo ip netns exec host-4.0 bash
 ip link set dev veth_ac4 up
 ip addr add 10.0.1.2/24 dev veth_ac4
+ip addr add fd12:3456:789a:1::3/64 dev veth_ac4
 ip route add 10.0.2.0/24 via 10.0.1.10
 ip address show
 ip route show
 exit
+
 sudo ip netns exec host-5.0 bash
 ip link set dev veth_ac5 up
 ip addr add 10.0.2.2/24 dev veth_ac5
+ip addr add fd12:3456:789a:2::3/64 dev veth_ac5
 ip route add 10.0.1.0/24 via 10.0.2.20
 ip address show
 ip route show
 exit
+
 sudo ip netns exec host-6.0 bash
 ip link set dev veth_ac6 up
 ip addr add 10.0.3.2/24 dev veth_ac6
+ip addr add fd12:3456:789a:3::3/64 dev veth_ac6
 ip address show
 ip route show
 exit
@@ -234,6 +245,7 @@ exit
 
 sudo ip netns exec host-3.0 bash
 ping -c5  10.0.3.2
+ping6 fd12:3456:789a:3::3 -c 5
 ping -c5  10.0.1.1 -- ping fails as no routing for this
 ping -c5  10.0.1.2 -- ping fails as no routing for this
 ping -c5  10.0.2.1 -- ping fails as no routing for this
@@ -258,6 +270,7 @@ exit
 
 sudo ip netns exec host-6.0 bash
 ping -c5  10.0.3.1
+ping6 -c5 fd12:3456:789a:3::3
 ping -c5  10.0.1.1 -- ping fails as no routing for this
 ping -c5  10.0.1.2 -- ping fails as no routing for this
 ping -c5  10.0.2.1 -- ping fails as no routing for this
@@ -380,6 +393,62 @@ vppctl show ip4 neighbors
   17717.0202                10.0.2.2                   D    7e:ef:f5:5c:0f:2a bvi20
 ```
 ```
+vppctl show interfaces
+```
+```
+bvi10 (up):
+  L2 bridge bd-id 10 idx 1 shg 0 bvi
+  L3 10.0.1.10/24
+  L3 fd12:3456:789a:1::1/64
+bvi20 (up):
+  L2 bridge bd-id 20 idx 2 shg 0 bvi
+  L3 10.0.2.20/24
+  L3 fd12:3456:789a:2::1/64
+host-ac1 (up):
+  L2 bridge bd-id 10 idx 1 shg 0
+host-ac2 (up):
+  L2 bridge bd-id 20 idx 2 shg 0
+host-ac3 (up):
+  L2 bridge bd-id 30 idx 3 shg 0
+host-trunk1 (up):
+host-trunk1.10 (up):
+  L2 bridge bd-id 10 idx 1 shg 0
+host-trunk1.20 (up):
+  L2 bridge bd-id 20 idx 2 shg 0
+host-trunk1.30 (up):
+  L2 bridge bd-id 30 idx 3 shg 0
+local0 (dn):
+tap1 (up):
+tap2 (up):
+tap3 (up):
+tap4 (up):
+tap4.10 (up):
+tap4.20 (up):
+tap4.30 (up):
+```
+```
+ip addr show
+```
+```
+60: Vlan10@Bridge: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9100 qdisc noqueue state UP group default qlen 1000
+    link/ether 02:42:ac:11:00:05 brd ff:ff:ff:ff:ff:ff
+    inet 10.0.1.10/24 brd 10.0.1.255 scope global Vlan10
+       valid_lft forever preferred_lft forever
+    inet6 fd12:3456:789a:1::1/64 scope global
+       valid_lft forever preferred_lft forever
+    inet6 fe80::42:acff:fe11:5/64 scope link
+       valid_lft forever preferred_lft forever
+61: Vlan20@Bridge: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9100 qdisc noqueue state UP group default qlen 1000
+    link/ether 02:42:ac:11:00:05 brd ff:ff:ff:ff:ff:ff
+    inet 10.0.2.20/24 brd 10.0.2.255 scope global Vlan20
+       valid_lft forever preferred_lft forever
+    inet6 fd12:3456:789a:2::1/64 scope global
+       valid_lft forever preferred_lft forever
+    inet6 fe80::42:acff:fe11:5/64 scope link
+       valid_lft forever preferred_lft forever
+```
+
+```
 vppctl show ip fib
 ```
 ```
@@ -455,6 +524,65 @@ ipv4-VRF:0, fib_index:0, flow hash:[src dst sport dport proto flowlabel ] epoch:
     [0] [@0]: dpo-drop ip4
 ```
 
+```
+Remove BVI interface and verify bridiging functionality
+
+root@9916f395371d:/# config interface ip remove Vlan10 10.0.1.10/24
+root@9916f395371d:/# vppctl show bridge 10 detail
+  BD-ID   Index   BSN  Age(min)  Learning  U-Forwrd   UU-Flood   Flooding  ARP-Term  arp-ufwd Learn-co Learn-li   BVI-Intf
+   10       1      0     off        on        on       flood        on        on       off        2    16777216    bvi10
+span-l2-input l2-input-classify l2-input-feat-arc l2-policer-classify l2-input-acl vpath-input-l2 l2-ip-qos-record l2-input-vtr l2-learn l2-rw l2-fwd l2-flood arp-term-l2bd l2-flood l2-output
+
+           Interface           If-idx ISN  SHG  BVI  TxFlood        VLAN-Tag-Rewrite
+             bvi10               15    1    0    *      *            push-1 dot1q 10
+           host-ac1              1     1    0    -      *            push-1 dot1q 10
+        host-trunk1.10           9     1    0    -      *                 none
+
+  IP4/IP6 to MAC table for ARP Termination
+root@9916f395371d:/# vppctl show interface addr
+bvi10 (up):
+  L2 bridge bd-id 10 idx 1 shg 0 bvi
+  L3 fd12:3456:789a:1::1/64
+bvi20 (up):
+  L2 bridge bd-id 20 idx 2 shg 0 bvi
+  L3 10.0.2.20/24
+  L3 fd12:3456:789a:2::1/64
+host-ac1 (up):
+  L2 bridge bd-id 10 idx 1 shg 0
+host-ac2 (up):
+  L2 bridge bd-id 20 idx 2 shg 0
+host-ac3 (up):
+  L2 bridge bd-id 30 idx 3 shg 0
+host-trunk1 (up):
+host-trunk1.10 (up):
+  L2 bridge bd-id 10 idx 1 shg 0
+host-trunk1.20 (up):
+  L2 bridge bd-id 20 idx 2 shg 0
+host-trunk1.30 (up):
+  L2 bridge bd-id 30 idx 3 shg 0
+local0 (dn):
+tap1 (up):
+tap2 (up):
+tap3 (up):
+tap4 (up):
+tap4.10 (up):
+tap4.20 (up):
+tap4.30 (up):
+root@9916f395371d:/# config interface ip remove Vlan10 fd12:3456:789a:1::1/64
+root@9916f395371d:/# vppctl show bridge 10 detail
+  BD-ID   Index   BSN  Age(min)  Learning  U-Forwrd   UU-Flood   Flooding  ARP-Term  arp-ufwd Learn-co Learn-li   BVI-Intf
+   10       1      0     off        on        on       flood        on       off       off        2    16777216     N/A
+span-l2-input l2-input-classify l2-input-feat-arc l2-policer-classify l2-input-acl vpath-input-l2 l2-ip-qos-record l2-input-vtr l2-learn l2-rw l2-fwd l2-flood l2-flood l2-output
+
+           Interface           If-idx ISN  SHG  BVI  TxFlood        VLAN-Tag-Rewrite
+           host-ac1              1     1    0    -      *            push-1 dot1q 10
+        host-trunk1.10           9     1    0    -      *                 none
+
+ping 10.0.1.2
+PING 10.0.1.2 (10.0.1.2) 56(84) bytes of data.
+64 bytes from 10.0.1.2: icmp_seq=1 ttl=64 time=27.7 ms
+64 bytes from 10.0.1.2: icmp_seq=2 ttl=64 time=41.6 ms
+```
 Verification of packet on VPP data plane for vlan tagging
 Start the ping and then do show trace
 
