@@ -1,0 +1,64 @@
+# Copyright (c) 2024 Cisco and/or its affiliates.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: SONiC Software Data Plane Automation - VLAN Topology Bring down
+  hosts: clusters
+  #remote_user: cisco
+  tasks:
+   - name: Stop SONiC VPP Container 1
+     shell: | 
+       cd sonic-vpp
+       ./start_sonic_vpp.sh stop -n sonic-br1
+     register: command_result
+     failed_when: command_result.rc != 0 and (command_result.stdout == '' or "No such container" not in command_result.stderr)
+     tags:
+     - multiHop
+   - name: Stop SONiC VPP Container 2
+     shell: | 
+       cd sonic-vpp
+       ./start_sonic_vpp.sh stop -n sonic-br2
+     register: command_result
+     failed_when: command_result.rc != 0 and (command_result.stdout == '' or "No such container" not in command_result.stderr)
+     tags:
+     - multiHop
+   - name: Delete host 1-6 network namepaces 
+     shell: | 
+       ip netns delete host-1.0
+       ip netns delete host-2.0
+       ip netns delete host-3.0
+       ip netns delete host-4.0
+       ip netns delete host-5.0
+       ip netns delete host-6.0
+     register: command_result
+     failed_when: command_result.stderr != '' and "No such file or directory" not in command_result.stderr
+     tags:
+     - multiHop
+   - name: Delete veth interface pair mapping for host
+     shell: | 
+       ip link delete name veth_ac1 type veth peer name ac1
+       ip link delete name veth_ac2 type veth peer name ac2
+       ip link delete name veth_ac3 type veth peer name ac3
+       ip link delete name veth_ac4 type veth peer name ac4
+       ip link delete name veth_ac5 type veth peer name ac5
+       ip link delete name veth_ac6 type veth peer name ac6
+     register: command_result
+     failed_when: command_result.stderr != '' and "Cannot find device" not in command_result.stderr
+     tags:
+     - multiHop
+   - name: Delete veth interface pair mapping for vpp
+     shell: | 
+       ip link delete name veth_trunk type veth peer name trunk
+     register: command_result
+     failed_when: command_result.stderr != '' and "Cannot find device" not in command_result.stderr
+     tags:
+     - multiHop
