@@ -140,13 +140,23 @@ typedef enum
   VLAN_DOT1AD,
   VLAN_DOT1Q
 } vpp_vlan_type_t;
-//    typedef struct vpp_sw_int_set_l2_brdige_ {
-//        uint32_t  bridge_id;
-//        uint32_t  sw_if_index;
-//        uint32_t  port_type;
-//        uint8_t   shg;
-//        bool      l2_mode_enable;
-//    } vpp_sw_int_set_l2_brdige_t;
+typedef enum {
+    VPP_API_PORT_TYPE_NORMAL = 0,
+    VPP_API_PORT_TYPE_BVI = 1,
+    VPP_API_PORT_TYPE_UU_FWD = 2,
+} vpp_l2_port_type_t;
+
+typedef enum {
+    VPP_BD_FLAG_NONE = 0,
+    VPP_BD_FLAG_LEARN = 1,
+    VPP_BD_FLAG_FWD = 2,
+    VPP_BD_FLAG_FLOOD = 4,
+    VPP_BD_FLAG_UU_FLOOD = 8,
+    VPP_BD_FLAG_ARP_TERM = 16,
+    VPP_BD_FLAG_ARP_UFWD = 32,
+} vpp_bd_flags_t;
+
+
 
     extern vpp_event_info_t * vpp_ev_dequeue();
     extern void vpp_ev_free(vpp_event_info_t *evp);
@@ -184,9 +194,12 @@ typedef enum
     extern int interface_get_state(const char *hwif_name, bool *link_is_up);
     extern int vpp_sync_for_events();
     extern int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add);
-    extern int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_enable);
+    extern int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_enable, uint32_t port_type);
     extern int set_l2_interface_vlan_tag_rewrite(const char *hwif_name, uint32_t tag1, uint32_t tag2, uint32_t push_dot1q, uint32_t vtr_op);
     extern int bridge_domain_get_member_count (uint32_t bd_id, uint32_t *member_count);
+    extern int create_bvi_interface(uint8_t *mac_address, uint32_t instance);
+    extern int delete_bvi_interface(const char *hwif_name);
+    extern int set_bridge_domain_flags(uint32_t bd_id, vpp_bd_flags_t flag, bool enable);
 
 #ifdef __cplusplus
 }

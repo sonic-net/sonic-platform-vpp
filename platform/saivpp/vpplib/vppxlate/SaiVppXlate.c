@@ -637,6 +637,30 @@ vl_api_l2_interface_vlan_tag_rewrite_reply_t_handler (vl_api_l2_interface_vlan_t
     //SAIVPP_ERROR("l2 add del reply handler called %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
 
 }
+static void
+vl_api_bvi_create_reply_t_handler (vl_api_bvi_create_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_WARN("bvi create reply handler swifIndex:%d  %s(%d)",msg->sw_if_index,  msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_bvi_delete_reply_t_handler (vl_api_bvi_delete_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_WARN("bvi delete reply handler  %s(%d)",  msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_bridge_flags_reply_t_handler (vl_api_bridge_flags_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_WARN("bridge flags reply handler  %s(%d)",  msg->retval ? "failed" : "successful", msg->retval);
+}
+
 
 static void
 vl_api_bridge_domain_details_t_handler (vl_api_bridge_domain_details_t *mp)
@@ -712,7 +736,10 @@ static void vpp_base_vpe_init(void)
     _(L2_MSG_ID(BRIDGE_DOMAIN_ADD_DEL_REPLY), bridge_domain_add_del_reply) \
     _(L2_MSG_ID(SW_INTERFACE_SET_L2_BRIDGE_REPLY), sw_interface_set_l2_bridge_reply) \
     _(L2_MSG_ID(L2_INTERFACE_VLAN_TAG_REWRITE_REPLY), l2_interface_vlan_tag_rewrite_reply) \
-    _(L2_MSG_ID(BRIDGE_DOMAIN_DETAILS), bridge_domain_details)
+    _(L2_MSG_ID(BRIDGE_DOMAIN_DETAILS), bridge_domain_details) \
+    _(L2_MSG_ID(BVI_CREATE_REPLY), bvi_create_reply) \
+    _(L2_MSG_ID(BVI_DELETE_REPLY), bvi_delete_reply) \
+    _(L2_MSG_ID(BRIDGE_FLAGS_REPLY), bridge_flags_reply)
 
 static u16 interface_msg_id_base, ip_msg_id_base, ip_nbr_msg_id_base, lcp_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
 static u16 acl_msg_id_base;
@@ -2008,11 +2035,10 @@ int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add)
     return ret;
 }
 
-int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_mode)
+int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_mode, uint32_t port_type)
 {
     vat_main_t *vam = &vat_main;
     vl_api_sw_interface_set_l2_bridge_t *mp;
-    vl_api_l2_port_type_t     port_type = L2_API_PORT_TYPE_NORMAL;
     u32 shg = 0;
     int ret;
 
@@ -2053,7 +2079,7 @@ int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l
     W (ret);
 
     VPP_UNLOCK();
- 
+
     return ret;
 }
 
@@ -2128,6 +2154,97 @@ int bridge_domain_get_member_count (uint32_t bd_id, uint32_t *member_count)
 
     PING (NULL, mp_ping);
     S (mp_ping);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+int create_bvi_interface(uint8_t *mac_address, u32 instance)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_bvi_create_t *mp;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (BVI_CREATE, mp);
+
+    if (mac_address == NULL) {
+	SAIVPP_ERROR("Invalid mac address \n");
+	VPP_UNLOCK();
+	return -EINVAL;
+    }
+
+    mp->user_instance = htonl(instance);
+    memcpy(mp->mac, mac_address, sizeof(mp->mac));
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int delete_bvi_interface(const char *hwif_name)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_bvi_delete_t * mp;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (BVI_DELETE, mp);
+
+    if (hwif_name) {
+	u32 idx;
+
+	idx = get_swif_idx(vam, hwif_name);
+	if (idx != (u32) -1) {
+	    mp->sw_if_index = htonl(idx);
+	} else {
+	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+	    VPP_UNLOCK();
+	    return -EINVAL;
+	}
+    } else {
+	VPP_UNLOCK();
+	return -EINVAL;
+    }
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int set_bridge_domain_flags(uint32_t bd_id, vpp_bd_flags_t flag, bool enable)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_bridge_flags_t * mp;
+    int ret;
+
+    SAIVPP_WARN("Setting the bd:%d flag %d\n",bd_id,flag);
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (BRIDGE_FLAGS, mp);
+
+    mp->bd_id = htonl(bd_id);
+    mp->is_set = enable;
+    mp->flags = htonl(flag);
+    S (mp);
 
     W (ret);
 
