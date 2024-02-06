@@ -1,4 +1,6 @@
 export build_version="${sonic_version}"
+export debian_version=""
+export kernel_version=""
 export asic_type="${sonic_asic_platform}"
 export commit_id="$(git rev-parse --short HEAD)"
 export branch="$(git rev-parse --abbrev-ref HEAD)"
