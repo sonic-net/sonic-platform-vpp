@@ -200,6 +200,10 @@ typedef enum {
     extern int create_bvi_interface(uint8_t *mac_address, uint32_t instance);
     extern int delete_bvi_interface(const char *hwif_name);
     extern int set_bridge_domain_flags(uint32_t bd_id, vpp_bd_flags_t flag, bool enable);
+    extern int l2fib_add_del(const char *hwif_name, const uint8_t *mac, uint32_t bd_id, bool is_add, bool is_static_mac);
+    extern int l2fib_flush_all();
+    extern int l2fib_flush_int(const char *hwif_name);
+    extern int l2fib_flush_bd(uint32_t bd_id);
 
 #ifdef __cplusplus
 }

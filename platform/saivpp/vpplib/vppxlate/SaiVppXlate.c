@@ -661,6 +661,43 @@ vl_api_bridge_flags_reply_t_handler (vl_api_bridge_flags_reply_t *msg)
     SAIVPP_WARN("bridge flags reply handler  %s(%d)",  msg->retval ? "failed" : "successful", msg->retval);
 }
 
+static void
+vl_api_l2fib_add_del_reply_t_handler (vl_api_l2fib_add_del_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("l2fib add del reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("l2fib add del reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+static void
+vl_api_l2fib_flush_all_reply_t_handler (vl_api_l2fib_flush_all_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("l2fib flush all reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("l2fib flush all reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+static void
+vl_api_l2fib_flush_int_reply_t_handler (vl_api_l2fib_flush_int_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("l2fib flush int reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("l2fib flush int reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+
+static void
+vl_api_l2fib_flush_bd_reply_t_handler (vl_api_l2fib_flush_bd_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("l2fib flush bd reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("l2fib flush bd reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
 
 static void
 vl_api_bridge_domain_details_t_handler (vl_api_bridge_domain_details_t *mp)
@@ -739,7 +776,11 @@ static void vpp_base_vpe_init(void)
     _(L2_MSG_ID(BRIDGE_DOMAIN_DETAILS), bridge_domain_details) \
     _(L2_MSG_ID(BVI_CREATE_REPLY), bvi_create_reply) \
     _(L2_MSG_ID(BVI_DELETE_REPLY), bvi_delete_reply) \
-    _(L2_MSG_ID(BRIDGE_FLAGS_REPLY), bridge_flags_reply)
+    _(L2_MSG_ID(BRIDGE_FLAGS_REPLY), bridge_flags_reply) \
+    _(L2_MSG_ID(L2FIB_ADD_DEL_REPLY), l2fib_add_del_reply) \
+    _(L2_MSG_ID(L2FIB_FLUSH_ALL_REPLY), l2fib_flush_all_reply) \
+    _(L2_MSG_ID(L2FIB_FLUSH_INT_REPLY), l2fib_flush_int_reply) \
+    _(L2_MSG_ID(L2FIB_FLUSH_BD_REPLY), l2fib_flush_bd_reply) \
 
 static u16 interface_msg_id_base, ip_msg_id_base, ip_nbr_msg_id_base, lcp_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
 static u16 acl_msg_id_base;
@@ -2244,6 +2285,160 @@ int set_bridge_domain_flags(uint32_t bd_id, vpp_bd_flags_t flag, bool enable)
     mp->bd_id = htonl(bd_id);
     mp->is_set = enable;
     mp->flags = htonl(flag);
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int l2fib_add_del(const char *hwif_name, const uint8_t *mac, uint32_t bd_id, bool is_add, bool is_static_mac)
+{
+
+    vat_main_t *vam = &vat_main;
+    vl_api_l2fib_add_del_t* mp;
+
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (L2FIB_ADD_DEL, mp);
+
+    if (hwif_name)
+    {
+        u32 idx;
+
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1) 
+        {
+            mp->sw_if_index = htonl(idx);
+        } 
+        else 
+        {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    } 
+    else
+    {
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    if (bd_id == 0 || bd_id == ~0) 
+    {
+        SAIVPP_ERROR("Invalid bridge id for add/del\n");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+    memcpy(mp->mac, mac, sizeof(mp->mac));
+    mp->bd_id = htonl(bd_id);
+    mp->is_add = is_add;
+    mp->static_mac = is_static_mac;
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int l2fib_flush_all()
+{
+
+    vat_main_t *vam = &vat_main;
+    vl_api_l2fib_flush_all_t* mp;
+
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (L2FIB_FLUSH_ALL, mp);
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int l2fib_flush_int(const char *hwif_name)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_l2fib_flush_int_t* mp;
+
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (L2FIB_FLUSH_INT, mp);
+
+    if (hwif_name)
+    {
+        u32 idx;
+
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1)
+        {
+            mp->sw_if_index = htonl(idx);
+        }
+        else 
+        {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    }
+    else
+    {
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int l2fib_flush_bd(uint32_t bd_id)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_l2fib_flush_bd_t* mp;
+
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (L2FIB_FLUSH_BD, mp);
+
+    if (bd_id == 0 || bd_id == ~0) 
+    {
+        SAIVPP_ERROR("Invalid bridge id for Flush FDB Entry\n");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    mp->bd_id = htonl(bd_id);
+
     S (mp);
 
     W (ret);
