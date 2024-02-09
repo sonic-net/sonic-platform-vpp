@@ -1331,15 +1331,12 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
         attribute = attr_list[i];
         switch (attribute.id) 
         {
-            case SAI_FDB_FLUSH_ATTR_BRIDGE_PORT_ID://SAI_FDB_FLUSH_ATTR_BRIDGE_PORT_ID:
+            case SAI_FDB_FLUSH_ATTR_BRIDGE_PORT_ID:
                 {
                     mode |=1;
                     SWSS_LOG_NOTICE("FDB_FLUSH is mode present %d", mode);
                     br_port_id = attribute.value.oid;
                     sai_object_type_t obj_type = objectTypeQuery(br_port_id);
-                    SWSS_LOG_NOTICE("delete fdb debug SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID=%s expected to be PORT but is: %s",
-                                    sai_serialize_object_id(br_port_id).c_str(),
-                                    sai_serialize_object_type(obj_type).c_str());
 
                     if (obj_type != SAI_OBJECT_TYPE_BRIDGE_PORT)
                     {
@@ -1359,7 +1356,7 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
                 }
                 break;
 
-            case SAI_FDB_FLUSH_ATTR_ENTRY_TYPE://SAI_FDB_ENTRY_ATTR_TYPE:
+            case SAI_FDB_FLUSH_ATTR_ENTRY_TYPE:
                 {
                     mode |= 4;
                     is_static_entry = attribute.value.s32; 
