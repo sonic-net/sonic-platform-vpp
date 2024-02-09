@@ -94,7 +94,11 @@ the traffice when leaving the BVI interface and pushes the tag for the traffic c
 ## 802.1Q VLAN Routing Test Topology
  
 ![Vlan Routing Topology](../8021Q-Bridge-Routing-Topo.png) 
- 
+
+<a id="item-9"></a>
+## FDB Entry ADD,DEL,FLUSH
+SONIC supports ADD, DEL, FLUSH of Dynamic Entries on the control plane. This is now merged with VPP feature to support ADD,DEL,FLUSH on VPP as data plane. The MAC address learnt dynamically on VPP can now be Flushed via by PORT ID (Interfaces) or VLAN ID (bridge ID) or by default Flush on all interfaces and VLAN IDs. Currently we support Flushing of only Dynamic Entries on VPP. Whereas ADD/DEL can be done from SONiC as part of swssconfig file.
+
 ## Troubleshooting
 There are some SONiC tools to debug SONiC side of functionality such as show commands, redis-dump, log files /var/log/syslog, /var/log/swss/ etc. You can connect gdb to the running processes and get useful debug information provided the image is built with INSTALL_DEBUG_TOOLS=y option.
  
