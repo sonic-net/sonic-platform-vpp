@@ -291,9 +291,11 @@ show trace
 ```
 
 ## FDB_ENTRY 
-Considering the same topology as above with 3 hosts configured on each switch, we will now try adding the STATIC and DYNAMIC FDB_ENTRY via config file through swssconfig, and the expectation is to see these entries on VPP end.
+Considering the same topology as above, with 3 hosts configured on each switch, we will now try adding the STATIC and DYNAMIC FDB_ENTRY via config file through swssconfig, and the expectation is to see these entries on VPP end (data plane side).
 
-To start with we can see in the below FDB list there is Entry added yet on SONiC Control plane whereas few FIB entries are learnt when pings are run across the hosts 1 to 6 and their corresponding MAC is stored
+From here on we will referer the terms, **FDB - Forwading Data Base is on control plane SONiC** and **FIB - Fowarding Information Base on data plane VPP** .
+
+To start with we can see in the below FDB table there is no Entry added yet on SONiC Control plane whereas few FIB entries are learnt when pings are run across the hosts 1 to 6. Each switch maintains its FIB which contains corresponding MAC address of Hosts learnt on that switch. Lets consider Switch 1 running on sonic-br1 container to test the feature as below,
 
 ```
 fdbshow
@@ -303,10 +305,11 @@ fdbshow
 No.    Vlan    MacAddress    Port    Type
 -----  ------  ------------  ------  ------
 Total number of entries 0
+```
 
 ```
 vppctl show l2fib all
-
+```
 ```
     Mac-Address     BD-Idx If-Idx BSN-ISN Age(min) static filter bvi         Interface-Name        
  16:d8:51:a3:16:16    2      2      0/1      -       -      -     -             host-ac2           
@@ -318,7 +321,7 @@ vppctl show l2fib all
 L2FIB total/learned entries: 6/9  Last scan time: 0.0000e0sec  Learn limit: 16777216 
 
 ```
-For FDB Entry addition via config file, an fdbadd.json file with Sample MAC and VLAN ID are created, where one of the entry looks like below, please note for ADD : "OP" = "SET", for DEL "OP" = "DEL"
+For FDB Entry addition on SONiC via config file, an fdbadd.json file with Sample MAC and VLAN ID are created, where one of the entry looks like below, please note for **ADD : "OP" = "SET"**, for **DEL "OP" = "DEL"**
 
 ```
   {
@@ -338,17 +341,17 @@ For FDB Entry addition via config file, an fdbadd.json file with Sample MAC and 
   }
 ```
 
-For Adding the entries we created in fdbadd.json, run the below command, the FDB table on SONiC and VPP L2 FIB table should look similar to the below wchih contains our newly added entries plus dynamically learnt entries.
+To add the entries we created in fdbadd.json onto SONiC FDB, run the below command. The FDB table on SONiC and VPP L2 FIB table should look similar to the below which contains our newly added entries plus dynamically learnt entries on data plane.
 
 ```
 swssconfig ./fdbadd.json 
-
 ```
 
 ```
 fdbshow
 ```
 
+`FDB_TABLE:`
 ```
   No.    Vlan  MacAddress         Port       Type
 -----  ------  -----------------  ---------  -------
@@ -364,6 +367,7 @@ Total number of entries 7
 ```
 vppctl show l2fib all
 ```
+`VPP FIB_TABLE :`
 ```
     Mac-Address     BD-Idx If-Idx BSN-ISN Age(min) static filter bvi         Interface-Name        
  16:d8:51:a3:16:16    2      2      0/1      -       -      -     -             host-ac2           
@@ -379,11 +383,10 @@ vppctl show l2fib all
  10:10:10:10:10:10    1      1      0/0      no      *      -     -             host-ac1           
  20:20:20:20:20:20    2      2      0/0      no      *      -     -             host-ac2           
 L2FIB total/learned entries: 12/3  Last scan time: 0.0000e0sec  Learn limit: 16777216 
-
 ```
 
-
-Similarly if we want to delete the previously added FDB Entries, we need to create another config file fdbdel.json whihc has same FDB_TABLE info but "OP" set to be "DEL". Running the below command will reuslt in the following tables on SONiC and VPP side.
+Similarly if we want to delete the previously added FDB Entries, we need to create another config file fdbdel.json which has previously added FDB_ENTRY info but "OP" set to be "DEL" since this is Delete operation from SONiC side.
+Running the below command will result in the following tables on SONiC and VPP side.
 
 ```
 swssconfig ./fdbdel.json
@@ -408,21 +411,19 @@ vppctl show l2fib all
  ea:5f:5a:6e:06:5d    3      3      0/1      -       -      -     -             host-ac3           
  f6:d2:03:81:f1:75    1      9      0/1      -       -      -     -           host-trunk.10        
 L2FIB total/learned entries: 6/3  Last scan time: 0.0000e0sec  Learn limit: 16777216 
-
 ```
 
-we could see that all the STATIC and DYNAMIC FDB Entries added are now deleted both on SONiC and VPP side. VPP can still have valid enties since learning is enabled on VPP as data plane.
+We could see that all the STATIC and DYNAMIC FDB Entries added previously via config file are now deleted both on SONiC and VPP side. VPP can still have valid enties since learning is enabled on VPP.
 
 ## FDB_FLUSH
+Flushing of FDB Entries are done in three ways as below, but on SONiC currently we're supporting below two modes of Flushing of Dynamically learnt entries on VPP side.
+- Flush by Port ( Example: Flush all entries on Ethernet0 )
+- Flush by VLAN ID ( Example: Flush all entries on bridge with particular VLAN ID)
+- Flush all entries
+\* Please note that VPP Flushes only Dynamically learnt entries as STATIC type entries can only be deleted.
 
-FDB_FLUSH can be done via three types:
-1. FLush by Port ( Example: Flush all entries on Ethernet0 )
-2. Flush by VLAN ID ( Example: Flush all entries on bridge with particular VLAN ID)
-3. Flush all entries
 
-Please note that VPP Flushes only Dynamically learnt entries. Currenlyt SONiC only supports FDB flush by Port ID as well as default FDB Flush all.
-
-1. Lets go back to our config file fdbadd.json to add the sample FDB entries using swssconfig command. Below should be the FDB and FIB table look like.
+1. To demonstrate FLUSH by Port, Lets go back to our config file fdbadd.json to add the sample FDB entries using swssconfig command. Below should be the FDB and FIB table look like.
 
 ```
 fdbshow
@@ -458,15 +459,17 @@ vppctl show l2fib all
  20:20:20:20:20:20    2      2      0/0      no      *      -     -             host-ac2 
  L2FIB total/learned entries: 12/2  Last scan time: 1.3616e-2sec  Learn limit: 16777216 
 ```
-In the above FIB table, MAC address "ea:5f:5a:6e:06:5d" is learnt dynamically by VPP which will now be deleted via below SONiC command to flush entries on Ethernet2 interface by passing -p flag and corresponding parameter.
+In the above FIB table, MAC address `"ea:5f:5a:6e:06:5d"` is learnt dynamically by VPP which will now be deleted via below SONiC command as part of FLUSH by port on Ethernet2 interface by passing corresponding interface name using *"-p"* flag.
+
 
 ```
 fdbclear -p Ethernet2
 ```
 
 ```
-Port Ethernet2 FDB entries are cleared.
-$fdbshow
+fdbshow
+```
+```
   No.    Vlan  MacAddress         Port       Type
 -----  ------  -----------------  ---------  -------
     1      10  10:10:10:10:10:10  Ethernet0  Static
@@ -492,17 +495,18 @@ vppctl show l2fib all
  20:20:20:20:20:20    2      2      0/0      no      *      -     -             host-ac2           
 L2FIB total/learned entries: 11/5  Last scan time: 1.3651e-2sec  Learn limit: 16777216 
 ```
-We can observer the on Interface host-ac3 which corresponds to "Ethernet2", the above learnt MAC address is flushed.
+We can observe that on the Interface ``host-ac3`` which corresponds to **"Ethernet2"** the above learnt MAC address is flushed.
 
-2 . Flush ALL
 
-If FIB entries need to be cleared irrespective of Port and Bridge IDs, below SONiC command helps in flushing out all the dynamic entries learnt on VPP side.
+
+2. If FIB entries need to be cleared irrespective of Port and Bridge IDs, below SONiC command helps in flushing out all the dynamic entries learnt on VPP side. Here fdbclear has no parameters passed which by default flushes all of dynamically learnt entries on FIB table.
 
 ```
 fdbclear
 ```
 ```
 FDB entries are cleared.
+```
 ```
 fdbshow
 ```
@@ -516,7 +520,7 @@ fdbshow
 Total number of entries 4
 ```
 ```
-root@6fb587fe1a62:/# vppctl show l2fib all
+vppctl show l2fib all
 ```
 ```
     Mac-Address     BD-Idx If-Idx BSN-ISN Age(min) static filter bvi         Interface-Name        
@@ -528,4 +532,4 @@ root@6fb587fe1a62:/# vppctl show l2fib all
  20:20:20:20:20:20    2      2      0/0      no      *      -     -             host-ac2           
 L2FIB total/learned entries: 6/0  Last scan time: 1.3682e-2sec  Learn limit: 16777216 
 ```
-
+Concluding the above all, SONiC+VPP now supports FDB\_ENTRY and FDB\_FLUSH with ADD/DEL operation and FLUSH of Dynamic Entries is also supported with this feature.

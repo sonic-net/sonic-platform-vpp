@@ -14,6 +14,7 @@ Rev v0.1
 6. [802.1Q bridge domain Testing](#item-6)
 7. [802.1Q VLAN Routing](#item-7)
 8. [802.1Q VLAN Routing Testing](#item-8)
+9. [FDB_ENTRY and FDB_FLUSH](#item-9)
 
 <br/>
 <br/>
@@ -25,6 +26,7 @@ Rev v0.1
 |-----|------|-----------|
 |v0.1 | 25/12/2023 | Bendrapu Balareddy (Cisco), Sameer Nanajkar (Cisco) |
 |v0.2 | 29/01/2024 | Bendrapu Balareddy (Cisco), Sameer Nanajkar (Cisco) |
+|v0.3 | 12/02/2024 | Viswa Bodagala (Cisco), Bendrapu Balareddy (Cisco), Sameer Nanajkar (Cisco) |
 
 
 <br/>
@@ -44,6 +46,9 @@ This document describes the high level design of integrating vlan bridging funct
 **VPP**: Vector Packet Processing (VPP) technology based high performance packet processing stack that can run on commodity CPUs. For more details see [What is VPP](https://wiki.fd.io/view/VPP/What_is_VPP%3F)
 
 **VLAN**:  Virtual LAN
+
+**FDB**: Fowarding DataBase (used by SONiC)
+**FIB**: Forwading Information Base (used by VPP)
 
 
 <br/>
@@ -96,8 +101,9 @@ the traffice when leaving the BVI interface and pushes the tag for the traffic c
 ![Vlan Routing Topology](../8021Q-Bridge-Routing-Topo.png) 
 
 <a id="item-9"></a>
-## FDB Entry ADD,DEL,FLUSH
-SONIC supports ADD, DEL, FLUSH of Dynamic Entries on the control plane. This is now merged with VPP feature to support ADD,DEL,FLUSH on VPP as data plane. The MAC address learnt dynamically on VPP can now be Flushed via by PORT ID (Interfaces) or VLAN ID (bridge ID) or by default Flush on all interfaces and VLAN IDs. Currently we support Flushing of only Dynamic Entries on VPP. Whereas ADD/DEL can be done from SONiC as part of swssconfig file.
+## FDB\_ENTRY with ADD/DEL and FDB\_FLUSH
+SONiC switch maintains the list of MAC Addresses of the hosts on it which is called as FDB\_TABLE on control plane wherea VPP learns the MAC Addresses of the hosts though it as well as from control plane which is called as FIB\_TABLE.
+Previously SONiC supports ADD, DEL, FLUSH of Entries on the control plane. This is now integrated with corresponding VPP functionality to support ADD/DEL,FLUSH of FDB Entries on VPP as data plane. The MAC address learnt dynamically on VPP can now be Flushed via by PORT ID (Interfaces) or VLAN ID (bridge ID) or by default Flush on all PORT IDs (interfaces) and VLAN IDs (bridges). Currently we support Flushing of only Dynamic Entries that are learnt on VPP, Whereas ADD/DEL can be done from SONiC as part of swssconfig though a JSON file.
 
 ## Troubleshooting
 There are some SONiC tools to debug SONiC side of functionality such as show commands, redis-dump, log files /var/log/syslog, /var/log/swss/ etc. You can connect gdb to the running processes and get useful debug information provided the image is built with INSTALL_DEBUG_TOOLS=y option.

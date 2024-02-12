@@ -1178,8 +1178,7 @@ sai_status_t SwitchStateBase::vpp_fdbentry_add(
 
     if (get_status != SAI_STATUS_SUCCESS)
     {
-        SWSS_LOG_WARN("failed to get port vlan id from port %s",
-                sai_serialize_object_id(port_id).c_str());
+        SWSS_LOG_WARN("failed to get port vlan id from port %s", sai_serialize_object_id(port_id).c_str());
         return SAI_STATUS_FAILURE;
     }
 
@@ -1189,10 +1188,9 @@ sai_status_t SwitchStateBase::vpp_fdbentry_add(
     if (vpp_get_hwif_name(port_id, 0, ifname) == true) 
     {
         const char *hwif_name = ifname.c_str();
-        SWSS_LOG_NOTICE(" FDB_ENTRY hwif_name is %s ",
-                            hwif_name);
+        SWSS_LOG_NOTICE(" FDB_ENTRY on hwif_name %s ", hwif_name);
         auto ret = l2fib_add_del(hwif_name, fdb_entry.mac_address, bd_id, is_add, is_static);
-        SWSS_LOG_NOTICE("FDB Entry Added Successfully %d", ret);
+        SWSS_LOG_NOTICE("FDB_Entry Added Success: %d", ret);
 
     }
     else
@@ -1298,10 +1296,9 @@ sai_status_t SwitchStateBase::vpp_fdbentry_del(
     if (vpp_get_hwif_name(port_id, 0, ifname) == true) 
     {
         const char *hwif_name = ifname.c_str();
-        SWSS_LOG_NOTICE(" delete FDB_ENTRY hwif_name is %s ",
-                            hwif_name);
+        SWSS_LOG_NOTICE(" FDB_ENTRY delete on hwif_name: %s ", hwif_name);
         auto ret = l2fib_add_del(hwif_name, fdb_entry.mac_address, bd_id, is_add, is_static);
-        SWSS_LOG_NOTICE(" delete FDB Entry Added Successfully %d", ret);
+        SWSS_LOG_NOTICE(" FDB_Entry delete Success: %d", ret);
 
     }
     else
@@ -1327,14 +1324,14 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
     uint8_t mode = 0;
     bool is_static_entry = false;
 
-    for (uint32_t i = 0; i < attr_count; i++) {
+    for (uint32_t i = 0; i < attr_count; i++) 
+    {
         attribute = attr_list[i];
         switch (attribute.id) 
         {
             case SAI_FDB_FLUSH_ATTR_BRIDGE_PORT_ID:
                 {
                     mode |=1;
-                    SWSS_LOG_NOTICE("FDB_FLUSH is mode present %d", mode);
                     br_port_id = attribute.value.oid;
                     sai_object_type_t obj_type = objectTypeQuery(br_port_id);
 
@@ -1352,7 +1349,6 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
                 {
                     mode |= 2;
                     bd_id = attribute.value.u16; 
-                    SWSS_LOG_NOTICE("FDB_FLUSH is mode present %d", mode);
                 }
                 break;
 
@@ -1360,7 +1356,6 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
                 {
                     mode |= 4;
                     is_static_entry = attribute.value.s32; 
-                    SWSS_LOG_NOTICE("FDB_FLUSH is mode present %d", mode);
                     if ( is_static_entry == SAI_FDB_FLUSH_ENTRY_TYPE_STATIC)
                     {
                         return SAI_STATUS_FAILURE;
@@ -1374,7 +1369,7 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
                 break;
         }
     }
-
+    SWSS_LOG_NOTICE("FDB_FLUSH mode is : %d [1,5: Interface, 2,6: Bridge, 3,4,7: Flush ALL, 0: INVALID]", mode);
     switch (mode)
     {
         case 1:
@@ -1397,8 +1392,7 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
                 if (vpp_get_hwif_name(port_id, 0, ifname) == true) 
                 {
                     const char *hwif_name = ifname.c_str();
-                    SWSS_LOG_NOTICE(" Flush interface FDB_ENTRY hwif_name is %s ",
-                                        hwif_name);
+                    SWSS_LOG_NOTICE(" Flush interface FDB_ENTRY hwif_name is %s ", hwif_name);
                     auto ret = l2fib_flush_int(hwif_name);
                     SWSS_LOG_NOTICE(" Flush interface by bridge port Successfully %d", ret);
                 }
@@ -1414,8 +1408,7 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
         case 2:
         case 6:/*flush by bd_id/vlan id*/
             {
-                SWSS_LOG_NOTICE(" Flush bd_id/vlan id FDB_ENTRY hwif_name is %d ",
-                                    bd_id);
+                SWSS_LOG_NOTICE(" Flush bd_id/vlan id FDB_ENTRY hwif_name is %d ", bd_id);
                 auto ret = l2fib_flush_bd(bd_id);
                 SWSS_LOG_NOTICE(" Flush bd_id Successfully %d", ret);  
             }
