@@ -678,7 +678,7 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
 
     if (obj_type != SAI_OBJECT_TYPE_BRIDGE_PORT)
     {
-        SWSS_LOG_ERROR("SAI_VLAN_MEMBER_ATTR_BRIDGE_PORT_ID=%s expected to be PORT but is: %s",
+        SWSS_LOG_ERROR("SAI_VLAN_MEMBER_ATTR_BRIDGE_PORT_ID=%s expected to be BRIDGE PORT but is: %s",
                 sai_serialize_object_id(br_port_id).c_str(),
                 sai_serialize_object_type(obj_type).c_str());
 
@@ -686,28 +686,43 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
     }
 
     const char *hwifname = nullptr;
+    uint32_t lag_swif_idx;
+
     auto br_port_attrs = m_objectHash.at(SAI_OBJECT_TYPE_BRIDGE_PORT).at(sai_serialize_object_id(br_port_id));
     auto meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_BRIDGE_PORT, SAI_BRIDGE_PORT_ATTR_PORT_ID);
     auto bp_attr = br_port_attrs[meta->attridname];
     auto port_id = bp_attr->getAttr()->value.oid;
     obj_type = objectTypeQuery(port_id);
 
-    if (obj_type != SAI_OBJECT_TYPE_PORT)
+    if (obj_type != SAI_OBJECT_TYPE_PORT && obj_type != SAI_OBJECT_TYPE_LAG )
     {
-        SWSS_LOG_NOTICE("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT but is: %s",
+        SWSS_LOG_NOTICE("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT or LAG but is: %s",
                 sai_serialize_object_id(port_id).c_str(),
                 sai_serialize_object_type(obj_type).c_str());
         return SAI_STATUS_FAILURE;
     }
 
-    std::string if_name;
-    bool found = getTapNameFromPortId(port_id, if_name);
-    if (found == true)
+    if (obj_type == SAI_OBJECT_TYPE_PORT)
     {
-        hwifname = tap_to_hwif_name(if_name.c_str());
-    }else {
-        SWSS_LOG_NOTICE("No ports found for bridge port id :%s",sai_serialize_object_id(br_port_id).c_str());
-        return SAI_STATUS_FAILURE;
+        std::string if_name;
+        bool found = getTapNameFromPortId(port_id, if_name);
+        if (found == true)
+        {
+            hwifname = tap_to_hwif_name(if_name.c_str());
+        }else {
+            SWSS_LOG_NOTICE("No ports found for bridge port id :%s",sai_serialize_object_id(br_port_id).c_str());
+            return SAI_STATUS_FAILURE;
+        }
+    } else if (obj_type == SAI_OBJECT_TYPE_LAG) {
+        lag_swif_idx = lag_to_bond_if_idx(port_id);
+        SWSS_LOG_NOTICE("lag swif idx :%d",lag_swif_idx);
+	hwifname =  vpp_get_swif_name(lag_swif_idx);
+        SWSS_LOG_NOTICE("lag swif idx :%d swif_name:%s",lag_swif_idx, hwifname);
+	if (hwifname == NULL)
+	{
+            SWSS_LOG_NOTICE("LAG is not found for bridge port id :%s",sai_serialize_object_id(br_port_id).c_str());
+            return SAI_STATUS_FAILURE;
+	}
     }
 
     auto attr_vlan_member = sai_metadata_get_attr_by_id(SAI_VLAN_MEMBER_ATTR_VLAN_ID, attr_count, attr_list);
@@ -865,23 +880,36 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
     auto port_id = bp_attr->getAttr()->value.oid;
     obj_type = objectTypeQuery(port_id);
 
-    if (obj_type != SAI_OBJECT_TYPE_PORT)
+    if (obj_type != SAI_OBJECT_TYPE_PORT && obj_type != SAI_OBJECT_TYPE_LAG)
     {
-        SWSS_LOG_NOTICE("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT but is: %s",
+        SWSS_LOG_NOTICE("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT or LAG but is: %s",
                 sai_serialize_object_id(port_id).c_str(),
                 sai_serialize_object_type(obj_type).c_str());
         return SAI_STATUS_FAILURE;
     }
-    std::string if_name;
-    bool found = getTapNameFromPortId(port_id, if_name);
-    if (found == true)
-    {
-        hw_ifname = tap_to_hwif_name(if_name.c_str());
-    }else {
-        SWSS_LOG_NOTICE("No ports found for bridge port id :%s",sai_serialize_object_id(br_port_oid).c_str());
-        return SAI_STATUS_FAILURE;
-    }
 
+    if (obj_type == SAI_OBJECT_TYPE_PORT)
+    {
+        std::string if_name;
+        bool found = getTapNameFromPortId(port_id, if_name);
+        if (found == true)
+        {
+            hw_ifname = tap_to_hwif_name(if_name.c_str());
+        }else {
+            SWSS_LOG_NOTICE("No ports found for bridge port id :%s",sai_serialize_object_id(br_port_oid).c_str());
+            return SAI_STATUS_FAILURE;
+        }
+    } else if (obj_type == SAI_OBJECT_TYPE_LAG) {
+        uint32_t  lag_swif_idx = lag_to_bond_if_idx(port_id);
+        SWSS_LOG_NOTICE("lag swif idx :%d",lag_swif_idx);
+	hw_ifname =  vpp_get_swif_name(lag_swif_idx);
+        SWSS_LOG_NOTICE("lag swif idx :%d swif_name:%s",lag_swif_idx, hw_ifname);
+	if (hw_ifname == NULL)
+	{
+            SWSS_LOG_NOTICE("LAG port is not found for bridge port id :%s",sai_serialize_object_id(port_id).c_str());
+            return SAI_STATUS_FAILURE;
+	}
+    }
 
     attr.id = SAI_VLAN_MEMBER_ATTR_VLAN_TAGGING_MODE;
     status = get(SAI_OBJECT_TYPE_VLAN_MEMBER, vlan_member_oid, 1, &attr);
@@ -1080,5 +1108,271 @@ sai_status_t SwitchStateBase::vpp_delete_bvi_interface(
     // refresh interfaces from VPP
     refresh_interfaces_list();
 
+    return SAI_STATUS_SUCCESS;
+}
+
+uint32_t SwitchStateBase::lag_to_bond_if_idx (const sai_object_id_t lag_id)
+{
+    auto it = m_lag_bond_map.find(lag_id);
+
+    if (it == m_lag_bond_map.end())
+    {
+        SWSS_LOG_ERROR("failed to find bond if idx for lag id: %x",lag_id);
+	return ~0;
+    }
+    return it->second;
+}
+
+int SwitchStateBase::remove_lag_to_bond_entry(const sai_object_id_t lag_oid)
+{
+   auto it = m_lag_bond_map.find(lag_oid);
+
+    if (it == m_lag_bond_map.end())
+    {
+        SWSS_LOG_ERROR("failed to find lag swif index for : %s", sai_serialize_object_id(lag_oid).c_str());
+        return ~0;
+    }
+
+    SWSS_LOG_NOTICE("Removing lag object swif index: %s", sai_serialize_object_id(lag_oid).c_str());
+    m_lag_bond_map.erase(it);
+    return 0;
+}
+
+sai_status_t SwitchStateBase:: createLag(
+        _In_ sai_object_id_t object_id,
+        _In_ sai_object_id_t switch_id,
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list)
+{
+    SWSS_LOG_ENTER();
+
+    auto sid = sai_serialize_object_id(object_id);
+    CHECK_STATUS(create_internal(SAI_OBJECT_TYPE_LAG, sid, switch_id, attr_count, attr_list));
+    return vpp_create_lag(object_id, attr_count, attr_list);
+
+}
+
+sai_status_t SwitchStateBase::vpp_create_lag(
+	_In_ sai_object_id_t lag_id,
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list)
+{
+    uint32_t bond_id, mode, lb;
+    int32_t  ret;
+    uint32_t swif_idx = ~0;
+    const char *hw_ifname;
+    SWSS_LOG_ENTER();
+
+    //set mode and lb
+    mode = VPP_BOND_API_MODE_ROUND_ROBIN;
+    lb = VPP_BOND_API_LB_ALGO_L2;
+    bond_id = ~0;
+
+    ret = create_bond_interface(bond_id, mode, lb, &swif_idx);
+
+    if (ret)
+    {
+        SWSS_LOG_ERROR("vpp bond interface create failed\n");
+        return SAI_STATUS_SUCCESS;
+    }
+
+    SWSS_LOG_NOTICE("Bond interfae if index:%d\n", swif_idx);
+    //update the lag to bond map
+    m_lag_bond_map[lag_id] = swif_idx;
+    refresh_interfaces_list();
+
+    // Set the bond interface state up
+    hw_ifname = vpp_get_swif_name(swif_idx);
+    SWSS_LOG_NOTICE("Setting lag hw interface state to up :%s",hw_ifname);
+    interface_set_state(hw_ifname, true);
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase:: removeLag(
+        _In_ sai_object_id_t lag_oid)
+{
+    SWSS_LOG_ENTER();
+
+    vpp_remove_lag(lag_oid);
+    auto sid = sai_serialize_object_id(lag_oid);
+    CHECK_STATUS(remove_internal(SAI_OBJECT_TYPE_LAG, sid));
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::vpp_remove_lag(
+        _In_ sai_object_id_t lag_oid)
+{
+    SWSS_LOG_ENTER();
+
+    uint32_t lag_swif_idx = lag_to_bond_if_idx(lag_oid);
+    SWSS_LOG_NOTICE("lag swif idx :%d",lag_swif_idx);
+    auto lag_ifname =  vpp_get_swif_name(lag_swif_idx);
+    SWSS_LOG_NOTICE("lag swif idx :%d swif_name:%s",lag_swif_idx, lag_ifname);
+    if (lag_ifname == NULL)
+    {
+        SWSS_LOG_NOTICE("LAG interface name is not found for LAG PORT :%s",sai_serialize_object_id(lag_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    //Delete the Bond interface
+    delete_bond_interface(lag_ifname);
+    remove_lag_to_bond_entry(lag_oid);
+
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase:: createLagMember(
+        _In_ sai_object_id_t object_id,
+        _In_ sai_object_id_t switch_id,
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list)
+{
+    SWSS_LOG_ENTER();
+
+    auto sid = sai_serialize_object_id(object_id);
+
+    CHECK_STATUS(create_internal(SAI_OBJECT_TYPE_LAG_MEMBER, sid, switch_id, attr_count, attr_list));
+    return vpp_create_lag_member(attr_count, attr_list);
+}
+
+sai_status_t SwitchStateBase::vpp_create_lag_member(
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list)
+{
+    bool is_long_timeout = false;
+    bool is_passive = false;
+    uint32_t bond_if_idx;
+    sai_object_id_t lag_oid, lag_port_oid;
+    SWSS_LOG_ENTER();
+
+    //Get the bond interface index from attr SAI_LAG_MEMBER_ATTR_LAG_ID
+    auto attr_type = sai_metadata_get_attr_by_id(SAI_LAG_MEMBER_ATTR_LAG_ID, attr_count, attr_list);
+    if (attr_type == NULL)
+    {
+        SWSS_LOG_ERROR("attr SAI_LAG_MEMBER_ATTR_LAG_ID was not passed");
+        return SAI_STATUS_FAILURE;
+    }
+    lag_oid = attr_type->value.oid;
+    sai_object_type_t obj_type = objectTypeQuery(lag_oid);
+
+    if (obj_type != SAI_OBJECT_TYPE_LAG)
+    {
+        SWSS_LOG_ERROR(" SAI_LAG_MEMBER_ATTR_LAG_ID = %s expected to be LAG ID but is: %s",
+                sai_serialize_object_id(lag_oid).c_str(),
+                sai_serialize_object_type(obj_type).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+    bond_if_idx = lag_to_bond_if_idx(lag_oid);
+    SWSS_LOG_NOTICE("bond if index is %d\n",bond_if_idx);
+
+    attr_type = sai_metadata_get_attr_by_id(SAI_LAG_MEMBER_ATTR_PORT_ID, attr_count, attr_list);
+
+    if (attr_type == NULL)
+    {
+        SWSS_LOG_ERROR("attr SAI_LAG_MEMBER_ATTR_PORT_ID was not present\n");
+	return SAI_STATUS_FAILURE;
+    }
+
+    lag_port_oid = attr_type->value.oid;
+    SWSS_LOG_NOTICE("lag port id is %s",sai_serialize_object_id(lag_port_oid).c_str());
+    obj_type = objectTypeQuery(lag_port_oid);
+    if (obj_type != SAI_OBJECT_TYPE_PORT)
+    {
+        SWSS_LOG_NOTICE("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT but is: %s",
+                sai_serialize_object_id(lag_port_oid).c_str(),
+                sai_serialize_object_type(obj_type).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    std::string if_name;
+    bool found = getTapNameFromPortId(lag_port_oid, if_name);
+    const char *hwifname;
+    if (found == true)
+    {
+        hwifname = tap_to_hwif_name(if_name.c_str());
+	SWSS_LOG_NOTICE("hwif name for port is %s",hwifname);
+    }else {
+        SWSS_LOG_NOTICE("No ports found for lag port id :%s",sai_serialize_object_id(lag_port_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    create_bond_member(bond_if_idx, hwifname,is_passive,is_long_timeout);
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::removeLagMember(
+        _In_ sai_object_id_t lag_member_oid)
+{
+    SWSS_LOG_ENTER();
+
+    vpp_remove_lag_member(lag_member_oid);
+
+    auto sid = sai_serialize_object_id(lag_member_oid);
+
+    CHECK_STATUS(remove_internal(SAI_OBJECT_TYPE_LAG_MEMBER, sid));
+
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::vpp_remove_lag_member(
+        _In_ sai_object_id_t lag_member_oid)
+{
+    SWSS_LOG_ENTER();
+
+    sai_attribute_t attr;
+
+    attr.id = SAI_LAG_MEMBER_ATTR_LAG_ID;
+
+    sai_status_t status = get(SAI_OBJECT_TYPE_LAG_MEMBER, lag_member_oid, 1, &attr);
+
+    if (status != SAI_STATUS_SUCCESS)
+    {
+        SWSS_LOG_ERROR("attr SAI_LAG_MEMBER_ATTR_LAG_ID is not present");
+
+        return SAI_STATUS_FAILURE;
+    }
+    sai_object_id_t lag_oid = attr.value.oid;
+
+    sai_object_type_t obj_type = objectTypeQuery(lag_oid);
+
+    if (obj_type != SAI_OBJECT_TYPE_LAG)
+    {
+        SWSS_LOG_ERROR("attr SAI_LAG_MEMBER_ATTR_LAG_ID is not valid");
+        return SAI_STATUS_FAILURE;
+    }
+
+    attr.id = SAI_LAG_MEMBER_ATTR_PORT_ID;
+
+    status = get(SAI_OBJECT_TYPE_LAG_MEMBER, lag_member_oid, 1, &attr);
+
+    if (status != SAI_STATUS_SUCCESS)
+    {
+        SWSS_LOG_ERROR("attr SAI_LAG_MEMBER_ATTR_PORT_ID is not present");
+
+        return SAI_STATUS_FAILURE;
+    }
+    sai_object_id_t port_oid = attr.value.oid;
+
+    obj_type = objectTypeQuery(port_oid);
+
+    if (obj_type != SAI_OBJECT_TYPE_PORT)
+    {
+        SWSS_LOG_ERROR("attr SAI_LAG_MEMBER_ATTR_PORT_ID is not valid");
+        return SAI_STATUS_FAILURE;
+    }
+
+    std::string if_name;
+    bool found = getTapNameFromPortId(port_oid, if_name);
+    const char *lag_member_ifname;
+    if (found == true)
+    {
+        lag_member_ifname = tap_to_hwif_name(if_name.c_str());
+	SWSS_LOG_NOTICE("hwif name for port is %s",lag_member_ifname);
+    } else {
+        SWSS_LOG_NOTICE("No ports found for lag port id :%s",sai_serialize_object_id(port_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    delete_bond_member(lag_member_ifname);
     return SAI_STATUS_SUCCESS;
 }

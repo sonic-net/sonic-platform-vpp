@@ -163,6 +163,32 @@ namespace saivpp
                     _In_ const sai_attribute_t *attr_list);
             sai_status_t vpp_delete_bvi_interface(
                     _In_ sai_object_id_t bvi_obj_id);
+            sai_status_t createLag(
+                    _In_ sai_object_id_t object_id,
+                    _In_ sai_object_id_t switch_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+            sai_status_t vpp_create_lag(
+                    _In_ sai_object_id_t lag_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+            sai_status_t removeLag(
+                    _In_ sai_object_id_t lag_oid);
+            sai_status_t vpp_remove_lag(
+                    _In_ sai_object_id_t lag_oid);
+	    sai_status_t createLagMember(
+                    _In_ sai_object_id_t object_id,
+                    _In_ sai_object_id_t switch_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+	    sai_status_t vpp_create_lag_member(
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+	    sai_status_t removeLagMember(
+                    _In_ sai_object_id_t lag_member_oid);
+	    sai_status_t vpp_remove_lag_member(
+                    _In_ sai_object_id_t lag_member_oid);
+
         protected:
 
             virtual sai_status_t create_port_dependencies(
@@ -1016,6 +1042,8 @@ namespace saivpp
 	    void populate_if_mapping();
 	    const char *tap_to_hwif_name(const char *name);
             const char *hwif_to_tap_name(const char *name);
+            uint32_t lag_to_bond_if_idx (const sai_object_id_t lag_id);
+            int remove_lag_to_bond_entry (const sai_object_id_t lag_id);
 
             void vppProcessEvents ();
             void startVppEventsThread();
@@ -1029,6 +1057,7 @@ namespace saivpp
             bool m_run_vpp_events_thread = true;
             bool VppEventsThreadStarted = false;
 	    std::shared_ptr<std::thread> m_vpp_thread;
+	    std::map<sai_object_id_t, uint32_t> m_lag_bond_map;
 
         private:
             static int currentMaxInstance;
