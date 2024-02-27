@@ -48,6 +48,7 @@ This document describes the high level design of integrating vlan bridging funct
 **VLAN**:  Virtual LAN
 
 **FDB**: Fowarding DataBase (used by SONiC)
+
 **FIB**: Forwading Information Base (used by VPP)
 
 
@@ -102,8 +103,7 @@ the traffice when leaving the BVI interface and pushes the tag for the traffic c
 
 <a id="item-9"></a>
 ## FDB\_ENTRY with ADD/DEL and FDB\_FLUSH
-SONiC switch maintains the list of MAC Addresses of the hosts on it which is called as FDB\_TABLE on control plane wherea VPP learns the MAC Addresses of the hosts though it as well as from control plane which is called as FIB\_TABLE.
-Previously SONiC supports ADD, DEL, FLUSH of Entries on the control plane. This is now integrated with corresponding VPP functionality to support ADD/DEL,FLUSH of FDB Entries on VPP as data plane. The MAC address learnt dynamically on VPP can now be Flushed via by PORT ID (Interfaces) or VLAN ID (bridge ID) or by default Flush on all PORT IDs (interfaces) and VLAN IDs (bridges). Currently we support Flushing of only Dynamic Entries that are learnt on VPP, Whereas ADD/DEL can be done from SONiC as part of swssconfig though a JSON file.
+SONiC supports MAC database called FDB_TABLE for statically configured MAC entries and also it can learn MAC from the packets are forwarded to SONiC control plane. VPP switch learns the MAC addresses and maintains them in FIB table. SONiC supports ADD, DEL, FLUSH of MAC entries configuration and this is used to add, delete or flush the entries to/from VPP FIB. The MAC address learnt dynamically by VPP can be flushed per port/interface or per VLAN ID (bridge ID) or by default flush on all PORT IDs (interfaces) and VLAN IDs (bridges). Currently flushing of only dynamic entries that are learnt on VPP is supported. Statically added MAC entries and Entries added via Config file needs to be removed explicitly.
 
 ## Troubleshooting
 There are some SONiC tools to debug SONiC side of functionality such as show commands, redis-dump, log files /var/log/syslog, /var/log/swss/ etc. You can connect gdb to the running processes and get useful debug information provided the image is built with INSTALL_DEBUG_TOOLS=y option.

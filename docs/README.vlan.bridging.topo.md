@@ -291,11 +291,11 @@ show trace
 ```
 
 ## FDB_ENTRY 
-Considering the same topology as above, with 3 hosts configured on each switch, we will now try adding the STATIC and DYNAMIC FDB_ENTRY via config file through swssconfig, and the expectation is to see these entries on VPP end (data plane side).
+Considering the same topology as above, with 3 hosts configured on each switch, fdb entries of types STATIC and DYNAMIC can be added via config file through swssconfig command. The expectation is to see these entries on VPP end (data plane side).
 
-From here on we will referer the terms, **FDB - Forwading Data Base is on control plane SONiC** and **FIB - Fowarding Information Base on data plane VPP** .
+From here on refer to the terms, **FDB - Forwading Data Base is on control plane SONiC** and **FIB - Fowarding Information Base on data plane VPP**.
 
-To start with we can see in the below FDB table there is no Entry added yet on SONiC Control plane whereas few FIB entries are learnt when pings are run across the hosts 1 to 6. Each switch maintains its FIB which contains corresponding MAC address of Hosts learnt on that switch. Lets consider Switch 1 running on sonic-br1 container to test the feature as below,
+Examining the FDB table below using 'fdbshow' command, it is evident that no entries have been appended to the SONiC Control plane. Conversely, upon executing ping operations between hosts 1 to 6, certain FIB entries are added. Each switch maintains its own FIB, with the respective MAC addresses of the hosts learned on that particular switch. For the purpose of evaluating the feature, consider below scenario invloving SONiC Switch 1 configured as sonic-br1 container.
 
 ```
 fdbshow
@@ -341,7 +341,7 @@ For FDB Entry addition on SONiC via config file, an fdbadd.json file with Sample
   }
 ```
 
-To add the entries we created in fdbadd.json onto SONiC FDB, run the below command. The FDB table on SONiC and VPP L2 FIB table should look similar to the below which contains our newly added entries plus dynamically learnt entries on data plane.
+To add the entries we've created in fdbadd.json onto SONiC FDB, run the below command. The FDB table on SONiC and VPP L2 FIB table should look similar to the below which contains the newly added entries plus dynamically learnt entries on data plane( by running pings across the hosts 1-6 ).
 
 ```
 swssconfig ./fdbadd.json 
@@ -385,8 +385,7 @@ vppctl show l2fib all
 L2FIB total/learned entries: 12/3  Last scan time: 0.0000e0sec  Learn limit: 16777216 
 ```
 
-Similarly if we want to delete the previously added FDB Entries, we need to create another config file fdbdel.json which has previously added FDB_ENTRY info but "OP" set to be "DEL" since this is Delete operation from SONiC side.
-Running the below command will result in the following tables on SONiC and VPP side.
+For deletion of previously added FDB Entries, it is necessary to create an additional config file fdbdel.json. This file must include the previously added FDB_ENTRY information with the "OP" set to "DEL," signifying the deletion operation from the SONiC perspective. Execution of the provided command will yield the below tables on the SONiC and VPP sides.
 
 ```
 swssconfig ./fdbdel.json
@@ -413,17 +412,18 @@ vppctl show l2fib all
 L2FIB total/learned entries: 6/3  Last scan time: 0.0000e0sec  Learn limit: 16777216 
 ```
 
-We could see that all the STATIC and DYNAMIC FDB Entries added previously via config file are now deleted both on SONiC and VPP side. VPP can still have valid enties since learning is enabled on VPP.
+
+Evidently, all STATIC and DYNAMIC FDB Entries previously added via the configuration file are now deleted, both on SONiC and VPP sides. VPP may still retain valid entries since learning functionality is enabled on the VPP side.
 
 ## FDB_FLUSH
-Flushing of FDB Entries are done in three ways as below, but on SONiC currently we're supporting below two modes of Flushing of Dynamically learnt entries on VPP side.
-- Flush by Port ( Example: Flush all entries on Ethernet0 )
-- Flush by VLAN ID ( Example: Flush all entries on bridge with particular VLAN ID)
+Flushing of FDB Entries can be accomplished through three methods as outlined below. Presently, SONiC supports the following two modes for flushing dynamically learned entries on the VPP side.
+- Flush by Interface/Port ( Example: Flush all entries on Ethernet0 )
+- Flush by Bridge/VLAN ID ( Example: Flush all entries on bridge with particular VLAN ID)
 - Flush all entries
 \* Please note that VPP Flushes only Dynamically learnt entries as STATIC type entries can only be deleted.
 
 
-1. To demonstrate FLUSH by Port, Lets go back to our config file fdbadd.json to add the sample FDB entries using swssconfig command. Below should be the FDB and FIB table look like.
+1. To illustrate FLUSH by Port/Interface, revisit the configuration file fdbadd.json to append sample FDB entries using the swssconfig command which should result in the FDB and FIB tables as depicted below.
 
 ```
 fdbshow
@@ -495,8 +495,7 @@ vppctl show l2fib all
  20:20:20:20:20:20    2      2      0/0      no      *      -     -             host-ac2           
 L2FIB total/learned entries: 11/5  Last scan time: 1.3651e-2sec  Learn limit: 16777216 
 ```
-We can observe that on the Interface ``host-ac3`` which corresponds to **"Ethernet2"** the above learnt MAC address is flushed.
-
+The MAC address learned on the Interface ``host-ac3``, corresponding to **"Ethernet2"** is flushed which can be observed from the above table .
 
 
 2. If FIB entries need to be cleared irrespective of Port and Bridge IDs, below SONiC command helps in flushing out all the dynamic entries learnt on VPP side. Here fdbclear has no parameters passed which by default flushes all of dynamically learnt entries on FIB table.
@@ -532,4 +531,4 @@ vppctl show l2fib all
  20:20:20:20:20:20    2      2      0/0      no      *      -     -             host-ac2           
 L2FIB total/learned entries: 6/0  Last scan time: 1.3682e-2sec  Learn limit: 16777216 
 ```
-Concluding the above all, SONiC+VPP now supports FDB\_ENTRY and FDB\_FLUSH with ADD/DEL operation and FLUSH of Dynamic Entries is also supported with this feature.
+Concluding the above all, SONiC+VPP now supports FDB_ENTRY with ADD/DEL operation along with FDB_FLUSH of Dynamic Entries are now supported with these features.

@@ -29,6 +29,15 @@
 
 using namespace saivpp;
 
+/**
+ * @brief FDB_ENTRY FLUSH Modes.
+ */
+typedef enum {
+    FLUSH_BY_INTERFACE = 1, /* Flushing DYNAMIC FDB_ENTRY on Interface */
+    FLUSH_BY_BD_ID = 2,     /* Flushing DYNAMIC FDB_ENTRY on Bridge */
+    FLUSH_ALL = 4,          /* Flushing all DYNAMIC FDB_ENTRY on all */
+} FDB_FLUSH_MODE;
+
 void SwitchStateBase::updateLocalDB(
         _In_ const sai_fdb_event_notification_data_t &data,
         _In_ sai_fdb_event_t fdb_event)
@@ -1178,7 +1187,8 @@ sai_status_t SwitchStateBase::vpp_fdbentry_add(
 
     if (get_status != SAI_STATUS_SUCCESS)
     {
-        SWSS_LOG_WARN("failed to get port vlan id from port %s", sai_serialize_object_id(port_id).c_str());
+        SWSS_LOG_ERROR("failed to get port vlan id from port %s",
+                sai_serialize_object_id(port_id).c_str());
         return SAI_STATUS_FAILURE;
     }
 
@@ -1188,14 +1198,13 @@ sai_status_t SwitchStateBase::vpp_fdbentry_add(
     if (vpp_get_hwif_name(port_id, 0, ifname) == true) 
     {
         const char *hwif_name = ifname.c_str();
-        SWSS_LOG_NOTICE(" FDB_ENTRY on hwif_name %s ", hwif_name);
         auto ret = l2fib_add_del(hwif_name, fdb_entry.mac_address, bd_id, is_add, is_static);
-        SWSS_LOG_NOTICE("FDB_Entry Added Success: %d", ret);
+        SWSS_LOG_NOTICE("FDB Entry Added on hwif_name %s Successful ret_val: %d", hwif_name, ret);
 
     }
     else
     {
-        SWSS_LOG_ERROR("FDB: Invalid ObjectID for the hwif on this bridge");
+        SWSS_LOG_ERROR("FDB_ENTRY failed because of INVALID PORT_ID");
 
         return SAI_STATUS_FAILURE;
     }
@@ -1221,8 +1230,8 @@ sai_status_t SwitchStateBase::vpp_fdbentry_del(
 	attr_list[0].id = SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID;
     /* Attribute#2 */
     attr_list[1].id = SAI_FDB_ENTRY_ATTR_TYPE;
-    
-	if (get(SAI_OBJECT_TYPE_FDB_ENTRY, serializedObjectId, 1, &attr_list[0]) == SAI_STATUS_SUCCESS)
+
+    if (get(SAI_OBJECT_TYPE_FDB_ENTRY, serializedObjectId, 1, &attr_list[0]) == SAI_STATUS_SUCCESS)
     {
        if (SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID == attr_list[0].id)
         {
@@ -1230,6 +1239,7 @@ sai_status_t SwitchStateBase::vpp_fdbentry_del(
         }
         else
         {
+            SWSS_LOG_ERROR("DELETE FDB_ENTRY failed because of INVALID ATTR BRIDGE_PORT_ID");
             return SAI_STATUS_FAILURE;
         }
 
@@ -1240,14 +1250,15 @@ sai_status_t SwitchStateBase::vpp_fdbentry_del(
                 is_static = (attr_list[1].value.s32 == SAI_FDB_ENTRY_TYPE_STATIC ? true : false);
             }
             else
-            {  
+            {
+                SWSS_LOG_ERROR("DELETE FDB_ENTRY failed because of INVALID ATTR ENTRY TYPE");
                 return SAI_STATUS_FAILURE;
             }
         }
     }
     else
     {
-        SWSS_LOG_NOTICE(" Invaid Attribute IDs passed for FDB Entry Delete");
+        SWSS_LOG_ERROR(" Invaid Attribute IDs passed for DELETE FDB_ENTRY");
         return SAI_STATUS_FAILURE;
     }
     bool is_add = false; /* Deleting the entry in FDB*/
@@ -1255,7 +1266,7 @@ sai_status_t SwitchStateBase::vpp_fdbentry_del(
     sai_object_type_t obj_type = objectTypeQuery(br_port_id);
     if (obj_type != SAI_OBJECT_TYPE_BRIDGE_PORT)
     {
-        SWSS_LOG_NOTICE("SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID=%s expected to be PORT but is: %s",
+        SWSS_LOG_ERROR("SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID=%s expected to be PORT but is: %s",
                 sai_serialize_object_id(br_port_id).c_str(),
                 sai_serialize_object_type(obj_type).c_str());
 
@@ -1270,13 +1281,13 @@ sai_status_t SwitchStateBase::vpp_fdbentry_del(
 
     if (obj_type != SAI_OBJECT_TYPE_PORT)
     {
-        SWSS_LOG_NOTICE("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT but is: %s",
+        SWSS_LOG_ERROR("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT but is: %s",
                 sai_serialize_object_id(port_id).c_str(),
                 sai_serialize_object_type(obj_type).c_str());
         return SAI_STATUS_FAILURE;
     }
 
-    /* we need the VLAN ID attached based on the Port_ID */
+    /* Need the VLAN ID attached based on the Port_ID */
     sai_attribute_t attr;
     attr.id = SAI_PORT_ATTR_PORT_VLAN_ID;
 
@@ -1284,7 +1295,7 @@ sai_status_t SwitchStateBase::vpp_fdbentry_del(
 
     if (get_status != SAI_STATUS_SUCCESS)
     {
-        SWSS_LOG_WARN("failed to get port vlan id from port %s",
+        SWSS_LOG_ERROR("failed to get port vlan id from port %s",
                 sai_serialize_object_id(port_id).c_str());
         return SAI_STATUS_FAILURE;
     }
@@ -1296,9 +1307,8 @@ sai_status_t SwitchStateBase::vpp_fdbentry_del(
     if (vpp_get_hwif_name(port_id, 0, ifname) == true) 
     {
         const char *hwif_name = ifname.c_str();
-        SWSS_LOG_NOTICE(" FDB_ENTRY delete on hwif_name: %s ", hwif_name);
         auto ret = l2fib_add_del(hwif_name, fdb_entry.mac_address, bd_id, is_add, is_static);
-        SWSS_LOG_NOTICE(" FDB_Entry delete Success: %d", ret);
+        SWSS_LOG_NOTICE(" Delete FDB_ENTRY on hwif_name %s Successful ret_val: %d", hwif_name, ret);
 
     }
     else
@@ -1331,13 +1341,13 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
         {
             case SAI_FDB_FLUSH_ATTR_BRIDGE_PORT_ID:
                 {
-                    mode |=1;
+                    mode |= FLUSH_BY_INTERFACE;
                     br_port_id = attribute.value.oid;
                     sai_object_type_t obj_type = objectTypeQuery(br_port_id);
 
                     if (obj_type != SAI_OBJECT_TYPE_BRIDGE_PORT)
                     {
-                        SWSS_LOG_NOTICE("SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID=%s expected to be PORT but is: %s",
+                        SWSS_LOG_ERROR("SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID=%s expected to be PORT but is: %s",
                                 sai_serialize_object_id(br_port_id).c_str(),
                                 sai_serialize_object_type(obj_type).c_str());
 
@@ -1347,17 +1357,18 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
                 break;
             case SAI_FDB_FLUSH_ATTR_BV_ID:
                 {
-                    mode |= 2;
-                    bd_id = attribute.value.u16; 
+                    mode |= FLUSH_BY_BD_ID;
+                    bd_id = attribute.value.u16;
                 }
                 break;
 
             case SAI_FDB_FLUSH_ATTR_ENTRY_TYPE:
                 {
-                    mode |= 4;
-                    is_static_entry = attribute.value.s32; 
+                    mode |= FLUSH_ALL;
+                    is_static_entry = attribute.value.s32;
                     if ( is_static_entry == SAI_FDB_FLUSH_ENTRY_TYPE_STATIC)
                     {
+                        SWSS_LOG_ERROR(" Cannot Flush STATIC FDB_ENTRY OBJECTS");
                         return SAI_STATUS_FAILURE;
                     }
                 }
@@ -1369,11 +1380,17 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
                 break;
         }
     }
-    SWSS_LOG_NOTICE("FDB_FLUSH mode is : %d [1,5: Interface, 2,6: Bridge, 3,4,7: Flush ALL, 0: INVALID]", mode);
+    /*
+    Here three cases are handled, the FDB_ENTRY's are flushed based on the Attributes set,
+    1. If Interface and Type(DYNAMIC is expected here), FLUSH by Interface.
+    2. If Bridge_ID(VLAN_ID for .1q) and Type(DYNAMIC is expected here), FLUSH by Bridge ID.
+    3. If only Type (DYNAMIC) is set then SONiC FLUSH ALL the dynamic entries.
+    */
+    SWSS_LOG_NOTICE("VPP_FDB_FLUSH mode is : %d [1,5: Interface, 2,6: Bridge, 3,4,7: Flush ALL, 0: INVALID]", mode);
     switch (mode)
     {
-        case 1:
-        case 5:/*flush by interface*/
+        case FLUSH_BY_INTERFACE:
+        case FLUSH_BY_INTERFACE | FLUSH_ALL:/*flush by interface*/
             {
                 auto br_port_attrs = m_objectHash.at(SAI_OBJECT_TYPE_BRIDGE_PORT).at(sai_serialize_object_id(br_port_id));
                 auto meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_BRIDGE_PORT, SAI_BRIDGE_PORT_ATTR_PORT_ID);
@@ -1383,7 +1400,7 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
 
                 if (obj_type != SAI_OBJECT_TYPE_PORT)
                 {
-                    SWSS_LOG_WARN("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT but is: %s",
+                    SWSS_LOG_ERROR("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT but is: %s",
                             sai_serialize_object_id(port_id).c_str(),
                             sai_serialize_object_type(obj_type).c_str());
                     return SAI_STATUS_FAILURE;
@@ -1392,9 +1409,8 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
                 if (vpp_get_hwif_name(port_id, 0, ifname) == true) 
                 {
                     const char *hwif_name = ifname.c_str();
-                    SWSS_LOG_NOTICE(" Flush interface FDB_ENTRY hwif_name is %s ", hwif_name);
                     auto ret = l2fib_flush_int(hwif_name);
-                    SWSS_LOG_NOTICE(" Flush interface by bridge port Successfully %d", ret);
+                    SWSS_LOG_NOTICE(" Flush by interface on hwif_name %s  Successful ret_val: %d", hwif_name, ret);
                 }
                 else
                 {
@@ -1405,26 +1421,25 @@ sai_status_t SwitchStateBase::vpp_fdbentry_flush(
             }
             break;
 
-        case 2:
-        case 6:/*flush by bd_id/vlan id*/
+        case FLUSH_BY_BD_ID:
+        case FLUSH_BY_BD_ID | FLUSH_ALL:/*flush by bd_id/vlan id*/
             {
-                SWSS_LOG_NOTICE(" Flush bd_id/vlan id FDB_ENTRY hwif_name is %d ", bd_id);
                 auto ret = l2fib_flush_bd(bd_id);
-                SWSS_LOG_NOTICE(" Flush bd_id Successfully %d", ret);  
+                SWSS_LOG_NOTICE(" Flush on bd_id %d Successfull ret_val: %d",bd_id, ret);
             }
             break;
 
-        case 3:
-        case 4: 
-        case 7: /*flush all*/
+        case FLUSH_BY_INTERFACE | FLUSH_BY_BD_ID:
+        case FLUSH_ALL:
+        case FLUSH_BY_INTERFACE| FLUSH_BY_BD_ID| FLUSH_ALL: /*flush all*/
             {
                 auto ret = l2fib_flush_all();
-                SWSS_LOG_NOTICE(" Flush ALL fdb entry %d", ret);
+                SWSS_LOG_NOTICE(" Flush ALL fdb entry ret_val: %d", ret);
             }
             break;
 
         default:
-            SWSS_LOG_NOTICE(" Unable to find attrs for FDB_FLUSH %d", mode);
+            SWSS_LOG_ERROR(" Unable to find attrs for FDB_FLUSH %d", mode);
             return SAI_STATUS_FAILURE;
             break;
 
