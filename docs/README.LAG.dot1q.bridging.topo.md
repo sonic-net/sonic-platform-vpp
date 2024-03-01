@@ -198,20 +198,20 @@ config interface startup Ethernet2
 config interface startup Ethernet3
 
 config portchannel add PortChannel10
+config portchannel member add PortChannel10 Ethernet1
 config portchannel member add PortChannel10 Ethernet2
-config portchannel member add PortChannel10 Ethernet3
 
 config vlan add 10
 config vlan member add 10 PortChannel10
-config vlan member add 10 Ethernet1
+config vlan member add 10 Ethernet3
 
 config vlan add 20
 config vlan member add 20 Ethernet0
-config vlan member add 20 Ethernet1
+config vlan member add 20 Ethernet3
 
 config vlan add 30
 config vlan member add 30 Ethernet0
-config vlan member add 30 Ethernet1
+config vlan member add 30 Ethernet3
 ```
 
 Get into SONIC-C container and configure vlan, vlan bridging
@@ -534,7 +534,7 @@ ipv4-VRF:0, fib_index:0, flow hash:[src dst sport dport proto flowlabel ] epoch:
 ```
 
 ```
-check the connectivity on portchannel interface
+check the connectivity on portchannel interface by starting ping between vlan 10 hosts
 
 ping 10.0.1.2
 PING 10.0.1.2 (10.0.1.2) 56(84) bytes of data.
@@ -543,10 +543,10 @@ PING 10.0.1.2 (10.0.1.2) 56(84) bytes of data.
 
 check the packets on portchannel member interfaces
 
-shutdown one member interface of portchannel, verify the connectivity still fine and verify portchannel member counters
-shutdown second member interface of portchannel, verify the connectivity is lost  and verify portchannel member counters
-bring up second member interface of portchannel back, verify the connectivity is restored and verify portchannel member counters
-bring up other member interface of portchannel back, verify the connectivity is restored and verify portchannel member counters
+1. shutdown one member interface of portchannel, verify the connectivity still fine and verify portchannel member counters
+2. shutdown second member interface of portchannel, verify the connectivity is lost  and verify portchannel member counters
+3. bring up second member interface of portchannel back, verify the connectivity is restored and verify portchannel member counters
+4. bring up other member interface of portchannel back, verify the connectivity is restored and verify portchannel member counters
 ```
 Verification of packet on VPP data plane for vlan tagging
 Start the ping and then do show trace

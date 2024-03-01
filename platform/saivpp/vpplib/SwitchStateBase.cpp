@@ -257,14 +257,12 @@ sai_status_t SwitchStateBase::create(
     {
        sai_object_id_t object_id;
        sai_deserialize_object_id(serializedObjectId, object_id);
-       SWSS_LOG_NOTICE("BALA: create serialized: entry %s objectType  %d attr count %d", serializedObjectId.c_str(), object_type, attr_count);
        return createLag(object_id, switch_id, attr_count, attr_list);
     }
     if (object_type == SAI_OBJECT_TYPE_LAG_MEMBER)
     {
        sai_object_id_t object_id;
        sai_deserialize_object_id(serializedObjectId, object_id);
-       SWSS_LOG_NOTICE("create serialized: entry %s objectType  %d attr count %d", serializedObjectId.c_str(), object_type, attr_count);
        return createLagMember(object_id, switch_id, attr_count, attr_list);
     }
 

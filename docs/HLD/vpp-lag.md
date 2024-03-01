@@ -47,6 +47,18 @@ This document describes the high level design of integrating LAG and bridging fu
 <a id="item-4"></a>
 ## Introduction
 LAG functionality is supported in SONiC with port channel interfaces. 
+VPP port channel supports modes as active-standby , active-active or LACP mode. But SONiC does not have a way program
+this through configuration. Hence the portchannel mode as default active-active by giving ROUND_ROBIN value. Similarly
+VPP supports different load balancing algorithms for distributing the traffic in active-active mode. But again SONIC
+does not support a way to configure any load balancing algorithm, hence it's programmed as BOND_API_LB_ALGO_L2 by default.
+If there is any defined requirement in future to use different load balancing algorithm to use by default, it can be
+changed accordingly.
+
+Some parameters the SONIC supports are not supported by VPP. The attributes like min-links for portchannel group, fast-rate
+etc are not supported by VPP.
+
+To enable LACP on VPP, the VPP should be rebuilt with LACP plugin added. Currently sonic-platform-vpp repo uses prebuilt
+vpp binary. Hence it needs some changes the way this repo is using the VPP
 
  
 <a id="item-5"></a>

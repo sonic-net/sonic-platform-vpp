@@ -1158,25 +1158,20 @@ sai_status_t SwitchStateBase::vpp_create_lag(
         _In_ const sai_attribute_t *attr_list)
 {
     uint32_t bond_id, mode, lb;
-    int32_t  ret;
     uint32_t swif_idx = ~0;
     const char *hw_ifname;
     SWSS_LOG_ENTER();
 
-    //set mode and lb
+    //set mode and lb. ONiC config does not have provision to pass mode and load balancing algorithm
     mode = VPP_BOND_API_MODE_ROUND_ROBIN;
+
+    //if LACP is to be enabled in VPP
+    //mode = VPP_BOND_API_MODE_LACP;
     lb = VPP_BOND_API_LB_ALGO_L2;
     bond_id = ~0;
 
-    ret = create_bond_interface(bond_id, mode, lb, &swif_idx);
-
-    if (ret)
-    {
-        SWSS_LOG_ERROR("vpp bond interface create failed\n");
-        return SAI_STATUS_SUCCESS;
-    }
-
-    SWSS_LOG_NOTICE("Bond interfae if index:%d\n", swif_idx);
+    create_bond_interface(bond_id, mode, lb, &swif_idx);
+    SWSS_LOG_NOTICE("vpp bond interfae created if index:%d\n", swif_idx);
     //update the lag to bond map
     m_lag_bond_map[lag_id] = swif_idx;
     refresh_interfaces_list();
