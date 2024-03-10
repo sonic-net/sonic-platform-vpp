@@ -190,7 +190,7 @@ At the time of writing the document, we do not have any VPP specific changes for
 
 <a id="item-111"></a>
 ### API Semantics
-The SAI APIs are a set of CRUD operations on an Object type (~100+). Each object type has specific atributes. 
+The SAI APIs are a set of CRUD operations on an Object type (~100+). Each object type has specific attributes.
 
 VPP supports a message passing interface called VPP Binary APIs. VPP supports the following method types 
  - Request/Reply\
@@ -215,7 +215,7 @@ The flow is
  - There is a Request-Response pattern between the libsaivpp and VPP. VPP sends back a response to each request. It returns an OK in case the API was processed succesfully. In case of error the libsaivpp propagates the error via the SAI API error response message to the control plane. 
 
 The API  mapping is often non-trivial and requires state to be maintained for objects configured. The fact the VPP unlike SAI does not support 
- - Single atribute update or 
+ - Single attribute update or
  - Bulk updates
 
 making the translation non-trivial.  
