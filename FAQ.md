@@ -8,7 +8,7 @@
 
    Please check the [TODO.md](TODO.md) on list of features to be implemented in the near future.
 
-> Note - interface queuing, buffering, WRED, policing features not supported yet.
+> Note - interface queuing, buffering, WRED are policing features are not supported yet.
 
  * Why some of the config and show commands don't run in the single container SONiC-VPP ?
 
