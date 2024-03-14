@@ -26,13 +26,12 @@ cd ./build/sonic-buildimage
 
 # Below is the build label information
 
-#384846	20231012.7	master	Azure.sonic-buildimage.official.vs	succeeded	2023-10-12T08:18:39	2023-10-12T12:32:39	be22217b64
-WORKING_LABEL=be22217b64
+#498790	20240314.7	202311	Azure.sonic-buildimage.official.vs	succeeded	2024-03-14T08:17:57	2024-03-14T13:08:37	4ae9a3d1e1
+WORKING_LABEL=4ae9a3d1e1
 
 SONIC_CHECKOUT_LABEL=${SONIC_CHECKOUT_LABEL:=$WORKING_LABEL}
 
 git checkout $SONIC_CHECKOUT_LABEL
-
 make init
 #if [ "$http_proxy" != "" ]; then
 #    make http_proxy=$http_proxy https_proxy=$https_proxy init
