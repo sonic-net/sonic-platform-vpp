@@ -50,6 +50,10 @@ $(DOCKER_SONIC_VPP)_DEPENDS += $(LIBSWSSCOMMON_DBG) \
                               $(SYNCD_VPP_DBG)
 endif
 
+ifeq ($(INCLUDE_FIPS), y)
+$(DOCKER_SONIC_VPP)_DEPENDS += $(FIPS_KRB5_ALL)
+endif
+
 $(DOCKER_SONIC_VPP)_FILES += $(CONFIGDB_LOAD_SCRIPT) \
                             $(ARP_UPDATE_SCRIPT) \
                             $(ARP_UPDATE_VARS_TEMPLATE) \

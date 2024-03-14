@@ -12,18 +12,21 @@
 # limitations under the License.
 
 diff --git a/files/build_templates/docker_image_ctl.j2 b/files/build_templates/docker_image_ctl.j2
-index 0a4391cf6..f8e04f479 100644
+index 95c2e1fa5..ca7478be6 100644
 --- a/files/build_templates/docker_image_ctl.j2
 +++ b/files/build_templates/docker_image_ctl.j2
-@@ -599,6 +599,11 @@ start() {
-         --env "NAMESPACE_PREFIX"="$NAMESPACE_PREFIX" \
-         --env "NAMESPACE_COUNT"=$NUM_ASIC \
+@@ -649,7 +649,12 @@ start() {
+         --env "NAMESPACE_COUNT"="$NUM_ASIC" \
+         --env "DEV"="$DEV" \
          --env "CONTAINER_NAME"=$DOCKERNAME \
+-        --env "SYSLOG_TARGET_IP"=$SYSLOG_TARGET_IP \
 +{%- if sonic_asic_platform == "vpp" %}
 +{%- if docker_container_name == "syncd" %}
 +        --env-file /etc/sonic/vpp/syncd_vpp_env \
 +{%- endif %}
 +{%- endif %}
++       --env "SYSLOG_TARGET_IP"=$SYSLOG_TARGET_IP \
+         --env "PLATFORM"=$PLATFORM \
          --name=$DOCKERNAME \
  {%- if docker_container_name == "gbsyncd" %}
-         -v /var/run/docker-syncd$DEV:/var/run/sswsyncd \
+
