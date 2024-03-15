@@ -256,6 +256,10 @@ sai_status_t SwitchStateBase::create(
     {
        return FdbEntryadd(serializedObjectId, switch_id, attr_count, attr_list);
     }
+    if (object_type == SAI_OBJECT_TYPE_BFD_SESSION)
+    {
+       return bfd_session_add(serializedObjectId, switch_id, attr_count, attr_list);
+    }
 
     return create_internal(object_type, serializedObjectId, switch_id, attr_count, attr_list);
 }
@@ -534,6 +538,10 @@ sai_status_t SwitchStateBase::remove(
     else if (object_type == SAI_OBJECT_TYPE_FDB_ENTRY)
     {
         return FdbEntrydel(serializedObjectId);
+    }
+    else if (object_type == SAI_OBJECT_TYPE_BFD_SESSION)
+    {
+        return bfd_session_del(serializedObjectId);
     }
 
     return remove_internal(object_type, serializedObjectId);

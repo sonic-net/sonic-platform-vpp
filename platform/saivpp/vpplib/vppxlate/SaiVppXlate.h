@@ -204,6 +204,10 @@ typedef enum {
     extern int l2fib_flush_all();
     extern int l2fib_flush_int(const char *hwif_name);
     extern int l2fib_flush_bd(uint32_t bd_id);
+    extern int bfd_udp_add(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr, uint8_t detect_mult,\
+                           uint32_t desired_min_tx, uint32_t required_min_rx);
+    extern int bfd_udp_del(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr);
+
 
 #ifdef __cplusplus
 }
