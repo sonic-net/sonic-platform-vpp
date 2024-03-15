@@ -14,6 +14,7 @@ Rev v0.1
 6. [802.1Q bridge domain Testing](#item-6)
 7. [802.1Q VLAN Routing](#item-7)
 8. [802.1Q VLAN Routing Testing](#item-8)
+9. [FDB_ENTRY and FDB_FLUSH](#item-9)
 
 <br/>
 <br/>
@@ -25,6 +26,7 @@ Rev v0.1
 |-----|------|-----------|
 |v0.1 | 25/12/2023 | Bendrapu Balareddy (Cisco), Sameer Nanajkar (Cisco) |
 |v0.2 | 29/01/2024 | Bendrapu Balareddy (Cisco), Sameer Nanajkar (Cisco) |
+|v0.3 | 12/02/2024 | Viswa Bodagala (Cisco), Bendrapu Balareddy (Cisco), Sameer Nanajkar (Cisco) |
 
 
 <br/>
@@ -44,6 +46,10 @@ This document describes the high level design of integrating vlan bridging funct
 **VPP**: Vector Packet Processing (VPP) technology based high performance packet processing stack that can run on commodity CPUs. For more details see [What is VPP](https://wiki.fd.io/view/VPP/What_is_VPP%3F)
 
 **VLAN**:  Virtual LAN
+
+**FDB**: Fowarding DataBase (used by SONiC)
+
+**FIB**: Forwading Information Base (used by VPP)
 
 
 <br/>
@@ -94,7 +100,11 @@ the traffice when leaving the BVI interface and pushes the tag for the traffic c
 ## 802.1Q VLAN Routing Test Topology
  
 ![Vlan Routing Topology](../8021Q-Bridge-Routing-Topo.png) 
- 
+
+<a id="item-9"></a>
+## FDB\_ENTRY with ADD/DEL and FDB\_FLUSH
+SONiC supports MAC database called FDB_TABLE for statically configured MAC entries and also it can learn MAC from the packets are forwarded to SONiC control plane. VPP switch learns the MAC addresses and maintains them in FIB table. SONiC supports ADD, DEL, FLUSH of MAC entries configuration and this is used to add, delete or flush the entries to/from VPP FIB. The MAC address learnt dynamically by VPP can be flushed per port/interface or per VLAN ID (bridge ID) or by default flush on all PORT IDs (interfaces) and VLAN IDs (bridges). Currently flushing of only dynamic entries that are learnt on VPP is supported. Statically added MAC entries and Entries added via Config file needs to be removed explicitly.
+
 ## Troubleshooting
 There are some SONiC tools to debug SONiC side of functionality such as show commands, redis-dump, log files /var/log/syslog, /var/log/swss/ etc. You can connect gdb to the running processes and get useful debug information provided the image is built with INSTALL_DEBUG_TOOLS=y option.
  

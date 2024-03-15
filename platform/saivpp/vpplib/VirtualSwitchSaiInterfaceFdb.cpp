@@ -294,6 +294,9 @@ sai_status_t VirtualSwitchSaiInterface::flushFdbEntries(
         data.fdb_entry.bv_id = vlanid->value.oid;
     }
 
+    /* Flushing the FDB Entrys based on Bridge port ID and VLAN ID sent to VPP*/
+    ss->vpp_fdbentry_flush(switch_id, attr_count, attr_list);
+
     if (static_fdbs.size())
     {
         SWSS_LOG_NOTICE("flushing %zu static entries", static_fdbs.size());
