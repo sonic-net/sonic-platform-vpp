@@ -20,7 +20,7 @@ This sections lists pending areas of work for SONiC-VPP. At a high level the fol
  
 
 # Execution Phasing
-Note- Phases 2 and beyond needs agreement between the various stateholders. The list may change accordingly 
+Note- Phases 2 and beyond needs agreement between the various stakeholders. The list may change accordingly
 
 - **Phase 1**\
   Initial code supports the following functionality

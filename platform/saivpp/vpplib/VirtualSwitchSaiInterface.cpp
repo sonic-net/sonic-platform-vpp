@@ -181,7 +181,7 @@ std::shared_ptr<WarmBootState> VirtualSwitchSaiInterface::extractWarmBootState(
     return state;
 }
 
-bool VirtualSwitchSaiInterface::validate_switch_warm_boot_atributes(
+bool VirtualSwitchSaiInterface::validate_switch_warm_boot_attributes(
         _In_ uint32_t attr_count,
         _In_ const sai_attribute_t *attr_list) const
 {
@@ -731,7 +731,7 @@ sai_status_t VirtualSwitchSaiInterface::create(
 
         if (config->m_bootType == SAI_VPP_BOOT_TYPE_WARM)
         {
-            if (!validate_switch_warm_boot_atributes(attr_count, attr_list))
+            if (!validate_switch_warm_boot_attributes(attr_count, attr_list))
             {
                 SWSS_LOG_ERROR("invalid attribute passed during warm boot");
 

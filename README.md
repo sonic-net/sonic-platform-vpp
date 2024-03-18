@@ -1,7 +1,7 @@
 # Description
 SONiC-VPP is a platform under SONIC that supports VPP data plane. For more details about VPP see [What is VPP](https://s3-docs.fd.io/vpp/23.06/) 
 
-This repo contains  scripts, Makefiles, configuration file, Docker files etc to build a SONIC-VPP image. It also pulls some extra git repos and makes these repos part of SONiC build. In this process it will prompt for user/password while cloning. There are some VPP platform specific Makefile, config files which are applied to the sonic-buildimage repo to fecilitate the successful build of the SONiC-VPP image.
+This repo contains  scripts, Makefiles, configuration file, Docker files etc to build a SONIC-VPP image. It also pulls some extra git repos and makes these repos part of SONiC build. In this process it will prompt for user/password while cloning. There are some VPP platform specific Makefile, config files which are applied to the sonic-buildimage repo to facilitate the successful build of the SONiC-VPP image.
 
 > Note: The first build takes good amount of time. The SONiC image build has two parts to it, [backend and frontend](https://github.com/sonic-net/sonic-buildimage/blob/master/README.buildsystem.md). The backend consumes a lot of time when the build is done first time. The follow on builds only do the frontend.
 

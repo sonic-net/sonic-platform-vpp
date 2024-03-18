@@ -1,14 +1,14 @@
 ## Some common queries
  * What features are supported now ?
 
-   In Phase 0 below fearures are supported
+   In Phase 0 below features are supported
    * Interface configuration, IP address configuration
    * IPv4,IPv6 routing, static routes, BGP routing protocol
    * sub-interfaces, VRF
 
    Please check the [TODO.md](TODO.md) on list of features to be implemented in the near future.
 
-> Note - interface queueing, buffering, WRED, policing features not supported yet.
+> Note - interface queuing, buffering, WRED are policing features are not supported yet.
 
  * Why some of the config and show commands don't run in the single container SONiC-VPP ?
 
@@ -24,7 +24,7 @@
 
  * What kind network ports supported ?
 
-   Broardly Virtual interfaces and PCI based network interfaces are supported.
+   Broadly Virtual interfaces and PCI based network interfaces are supported.
    * Virtual interfaces
      * veth pair interface, One is passed to the SONiC-VPP container and the other end is in the host
    * PCI based ports
@@ -34,7 +34,7 @@
  * Packet IO stops after syncd or vpp processes crash ?
 
    Its a known limitation. The syncd does not yet support resyncing of configuration.
-   The only way is to restart the container (in case of single container) or restart the VM (in case of VM iamge)
+   The only way is to restart the container (in case of single container) or restart the VM (in case of VM image)
 
  * How to configure BGP ?
 
