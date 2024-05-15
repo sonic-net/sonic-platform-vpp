@@ -25,6 +25,8 @@
 #include "EventPayloadNetLinkMsg.h"
 #include "MACsecManager.h"
 #include "IpVrfInfo.h"
+#include "SaiObjectDB.h"
+#include "TunnelManager.h"
 
 #include <set>
 #include <unordered_set>
@@ -42,6 +44,13 @@
 #define CHECK_STATUS(status) {                                  \
     sai_status_t _status = (status);                            \
     if (_status != SAI_STATUS_SUCCESS) { SWSS_LOG_ERROR("ERROR status %d", status); return _status; } }
+#define CHECK_STATUS_W_MSG(status, msg, ...) {                                  \
+    sai_status_t _status = (status);                            \
+    if (_status != SAI_STATUS_SUCCESS) { \
+        char buffer[512]; \
+        snprintf(buffer, 512, msg, ##__VA_ARGS__); \
+        SWSS_LOG_ERROR("%s: status %d", buffer, status); \
+        return _status; } }
 
 typedef struct vpp_ace_cntr_info_ {
     sai_object_id_t tbl_oid;
@@ -335,12 +344,15 @@ namespace saivpp
                     _In_ sai_bulk_op_error_mode_t mode,
                     _Out_ sai_status_t *object_statuses);
 
-           virtual sai_status_t queryAttrEnumValuesCapability(
+            virtual sai_status_t queryAttrEnumValuesCapability(
                               _In_ sai_object_id_t switch_id,
                               _In_ sai_object_type_t object_type,
                               _In_ sai_attr_id_t attr_id,
                              _Inout_ sai_s32_list_t *enum_values_capability);
 
+            std::shared_ptr<SaiObject> get_sai_object(
+                    _In_ sai_object_type_t object_type,
+                    _In_ const std::string &serialized_object_id);
         protected:
 
             virtual sai_status_t remove_internal(
@@ -755,6 +767,12 @@ namespace saivpp
                     _In_ const sai_attribute_t *attr_list,
 		    _Out_ nexthop_grp_config_t **nxthop_group_cfg);
 
+	    sai_status_t createNexthop(
+		_In_ sai_object_id_t object_id,
+		_In_ sai_object_id_t switch_id,
+		_In_ uint32_t attr_count,
+		_In_ const sai_attribute_t *attr_list);
+                
         protected:
 	    sai_status_t createRouterif(
 		    _In_ sai_object_id_t object_id,
@@ -1041,5 +1059,12 @@ namespace saivpp
             std::map<std::string, std::shared_ptr<HostInterfaceInfo>> m_hostif_info_map;
 
             std::shared_ptr<RealObjectIdManager> m_realObjectIdManager;
+            
+            friend class TunnelManager;
+
+        private:
+            SaiObjectDB m_object_db;
+            TunnelManager m_tunnel_mgr;
+        
     };
 }

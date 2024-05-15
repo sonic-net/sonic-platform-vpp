@@ -33,7 +33,9 @@ SwitchStateBase::SwitchStateBase(
         _In_ std::shared_ptr<RealObjectIdManager> manager,
         _In_ std::shared_ptr<SwitchConfig> config):
     SwitchState(switch_id, config),
-    m_realObjectIdManager(manager)
+    m_realObjectIdManager(manager),
+    m_object_db(this),
+    m_tunnel_mgr(this)
 {
     SWSS_LOG_ENTER();
 
@@ -46,7 +48,9 @@ SwitchStateBase::SwitchStateBase(
         _In_ std::shared_ptr<SwitchConfig> config,
         _In_ std::shared_ptr<WarmBootState> warmBootState):
     SwitchState(switch_id, config),
-    m_realObjectIdManager(manager)
+    m_realObjectIdManager(manager),
+    m_object_db(this),
+    m_tunnel_mgr(this)
 {
     SWSS_LOG_ENTER();
 
@@ -188,6 +192,13 @@ sai_status_t SwitchStateBase::create(
         return addIpRoute(serializedObjectId, switch_id, attr_count, attr_list);
     }
 
+    if (object_type == SAI_OBJECT_TYPE_NEXT_HOP)
+    {
+        sai_object_id_t object_id;
+        sai_deserialize_object_id(serializedObjectId, object_id);        
+        return createNexthop(object_id, switch_id, attr_count, attr_list);
+    }
+    
     if (object_type == SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER)
     {
         return NexthopGrpMemberAdd(serializedObjectId, switch_id, attr_count, attr_list);
@@ -317,7 +328,7 @@ sai_status_t SwitchStateBase::create_internal(
 
         objectHash[serializedObjectId][a->getAttrMetadata()->attridname] = a;
     }
-
+    m_object_db.add(object_type, serializedObjectId, switch_id, attr_count, attr_list);
     return SAI_STATUS_SUCCESS;
 }
 
@@ -477,6 +488,11 @@ sai_status_t SwitchStateBase::remove(
     {
         return NexthopGrpRemove(serializedObjectId);
     }
+    
+    if (object_type == SAI_OBJECT_TYPE_NEXT_HOP)
+    {
+        //return NexthopRemove(serializedObjectId);
+    }
 
     if (object_type == SAI_OBJECT_TYPE_NEIGHBOR_ENTRY)
     {
@@ -538,6 +554,8 @@ sai_status_t SwitchStateBase::remove_internal(
     SWSS_LOG_ENTER();
 
     SWSS_LOG_INFO("removing object: %s", serializedObjectId.c_str());
+    
+    m_object_db.remove(object_type, serializedObjectId);
 
     auto &objectHash = m_objectHash.at(object_type);
 
@@ -1076,6 +1094,14 @@ sai_status_t SwitchStateBase::bulkSet(
     }
 
     return status;
+}
+
+std::shared_ptr<SaiObject> 
+SwitchStateBase::get_sai_object(
+                _In_ sai_object_type_t object_type,
+                _In_ const std::string &serializedObjectId)
+{
+    return m_object_db.get(object_type, serializedObjectId);
 }
 
 int SwitchStateBase::get_default_gw_mac_address(

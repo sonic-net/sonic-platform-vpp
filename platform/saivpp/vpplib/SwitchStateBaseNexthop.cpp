@@ -248,9 +248,8 @@ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
     const sai_attribute_value_t  *next_hop;
     sai_object_id_t              next_hop_oid;
     uint32_t                     next_hop_index;
-    sai_ip_address_t ip_address;
-    sai_object_id_t nexthop_rif_oid = 0;
-
+    sai_ip_address_t             ip_address;
+    uint32_t                     next_hop_type;
     status = find_attrib_in_list(attr_count, attr_list, SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID,
                                  &next_hop, &next_hop_index);
     if (status != SAI_STATUS_SUCCESS) {
@@ -265,7 +264,8 @@ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
     attr.id = SAI_NEXT_HOP_ATTR_TYPE;
 
     CHECK_STATUS(get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr));
-    if (attr.value.s32 != SAI_NEXT_HOP_TYPE_IP) {
+    next_hop_type = attr.value.s32;
+    if (next_hop_type!= SAI_NEXT_HOP_TYPE_IP && next_hop_type != SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP) {
 	return SAI_STATUS_SUCCESS;
     }
     attr.id = SAI_NEXT_HOP_ATTR_IP;
@@ -276,11 +276,6 @@ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
         SWSS_LOG_ERROR("IP address missing in nexthop %s", sai_serialize_object_id(next_hop_oid).c_str());
         return SAI_STATUS_SUCCESS;
     }
-    attr.id = SAI_NEXT_HOP_ATTR_ROUTER_INTERFACE_ID;
-    if (get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS)
-    {
-	nexthop_rif_oid = attr.value.oid;
-    }
 
     nexthop_grp_config_t *nxthop_group;
 
@@ -289,7 +284,6 @@ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
     if (!nxthop_group) {
         return SAI_STATUS_FAILURE;
     }
-
     nexthop_grp_member_t *nxt_grp_member;
 
     nxthop_group->nmembers = 1;
@@ -298,9 +292,52 @@ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
     nxt_grp_member->addr = ip_address;
     nxt_grp_member->weight = 1;
     nxt_grp_member->seq_id = 0;
-    nxt_grp_member->rif_oid = nexthop_rif_oid;
+    switch (next_hop_type)
+    {
+    case SAI_NEXT_HOP_TYPE_IP:
+        attr.id = SAI_NEXT_HOP_ATTR_ROUTER_INTERFACE_ID;
+        if (get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS)
+        {
+            nxt_grp_member->rif_oid = attr.value.oid;
+        }
+        break;
+    case SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP:
+        {
+            std::string if_name;
+            if (m_tunnel_mgr.get_tunnel_if(next_hop_oid, if_name) == SAI_STATUS_SUCCESS) {
+                strncpy(nxt_grp_member->if_name, if_name.c_str(), sizeof(nxt_grp_member->if_name) - 1);
+            } else {
+                SWSS_LOG_ERROR("Failed to get tunnel interface name for nexthop %s",
+                            sai_serialize_object_id(next_hop_oid).c_str());
+                free(nxthop_group);
+                return SAI_STATUS_FAILURE;
+            }
+            break;
+        }
+    default:
+        break;
+    }
 
     *nxthop_group_cfg = nxthop_group;
 
     return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t 
+SwitchStateBase::createNexthop(
+		_In_ sai_object_id_t object_id,
+		_In_ sai_object_id_t switch_id,
+		_In_ uint32_t attr_count,
+		_In_ const sai_attribute_t *attr_list)
+{
+    const sai_attribute_value_t     *next_hop_type;
+    uint32_t                        attr_index;
+    CHECK_STATUS(find_attrib_in_list(attr_count, attr_list, SAI_NEXT_HOP_ATTR_TYPE,
+                                 &next_hop_type, &attr_index));
+    SWSS_LOG_ERROR("enter createNexthop %d==%d", next_hop_type->s32, SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP);
+    if (next_hop_type->s32 == SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP) {
+        //Deligate the creation of tunnel encap nexthop to tunnel manager
+        CHECK_STATUS(m_tunnel_mgr.create_tunnel_encap_nexthop(object_id, switch_id, attr_count, attr_list));
+    }
+    return create_internal(SAI_OBJECT_TYPE_NEXT_HOP, sai_serialize_object_id(object_id), switch_id, attr_count, attr_list);
 }
