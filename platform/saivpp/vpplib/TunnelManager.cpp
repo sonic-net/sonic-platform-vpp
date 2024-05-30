@@ -4,6 +4,8 @@
 #include "SaiObjectDB.h"
 #include "TunnelManager.h"
 #include "IpVrfInfo.h"
+#include "vppxlate/SaiVppXlate.h"
+#include "SwitchStateBaseUtils.h"
 
 using namespace saivpp;
 sai_status_t 
@@ -16,8 +18,10 @@ TunnelManager::create_tunnel_encap_nexthop(
     sai_attribute_t              attr;
     sai_ip_address_t             src_ip;
     sai_ip_address_t             dst_ip;
+    sai_status_t                 status = SAI_STATUS_SUCCESS;
     std::unordered_map<u_int32_t, std::shared_ptr<IpVrfInfo>> vni_to_vrf_map;
     std::string                  serializedObjectId = sai_serialize_object_id(object_id);
+    uint8_t                      nbr_mac[8] = {0,0,0,0,0,1};
     SWSS_LOG_ENTER();
     SWSS_LOG_ERROR("enter create_tunnel_encap_nexthop %s", serializedObjectId.c_str());
     SaiCachedObject tunnel_nh_obj(m_switch_db, SAI_OBJECT_TYPE_NEXT_HOP, serializedObjectId, attr_count, attr_list);
@@ -64,7 +68,16 @@ TunnelManager::create_tunnel_encap_nexthop(
         auto tunnel_encap_mapper_entries = mapper_table->get_entries();
         for (auto pair : tunnel_encap_mapper_entries) {
             auto tunnel_encap_mapper_entry = pair.second;
+            vpp_vxlan_tunnel_t req;
+            u_int32_t sw_if_index;
             u_int32_t tunnel_vni;
+
+            memset(&req, 0, sizeof(req));
+            req.instance = ~0;
+            sai_ip_address_t_to_vpp_ip_addr_t(src_ip, req.src_address);
+            sai_ip_address_t_to_vpp_ip_addr_t(dst_ip, req.dst_address);
+            req.is_l3 = 1;
+
             attr.id = SAI_TUNNEL_MAP_ENTRY_ATTR_VNI_ID_VALUE;
             CHECK_STATUS_W_MSG(tunnel_encap_mapper_entry->get_attr(attr), 
                 "Missing SAI_TUNNEL_MAP_ENTRY_ATTR_VNI_ID_KEY in %s", 
@@ -82,15 +95,22 @@ TunnelManager::create_tunnel_encap_nexthop(
             }
             vni_to_vrf_map[tunnel_vni] = ip_vrf;
     
-            SWSS_LOG_ERROR("create vxlan tunnel src %s dst %s vni %d", 
+            req.vni = tunnel_vni;
+            status = vpp_vxlan_tunnel_add_del(&req, 1, &sw_if_index);
+            SWSS_LOG_INFO("create vxlan tunnel src %s dst %s vni %d: sw_if_index,%d, status %d", 
                     sai_serialize_ip_address(src_ip).c_str(),
                     sai_serialize_ip_address(dst_ip).c_str(),
-                    tunnel_vni);
-            //TODO: store vrf+nexthop-oid -> tunnel_id mapping
-            m_tunnel_encap_nexthop_map[object_id] = "vxlan_tunnel0";
-            SWSS_LOG_ERROR("set ip neighbor vxlan_tunnel%d %s 00:00:00:00:00:01",
-                    0 /*tunnel_id*/, sai_serialize_ip_address(dst_ip).c_str());
-            //Call VPP Xlate API to create tunnel and nexthop in VPP
+                    tunnel_vni, sw_if_index, status);            
+
+            m_tunnel_encap_nexthop_map[object_id] = sw_if_index;
+            if (req.dst_address.sa_family == AF_INET6) {
+                ip6_nbr_add_del(NULL, sw_if_index, &req.dst_address.addr.ip6, false, nbr_mac, 1);
+            } else {
+                ip4_nbr_add_del(NULL, sw_if_index, &req.dst_address.addr.ip4, false, nbr_mac, 1);
+            }
+            
+            SWSS_LOG_INFO("set ip neighbor %d %s 00:00:00:00:00:01",
+                    sw_if_index, sai_serialize_ip_address(dst_ip).c_str());
         }
         
     }

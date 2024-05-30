@@ -128,7 +128,7 @@ sai_status_t SwitchStateBase::IpRouteNexthopGroupEntry(
         nxt_grp_member->seq_id = next_hop_sequence;
         nxt_grp_member->weight = next_hop_weight;
         nxt_grp_member->rif_oid = rif_oid;
-
+        nxt_grp_member->sw_if_index = ~0;
         nxt_grp_member++;
     }
 
@@ -292,6 +292,7 @@ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
     nxt_grp_member->addr = ip_address;
     nxt_grp_member->weight = 1;
     nxt_grp_member->seq_id = 0;
+    nxt_grp_member->sw_if_index = ~0;
     switch (next_hop_type)
     {
     case SAI_NEXT_HOP_TYPE_IP:
@@ -303,9 +304,9 @@ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
         break;
     case SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP:
         {
-            std::string if_name;
-            if (m_tunnel_mgr.get_tunnel_if(next_hop_oid, if_name) == SAI_STATUS_SUCCESS) {
-                strncpy(nxt_grp_member->if_name, if_name.c_str(), sizeof(nxt_grp_member->if_name) - 1);
+            u_int32_t sw_if_index;
+            if (m_tunnel_mgr.get_tunnel_if(next_hop_oid, sw_if_index) == SAI_STATUS_SUCCESS) {
+                nxt_grp_member->sw_if_index = sw_if_index;
             } else {
                 SWSS_LOG_ERROR("Failed to get tunnel interface name for nexthop %s",
                             sai_serialize_object_id(next_hop_oid).c_str());

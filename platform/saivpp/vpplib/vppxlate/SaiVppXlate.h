@@ -36,7 +36,8 @@ extern "C" {
     } vpp_ip_addr_t;
 
     typedef struct vpp_ip_nexthop_ {
-	vpp_ip_addr_t addr;
+	    vpp_ip_addr_t addr;
+        uint32_t      sw_if_index;
         const char *hwif_name;
 	uint8_t weight;
         uint8_t preference;
@@ -156,7 +157,18 @@ typedef enum {
     VPP_BD_FLAG_ARP_UFWD = 32,
 } vpp_bd_flags_t;
 
-
+    typedef struct  _vpp_vxlan_tunnel {
+        vpp_ip_addr_t src_address;
+        vpp_ip_addr_t dst_address;
+        uint16_t      src_port;
+        uint16_t      dst_port;
+        uint32_t      vni;
+        uint32_t      instance; /* If non-~0, specifies a custom dev instance */
+        uint32_t      mcast_sw_if_index;
+        uint32_t      encap_vrf_id;
+        uint32_t      decap_next_index;
+        bool          is_l3;
+     } vpp_vxlan_tunnel_t;
 
     extern vpp_event_info_t * vpp_ev_dequeue();
     extern void vpp_ev_free(vpp_event_info_t *evp);
@@ -178,9 +190,9 @@ typedef enum {
     extern int ip_vrf_add(uint32_t vrf_id, const char *vrf_name, bool is_ipv6);
     extern int ip_vrf_del(uint32_t vrf_id, const char *vrf_name, bool is_ipv6);
 
-    extern int ip4_nbr_add_del(const char *hwif_name, struct sockaddr_in *addr,
+    extern int ip4_nbr_add_del(const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in *addr,
 			       bool is_static, uint8_t *mac, bool is_add);
-    extern int ip6_nbr_add_del(const char *hwif_name, struct sockaddr_in6 *addr,
+    extern int ip6_nbr_add_del(const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in6 *addr,
 			       bool is_static, uint8_t *mac, bool is_add);
     extern int ip_route_add_del(vpp_ip_route_t *prefix, bool is_add);
     extern int vpp_ip_flow_hash_set(uint32_t vrf_id, uint32_t mask, int addr_family);
@@ -200,7 +212,7 @@ typedef enum {
     extern int create_bvi_interface(uint8_t *mac_address, uint32_t instance);
     extern int delete_bvi_interface(const char *hwif_name);
     extern int set_bridge_domain_flags(uint32_t bd_id, vpp_bd_flags_t flag, bool enable);
-
+    extern int vpp_vxlan_tunnel_add_del(vpp_vxlan_tunnel_t *tunnel, bool is_add,  uint32_t *sw_if_index);
 #ifdef __cplusplus
 }
 #endif

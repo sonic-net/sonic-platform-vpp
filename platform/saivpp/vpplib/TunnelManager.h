@@ -47,12 +47,12 @@ namespace saivpp
         }
         sai_status_t get_tunnel_if(
             _In_  sai_object_id_t nexthop_oid, 
-            _Out_ std::string &if_name) {
+            _Out_ u_int32_t &sw_if_index) {
             // Implementation of get_tunnel_if_by_nexthop_oid
             // You need to implement this method to return the tunnel_if based on the given nexthop_oid
             auto it = m_tunnel_encap_nexthop_map.find(nexthop_oid);
             if (it != m_tunnel_encap_nexthop_map.end()) {
-                if_name = it->second;
+                sw_if_index = it->second;
                 return SAI_STATUS_SUCCESS;
             }
             return SAI_STATUS_ITEM_NOT_FOUND;
@@ -60,6 +60,7 @@ namespace saivpp
 
     private:
         SwitchStateBase* m_switch_db;
-        std::unordered_map<sai_object_id_t, std::string> m_tunnel_encap_nexthop_map;
+        //nexthop SAI object ID to sw_if_index map
+        std::unordered_map<sai_object_id_t, u_int32_t> m_tunnel_encap_nexthop_map;
     };
 }

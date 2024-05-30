@@ -19,6 +19,7 @@
 extern "C" {
 #include "sai.h"
 }
+#include "vppxlate/SaiVppXlate.h"
 #include "swss/ipaddress.h"
 #include "swss/ipprefix.h"
 
@@ -152,5 +153,22 @@ inline static sai_ip_prefix_t& copy(sai_ip_prefix_t& dst, const swss::IpPrefix& 
     return dst;
 }
 
+inline static void
+sai_ip_address_t_to_vpp_ip_addr_t(sai_ip_address_t& src, vpp_ip_addr_t& dst)
+{
+    if (SAI_IP_ADDR_FAMILY_IPV4 == src.addr_family) {
+        struct sockaddr_in *sin =  &dst.addr.ip4;
+
+        dst.sa_family = AF_INET;
+        sin->sin_family = AF_INET;
+        sin->sin_addr.s_addr = src.addr.ip4;
+    } else {
+        struct sockaddr_in6 *sin6 =  &dst.addr.ip6;
+
+        dst.sa_family = AF_INET6;
+        sin6->sin6_family = AF_INET6;
+	    memcpy(sin6->sin6_addr.s6_addr, src.addr.ip6, sizeof(sin6->sin6_addr.s6_addr));
+    }
+}
 }
 
