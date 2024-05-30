@@ -193,10 +193,8 @@ sai_status_t SwitchStateBase::create(
     }
 
     if (object_type == SAI_OBJECT_TYPE_NEXT_HOP)
-    {
-        sai_object_id_t object_id;
-        sai_deserialize_object_id(serializedObjectId, object_id);        
-        return createNexthop(object_id, switch_id, attr_count, attr_list);
+    {       
+        return createNexthop(serializedObjectId, switch_id, attr_count, attr_list);
     }
     
     if (object_type == SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER)
@@ -491,7 +489,7 @@ sai_status_t SwitchStateBase::remove(
     
     if (object_type == SAI_OBJECT_TYPE_NEXT_HOP)
     {
-        //return NexthopRemove(serializedObjectId);
+        return removeNexthop(serializedObjectId);
     }
 
     if (object_type == SAI_OBJECT_TYPE_NEIGHBOR_ENTRY)

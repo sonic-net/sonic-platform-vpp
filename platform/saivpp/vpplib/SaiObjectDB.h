@@ -22,7 +22,7 @@ namespace saivpp
         virtual ~SaiObject() = default;
 
         virtual sai_status_t get_attr(_Out_ sai_attribute_t &attr) const = 0;
-        
+
         const std::string& get_id() const { return m_id; }
 
         sai_object_type_t get_type() const { return m_type; }

@@ -9,23 +9,21 @@
 
 using namespace saivpp;
 sai_status_t 
-TunnelManager::create_tunnel_encap_nexthop(
-                    _In_ sai_object_id_t object_id,
-                    _In_ sai_object_id_t switch_id,
-                    _In_ uint32_t attr_count,
-                    _In_ const sai_attribute_t *attr_list) 
+TunnelManager::tunnel_encap_nexthop_action(
+                    _In_ const SaiObject* tunnel_nh_obj, 
+                    _In_ Action action)
 {
     sai_attribute_t              attr;
     sai_ip_address_t             src_ip;
     sai_ip_address_t             dst_ip;
     sai_status_t                 status = SAI_STATUS_SUCCESS;
     std::unordered_map<u_int32_t, std::shared_ptr<IpVrfInfo>> vni_to_vrf_map;
-    std::string                  serializedObjectId = sai_serialize_object_id(object_id);
+    sai_object_id_t              object_id;
     uint8_t                      nbr_mac[8] = {0,0,0,0,0,1};
     SWSS_LOG_ENTER();
-    SWSS_LOG_ERROR("enter create_tunnel_encap_nexthop %s", serializedObjectId.c_str());
-    SaiCachedObject tunnel_nh_obj(m_switch_db, SAI_OBJECT_TYPE_NEXT_HOP, serializedObjectId, attr_count, attr_list);
-    auto tunnel_obj = tunnel_nh_obj.get_linked_object(SAI_OBJECT_TYPE_TUNNEL, SAI_NEXT_HOP_ATTR_TUNNEL_ID);
+    
+    sai_deserialize_object_id(tunnel_nh_obj->get_id(), object_id);     
+    auto tunnel_obj = tunnel_nh_obj->get_linked_object(SAI_OBJECT_TYPE_TUNNEL, SAI_NEXT_HOP_ATTR_TUNNEL_ID);
     if (tunnel_obj == nullptr) {
         return SAI_STATUS_FAILURE;
     }
@@ -44,7 +42,7 @@ TunnelManager::create_tunnel_encap_nexthop(
     src_ip = attr.value.ipaddr;
     
     attr.id = SAI_NEXT_HOP_ATTR_IP;
-    CHECK_STATUS_W_MSG(tunnel_nh_obj.get_attr(attr), "Missing SAI_NEXT_HOP_ATTR_IP in %s", serializedObjectId.c_str());
+    CHECK_STATUS_W_MSG(tunnel_nh_obj->get_attr(attr), "Missing SAI_NEXT_HOP_ATTR_IP in %s", tunnel_nh_obj->get_id().c_str());
 
     dst_ip = attr.value.ipaddr;
     
@@ -83,10 +81,12 @@ TunnelManager::create_tunnel_encap_nexthop(
                 "Missing SAI_TUNNEL_MAP_ENTRY_ATTR_VNI_ID_KEY in %s", 
                 tunnel_encap_mapper_entry->get_id().c_str());
             tunnel_vni = attr.value.u32;
+            
             attr.id = SAI_TUNNEL_MAP_ENTRY_ATTR_VIRTUAL_ROUTER_ID_KEY;
             CHECK_STATUS_W_MSG(tunnel_encap_mapper_entry->get_attr(attr), 
                     "Missing SAI_TUNNEL_MAP_ENTRY_ATTR_VIRTUAL_ROUTER_ID_KEY in %s", 
                     tunnel_encap_mapper_entry->get_id().c_str());
+            
             auto ip_vrf = m_switch_db->vpp_get_ip_vrf(attr.value.oid);
             if (!ip_vrf) {
                 SWSS_LOG_ERROR("Failed to find VR from SAI_TUNNEL_MAP_ENTRY_ATTR_VIRTUAL_ROUTER_ID_KEY in %s", 
@@ -96,23 +96,78 @@ TunnelManager::create_tunnel_encap_nexthop(
             vni_to_vrf_map[tunnel_vni] = ip_vrf;
     
             req.vni = tunnel_vni;
-            status = vpp_vxlan_tunnel_add_del(&req, 1, &sw_if_index);
-            SWSS_LOG_INFO("create vxlan tunnel src %s dst %s vni %d: sw_if_index,%d, status %d", 
-                    sai_serialize_ip_address(src_ip).c_str(),
-                    sai_serialize_ip_address(dst_ip).c_str(),
-                    tunnel_vni, sw_if_index, status);            
+            bool is_add = 0;
+            if (action == Action::CREATE) {
+                is_add = 1;
+                status = vpp_vxlan_tunnel_add_del(&req, is_add, &sw_if_index);
+                SWSS_LOG_INFO("create vxlan tunnel src %s dst %s vni %d: sw_if_index,%d, status %d", 
+                        sai_serialize_ip_address(src_ip).c_str(),
+                        sai_serialize_ip_address(dst_ip).c_str(),
+                        tunnel_vni, sw_if_index, status);            
 
-            m_tunnel_encap_nexthop_map[object_id] = sw_if_index;
-            if (req.dst_address.sa_family == AF_INET6) {
-                ip6_nbr_add_del(NULL, sw_if_index, &req.dst_address.addr.ip6, false, nbr_mac, 1);
-            } else {
-                ip4_nbr_add_del(NULL, sw_if_index, &req.dst_address.addr.ip4, false, nbr_mac, 1);
+                m_tunnel_encap_nexthop_map[object_id] = sw_if_index;
+                if (req.dst_address.sa_family == AF_INET6) {
+                    ip6_nbr_add_del(NULL, sw_if_index, &req.dst_address.addr.ip6, false, nbr_mac, is_add);
+                } else {
+                    ip4_nbr_add_del(NULL, sw_if_index, &req.dst_address.addr.ip4, false, nbr_mac, is_add);
+                }
+                
+                SWSS_LOG_INFO("set ip neighbor %d %s 00:00:00:00:00:01",
+                        sw_if_index, sai_serialize_ip_address(dst_ip).c_str());
+            } else if (action == Action::DELETE) {
+                is_add = 0;
+                auto encap_map_it = m_tunnel_encap_nexthop_map.find(object_id);
+                if (encap_map_it == m_tunnel_encap_nexthop_map.end()) {
+                    SWSS_LOG_ERROR("Failed to find sw_if_index for %s", 
+                        tunnel_nh_obj->get_id().c_str());
+                    continue;
+                }
+                sw_if_index = encap_map_it->second;
+                if (req.dst_address.sa_family == AF_INET6) {
+                    ip6_nbr_add_del(NULL, sw_if_index, &req.dst_address.addr.ip6, false, nbr_mac, is_add);
+                } else {
+                    ip4_nbr_add_del(NULL, sw_if_index, &req.dst_address.addr.ip4, false, nbr_mac, is_add);
+                }
+                
+                SWSS_LOG_INFO("delete ip neighbor %d %s 00:00:00:00:00:01",
+                        sw_if_index, sai_serialize_ip_address(dst_ip).c_str());
+
+                status = vpp_vxlan_tunnel_add_del(&req, is_add, &sw_if_index);
+                SWSS_LOG_INFO("delete vxlan tunnel src %s dst %s vni %d: sw_if_index,%d, status %d", 
+                        sai_serialize_ip_address(src_ip).c_str(),
+                        sai_serialize_ip_address(dst_ip).c_str(),
+                        tunnel_vni, sw_if_index, status);            
+
+                m_tunnel_encap_nexthop_map.erase(encap_map_it);
             }
-            
-            SWSS_LOG_INFO("set ip neighbor %d %s 00:00:00:00:00:01",
-                    sw_if_index, sai_serialize_ip_address(dst_ip).c_str());
         }
-        
     }
     return SAI_STATUS_SUCCESS;
 }
+sai_status_t 
+TunnelManager::create_tunnel_encap_nexthop(
+                    _In_ const std::string& serializedObjectId,
+                    _In_ sai_object_id_t switch_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list) 
+{
+    SWSS_LOG_ENTER();
+    
+    SWSS_LOG_DEBUG("enter create_tunnel_encap_nexthop %s", serializedObjectId.c_str());
+    SaiCachedObject tunnel_nh_obj(m_switch_db, SAI_OBJECT_TYPE_NEXT_HOP, serializedObjectId, attr_count, attr_list);
+    return tunnel_encap_nexthop_action(&tunnel_nh_obj, Action::CREATE);
+}
+
+sai_status_t 
+TunnelManager::remove_tunnel_encap_nexthop(
+                _In_ const std::string& serializedObjectId) 
+{
+    SWSS_LOG_ENTER();
+    auto tunnel_nh_obj = m_switch_db->get_sai_object(SAI_OBJECT_TYPE_NEXT_HOP, serializedObjectId);
+
+    if (!tunnel_nh_obj) {
+        SWSS_LOG_ERROR("Failed to find SAI_OBJECT_TYPE_NEXT_HOP SaiObject: %s", serializedObjectId);
+        return SAI_STATUS_FAILURE;
+    } 
+    return tunnel_encap_nexthop_action(tunnel_nh_obj.get(), Action::DELETE);
+ }

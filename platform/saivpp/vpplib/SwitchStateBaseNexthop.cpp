@@ -326,19 +326,43 @@ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
 
 sai_status_t 
 SwitchStateBase::createNexthop(
-		_In_ sai_object_id_t object_id,
+		_In_ const std::string& serializedObjectId,
 		_In_ sai_object_id_t switch_id,
 		_In_ uint32_t attr_count,
 		_In_ const sai_attribute_t *attr_list)
 {
     const sai_attribute_value_t     *next_hop_type;
     uint32_t                        attr_index;
+    SWSS_LOG_ENTER();
     CHECK_STATUS(find_attrib_in_list(attr_count, attr_list, SAI_NEXT_HOP_ATTR_TYPE,
                                  &next_hop_type, &attr_index));
-    SWSS_LOG_ERROR("enter createNexthop %d==%d", next_hop_type->s32, SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP);
     if (next_hop_type->s32 == SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP) {
         //Deligate the creation of tunnel encap nexthop to tunnel manager
-        CHECK_STATUS(m_tunnel_mgr.create_tunnel_encap_nexthop(object_id, switch_id, attr_count, attr_list));
+        CHECK_STATUS(m_tunnel_mgr.create_tunnel_encap_nexthop(serializedObjectId, switch_id, attr_count, attr_list));
     }
-    return create_internal(SAI_OBJECT_TYPE_NEXT_HOP, sai_serialize_object_id(object_id), switch_id, attr_count, attr_list);
+    return create_internal(SAI_OBJECT_TYPE_NEXT_HOP, serializedObjectId, switch_id, attr_count, attr_list);
+}
+
+sai_status_t SwitchStateBase::removeNexthop(
+        _In_ const std::string &serializedObjectId)
+{
+    sai_attribute_t                 attr;
+    sai_status_t                    status;
+    SWSS_LOG_ENTER();
+    auto nh_obj = get_sai_object(SAI_OBJECT_TYPE_NEXT_HOP, serializedObjectId);
+
+    if (!nh_obj) {
+        SWSS_LOG_ERROR("Failed to find SAI_OBJECT_TYPE_NEXT_HOP SaiObject: %s", serializedObjectId);
+    } else {
+        attr.id = SAI_NEXT_HOP_ATTR_TYPE;
+        status = nh_obj->get_attr(attr);
+        if(status != SAI_STATUS_SUCCESS) {
+            SWSS_LOG_ERROR("Missing SAI_NEXT_HOP_ATTR_TYPE in %s", serializedObjectId);
+        }
+        else if (attr.value.s32 == SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP) {
+            CHECK_STATUS(m_tunnel_mgr.remove_tunnel_encap_nexthop(serializedObjectId));
+        }
+    }
+
+    return remove_internal(SAI_OBJECT_TYPE_NEXT_HOP, serializedObjectId);
 }
