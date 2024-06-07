@@ -54,30 +54,34 @@ namespace saivpp
         ~SaiDBObject() = default;
 
         sai_status_t get_attr(_Out_ sai_attribute_t &attr) const override;
-    };
 
-    class SaiTable : public SaiDBObject {
-    public:
-        SaiTable(SwitchStateBase* switch_db, sai_object_type_t type, const std::string& id, sai_object_type_t entry_type)
-            : SaiDBObject(switch_db, type, id), m_entry_type(entry_type) {}
-        ~SaiTable() = default;
-        
-        const std::unordered_map<std::string, std::shared_ptr<SaiObject>>& get_entries() const {
-            return m_entries;
+        const std::unordered_map<std::string, std::shared_ptr<SaiObject>>* 
+        get_child_objs(sai_object_type_t child_type) const {
+            auto it = m_child_map.find(child_type);
+            if (it != m_child_map.end()) {
+                return &(it->second);
+            }
+            return nullptr;
         }
-
-        void add_entry(const std::shared_ptr<SaiObject> entry) {
+        void 
+        add_child(const std::shared_ptr<SaiObject> entry) {
             if (entry) {
-                m_entries[entry->get_id()] = entry;
+                m_child_map[entry->get_type()][entry->get_id()] = entry;
             }
         }
 
-        void remove_entry(const std::string& id) {
-            m_entries.erase(id);
+        void 
+        remove_child(sai_object_type_t child_type, const std::string& id) {
+            auto child_map_it = m_child_map.find(child_type);
+            if (child_map_it != m_child_map.end()) {
+                auto child_map_per_type_it = child_map_it->second.find(id);
+                if (child_map_per_type_it != child_map_it->second.end()) {
+                    child_map_it->second.erase(child_map_per_type_it);
+                } 
+            }
         }
     private:
-        sai_object_type_t m_entry_type;
-        std::unordered_map<std::string, std::shared_ptr<SaiObject>> m_entries;
+        std::unordered_map<sai_object_type_t, std::unordered_map<std::string, std::shared_ptr<SaiObject>>> m_child_map;
     };
     
     class SaiObjectDB {
@@ -98,8 +102,9 @@ namespace saivpp
         std::shared_ptr<SaiObject> get(
                     _In_ sai_object_type_t object_type,
                     _In_ const std::string& id);
+
     private:
         SwitchStateBase* m_switch_db;
-        std::unordered_map<sai_object_type_t, std::unordered_map<std::string, std::shared_ptr<SaiTable>>> m_sai_tables;
+        std::unordered_map<sai_object_type_t, std::unordered_map<std::string, std::shared_ptr<SaiDBObject>>> m_sai_parent_objs;
     };
 }

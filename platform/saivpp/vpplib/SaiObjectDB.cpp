@@ -8,16 +8,78 @@
 #include "SaiObjectDB.h"
 
 using namespace saivpp;
-typedef struct _SaiTableRelation
+typedef struct _SaiChildRelation
 {
-    sai_object_type_t table_type;
-    // the attribute id in entry object pointing to table
-    sai_attr_id_t table_link_attr;
-} SaiTableRelation;
+    sai_object_type_t parent_type;
+    // the attribute id in child object pointing to Parent object
+    sai_attr_id_t child_link_attr;
+    sai_attr_value_type_t child_link_attr_type;
+} SaiChildRelation;
 
-std::map<sai_object_type_t, SaiTableRelation> sai_entry_to_table_defs = {
-    {SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY, {SAI_OBJECT_TYPE_TUNNEL_MAP, SAI_TUNNEL_MAP_ENTRY_ATTR_TUNNEL_MAP}}
+std::map<sai_object_type_t, std::vector<SaiChildRelation>> sai_child_relation_defs = {
+    {SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY, {{SAI_OBJECT_TYPE_TUNNEL_MAP, SAI_TUNNEL_MAP_ENTRY_ATTR_TUNNEL_MAP, SAI_ATTR_VALUE_TYPE_OBJECT_ID}}},
+    {SAI_OBJECT_TYPE_TUNNEL,           {{SAI_OBJECT_TYPE_TUNNEL_MAP, SAI_TUNNEL_ATTR_DECAP_MAPPERS, SAI_ATTR_VALUE_TYPE_OBJECT_LIST},
+                                        {SAI_OBJECT_TYPE_TUNNEL_MAP, SAI_TUNNEL_ATTR_ENCAP_MAPPERS, SAI_ATTR_VALUE_TYPE_OBJECT_LIST}}}
 };
+
+static std::vector<std::string>
+get_parent_oids(const sai_attribute_value_t *attr_val, const SaiChildRelation& child_def) 
+{
+    std::vector<std::string> parent_ids;
+    
+    switch (child_def.child_link_attr_type) {
+        case SAI_ATTR_VALUE_TYPE_OBJECT_ID:
+            parent_ids.push_back(sai_serialize_object_id(attr_val->oid));
+            break;
+        case SAI_ATTR_VALUE_TYPE_OBJECT_LIST:
+        {
+            auto& linked_obj_list = attr_val->objlist;
+            for (uint32_t i = 0; i < linked_obj_list.count; i++) {
+                parent_ids.push_back(sai_serialize_object_id(linked_obj_list.list[i]));       
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return parent_ids;
+}
+
+static std::vector<std::string>
+get_parent_oids(SwitchStateBase* switch_db, sai_object_type_t child_type, const std::string& child_oid, const SaiChildRelation& child_def) 
+{
+    std::vector<std::string> parent_ids;
+    sai_status_t status;
+    sai_attribute_t attr;
+    sai_object_id_t obj_list[MAX_OBJLIST_LEN];
+    attr.id = child_def.child_link_attr;
+    if (child_def.child_link_attr_type == SAI_ATTR_VALUE_TYPE_OBJECT_LIST) {
+        attr.value.objlist.count = MAX_OBJLIST_LEN;
+        attr.value.objlist.list = obj_list;
+    }
+    
+    status = switch_db->get(child_type, child_oid, 1, &attr);
+    if (status != SAI_STATUS_SUCCESS) {
+        SWSS_LOG_WARN("get_parent_oids: the child object is not found in switch_db %s", child_oid.c_str());
+        return parent_ids;
+    }    
+    switch (child_def.child_link_attr_type) {
+        case SAI_ATTR_VALUE_TYPE_OBJECT_ID:
+            parent_ids.push_back(sai_serialize_object_id(attr.value.oid));
+            break;
+        case SAI_ATTR_VALUE_TYPE_OBJECT_LIST:
+        {
+            sai_object_list_t& linked_obj_list = attr.value.objlist;
+            for (uint32_t i = 0; i < linked_obj_list.count; i++) {
+                parent_ids.push_back(sai_serialize_object_id(linked_obj_list.list[i]));       
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return parent_ids;
+}
 
 sai_status_t 
 SaiObjectDB::add(
@@ -28,34 +90,47 @@ SaiObjectDB::add(
                 _In_ const sai_attribute_t *attr_list)
 {
     sai_status_t status;
-    auto table_def_it = sai_entry_to_table_defs.find(object_type);
-    if (table_def_it == sai_entry_to_table_defs.end()) {
+    auto child_def_it = sai_child_relation_defs.find(object_type);
+    if (child_def_it == sai_child_relation_defs.end()) {
         // Not an interesting type
         return SAI_STATUS_SUCCESS;
     }
-    //Get table type and OID
+    sai_object_id_t oid;
+    sai_deserialize_object_id(id, oid);
+    //Get Parent object type and OID
     const sai_attribute_value_t *attr_val;
     uint32_t attr_index;
-    status = find_attrib_in_list(attr_count, attr_list, table_def_it->second.table_link_attr,
-                                &attr_val, &attr_index);
-    if (status != SAI_STATUS_SUCCESS) {
-        // attribute not found
-        return SAI_STATUS_SUCCESS;
-    }        
-    auto sai_tables = m_sai_tables[table_def_it->second.table_type];
-    std::shared_ptr<SaiTable> sai_table;
-    auto serializedObjectId = sai_serialize_object_id(attr_val->oid);
-    auto table_it = sai_tables.find(serializedObjectId);
-    if (table_it == sai_tables.end()) {
-        //The table hasn't been created. create the table
-        sai_table = std::make_shared<SaiTable>(m_switch_db, table_def_it->second.table_type, serializedObjectId, object_type);
-        sai_tables[serializedObjectId] = sai_table; 
-    } else {
-        sai_table = table_it->second;
+    //iterate multiple child relation for the given parent type
+    auto& child_defs = child_def_it->second;
+    for (auto child_def: child_defs) {
+        status = find_attrib_in_list(attr_count, attr_list, child_def.child_link_attr,
+                                    &attr_val, &attr_index);
+        if (status != SAI_STATUS_SUCCESS) {
+            // attribute not found
+            return SAI_STATUS_SUCCESS;
+        }
+
+        auto sai_parents = m_sai_parent_objs[child_def.parent_type];
+        std::shared_ptr<SaiDBObject> sai_parent;
+        
+        std::vector<std::string> parent_ids = get_parent_oids(attr_val, child_def);
+        for (auto parent_id: parent_ids) {
+            auto parent_it = sai_parents.find(parent_id);
+            if (parent_it == sai_parents.end()) {
+                //The Parent object hasn't been created. create the Parent object
+                sai_parent = std::make_shared<SaiDBObject>(m_switch_db, child_def.parent_type, parent_id);
+                sai_parents[parent_id] = sai_parent; 
+            } else {
+                sai_parent = parent_it->second;
+            }
+            m_sai_parent_objs[child_def.parent_type] = sai_parents;
+            auto sai_child = std::make_shared<SaiDBObject>(m_switch_db, object_type, id);
+            sai_parent->add_child(sai_child);
+            SWSS_LOG_DE("Add child %s to parent %s of type %s", id.c_str(), parent_id.c_str(), 
+                    sai_serialize_object_type(child_def.parent_type).c_str());
+        }
     }
-    m_sai_tables[table_def_it->second.table_type] = sai_tables;
-    auto sai_entry = std::make_shared<SaiDBObject>(m_switch_db, object_type, id);
-    sai_table->add_entry(sai_entry);
+    
     return SAI_STATUS_SUCCESS;
 }
 
@@ -64,47 +139,43 @@ SaiObjectDB::remove(
                 _In_ sai_object_type_t object_type,
                 _In_ const std::string& id)
 {
-    sai_status_t status;
-    sai_attribute_t attr;
-    auto sai_table_types_it = m_sai_tables.find(object_type);
-    if (sai_table_types_it != m_sai_tables.end()) {
-        auto sai_table_it = sai_table_types_it->second.find(id);
-        if (sai_table_it != sai_table_types_it->second.end()) {
-            sai_table_types_it->second.erase(sai_table_it);
+    //remove parent object
+    auto sai_parent_type_it = m_sai_parent_objs.find(object_type);
+    if (sai_parent_type_it != m_sai_parent_objs.end()) {
+        auto sai_parent_it = sai_parent_type_it->second.find(id);
+        if (sai_parent_it != sai_parent_type_it->second.end()) {
+            sai_parent_type_it->second.erase(sai_parent_it);
         } else {
             SWSS_LOG_WARN("The object to be removed is not found in SaiObjectDB %s", id.c_str());
         }
         
         return SAI_STATUS_SUCCESS;
     }
-    //The object can be a entry in a table
-    auto table_def_it = sai_entry_to_table_defs.find(object_type);
-    if (table_def_it == sai_entry_to_table_defs.end()) {
+    //The object can be a child of a parent object
+    auto child_def_it = sai_child_relation_defs.find(object_type);
+    if (child_def_it == sai_child_relation_defs.end()) {
         // Not an interesting type
         return SAI_STATUS_SUCCESS;
     }
 
-    //Get table type and OID
-    attr.id = table_def_it->second.table_link_attr;
-    //read the table_link_attr in entry object from switch_db
-    status = m_switch_db->get(table_def_it->second.table_type, id, 1, &attr);
-    if (status != SAI_STATUS_SUCCESS) {
-        SWSS_LOG_WARN("The object to be removed is not found in switch_db %s", id.c_str());
-        return SAI_STATUS_SUCCESS;
+    //Get Parent object type and OID
+    auto& child_defs = child_def_it->second;
+    for (auto child_def: child_defs) {
+        std::vector<std::string> parent_ids = get_parent_oids(m_switch_db, object_type, id, child_def);
+        auto sai_parents = m_sai_parent_objs[child_def.parent_type];
+        for (auto parent_id: parent_ids) {
+            auto parent_it = sai_parents.find(parent_id);
+            if (parent_it == sai_parents.end()) {
+                SWSS_LOG_WARN("Parent object is not found in SaiObjectDB %s", parent_id.c_str());
+                return SAI_STATUS_SUCCESS;
+            } else {
+                //remove the child from sai_parent
+                parent_it->second->remove_child(object_type, id);
+                SWSS_LOG_DEBUG("Remove child %s from parent %s of type %s", id.c_str(), parent_id.c_str(), 
+                        sai_serialize_object_type(child_def.parent_type).c_str());
+            }
+        }
     }
-     
-    auto sai_tables = m_sai_tables[table_def_it->second.table_type];
-    std::shared_ptr<SaiTable> sai_table;
-    auto table_id = sai_serialize_object_id(attr.value.oid);
-    auto table_it = sai_tables.find(table_id);
-    if (table_it == sai_tables.end()) {
-        SWSS_LOG_WARN("Table is not found in SaiObjectDB %s", table_id.c_str());
-        return SAI_STATUS_SUCCESS;
-    } else {
-        sai_table = table_it->second;
-    }
-    //remove the entry from sai_table
-    sai_table->remove_entry(id);
     return SAI_STATUS_SUCCESS;
 }
 
@@ -115,26 +186,26 @@ SaiObjectDB::get(
 {
     sai_status_t status;
     sai_attribute_t attr;
-    //first check if the object is a SaiTable
-    auto sai_table_types_it = m_sai_tables.find(object_type);
-    if (sai_table_types_it != m_sai_tables.end()) {
-        auto sai_table_it = sai_table_types_it->second.find(id);
-        if (sai_table_it != sai_table_types_it->second.end()) {
-            return sai_table_it->second;
+    //first check if the object is a stored SaiDBObject
+    auto sai_parent_type_it = m_sai_parent_objs.find(object_type);
+    if (sai_parent_type_it != m_sai_parent_objs.end()) {
+        auto sai_parent_it = sai_parent_type_it->second.find(id);
+        if (sai_parent_it != sai_parent_type_it->second.end()) {
+            return sai_parent_it->second;
         } else {
-            SWSS_LOG_WARN("Table is not found in SaiObjectDB %s", id.c_str());
+            SWSS_LOG_WARN("Parent is not found in SaiObjectDB %s", id.c_str());
             return std::shared_ptr<SaiObject>();
         }
     }
     // check if the object exists
     status = m_switch_db->get(object_type, id, 0, &attr);
     if (status != SAI_STATUS_SUCCESS) {
-        SWSS_LOG_WARN("Table is not found in SaiObjectDB %s", id.c_str());
+        SWSS_LOG_WARN("Parent object is not found in SaiObjectDB %s", id.c_str());
         return std::shared_ptr<SaiObject>();
     }
     /*
      return a SaiObject as a wrapper to underlaying object is switch_db.
-     the object may exists in a sai_table as an entry but we don't care if 
+     the object may exists in a sai_parent as an entry but we don't care if 
      returning a new copy since it is just a wrapper today */
     return std::make_shared<SaiDBObject>(m_switch_db, object_type, id);
 }
