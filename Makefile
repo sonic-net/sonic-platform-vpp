@@ -31,12 +31,12 @@ build/.sonic_vpp_config:
 sonic_config: build/.sonic_vpp_config
 
 build/sonic-buildimage/target/docker-sonic-vpp.gz:
-	make -C ./build/sonic-buildimage SONIC_BUILD_JOBS=4 target/docker-sonic-vpp.gz
+	make -C ./build/sonic-buildimage SONIC_BUILD_JOBS=4 target/docker-sonic-vpp.gz  BLDENV=bullseye NOBUSTER=1
 
 sonic_build: build/sonic-buildimage/target/docker-sonic-vpp.gz
 
 build/sonic-buildimage/target/sonic-vpp.img.gz:
-	make -C ./build/sonic-buildimage SONIC_BUILD_JOBS=4 target/sonic-vpp.img.gz
+	make -C ./build/sonic-buildimage SONIC_BUILD_JOBS=4 target/sonic-vpp.img.gz BLDENV=bullseye NOBUSTER=1
 
 sonic_build_vm: build/sonic-buildimage/target/sonic-vpp.img.gz
 
@@ -45,6 +45,11 @@ sonic: sonic_repo sonic_setup sonic_config sonic_build
 sonic_vm: sonic sonic_build_vm
 
 init: sonic_repo sonic_setup
+
+clean_syncd_dependencies:
+	 make -C ./build/sonic-buildimage SONIC_BUILD_JOBS=4 target/docker-sonic-vpp.gz-clean BLDENV=bullseye NOBUSTER=1
+	 make -C ./build/sonic-buildimage SONIC_BUILD_JOBS=4 target/debs/bullseye/libsaivpp_1.0.0_amd64.deb-clean BLDENV=bullseye NOBUSTER=1
+	 make -C ./build/sonic-buildimage SONIC_BUILD_JOBS=4 target/debs/bullseye/vpp_23.06-release_amd64.deb-clean BLDENV=bullseye NOBUSTER=1
 
 vpp_build:
 	mkdir -p ./build
