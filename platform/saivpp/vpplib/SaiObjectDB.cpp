@@ -16,10 +16,19 @@ typedef struct _SaiChildRelation
     sai_attr_value_type_t child_link_attr_type;
 } SaiChildRelation;
 
+/*
+  Define the child relation between SAI objects. Child is dependent on parent object. For example, ROUTE_ENTRY is a child of VR.
+    Key: child object type 
+    Value: list of child relations. Each child relation defines the parent object type, the attribute id in child object pointing 
+        to Parent object and the attribute type.
+  Child objects defined in this map will be added to the parent object when the child object is created. From parent object, we
+  can get the child object by calling get_child_objs() method with the child object type.
+ */
 std::map<sai_object_type_t, std::vector<SaiChildRelation>> sai_child_relation_defs = {
     {SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY, {{SAI_OBJECT_TYPE_TUNNEL_MAP, SAI_TUNNEL_MAP_ENTRY_ATTR_TUNNEL_MAP, SAI_ATTR_VALUE_TYPE_OBJECT_ID}}},
     {SAI_OBJECT_TYPE_TUNNEL,           {{SAI_OBJECT_TYPE_TUNNEL_MAP, SAI_TUNNEL_ATTR_DECAP_MAPPERS, SAI_ATTR_VALUE_TYPE_OBJECT_LIST},
-                                        {SAI_OBJECT_TYPE_TUNNEL_MAP, SAI_TUNNEL_ATTR_ENCAP_MAPPERS, SAI_ATTR_VALUE_TYPE_OBJECT_LIST}}}
+                                        {SAI_OBJECT_TYPE_TUNNEL_MAP, SAI_TUNNEL_ATTR_ENCAP_MAPPERS, SAI_ATTR_VALUE_TYPE_OBJECT_LIST}}},
+    {SAI_OBJECT_TYPE_TUNNEL_TERM_TABLE_ENTRY, {{SAI_OBJECT_TYPE_TUNNEL, SAI_TUNNEL_TERM_TABLE_ENTRY_ATTR_ACTION_TUNNEL_ID, SAI_ATTR_VALUE_TYPE_OBJECT_ID}}}
 };
 
 static std::vector<std::string>
@@ -126,7 +135,7 @@ SaiObjectDB::add(
             m_sai_parent_objs[child_def.parent_type] = sai_parents;
             auto sai_child = std::make_shared<SaiDBObject>(m_switch_db, object_type, id);
             sai_parent->add_child(sai_child);
-            SWSS_LOG_DE("Add child %s to parent %s of type %s", id.c_str(), parent_id.c_str(), 
+            SWSS_LOG_DEBUG("Add child %s to parent %s of type %s", id.c_str(), parent_id.c_str(), 
                     sai_serialize_object_type(child_def.parent_type).c_str());
         }
     }

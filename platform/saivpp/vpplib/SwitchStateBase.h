@@ -26,6 +26,7 @@
 #include "MACsecManager.h"
 #include "IpVrfInfo.h"
 #include "SaiObjectDB.h"
+#include "BitResourcePool.h"
 #include "TunnelManager.h"
 
 #include <set>
@@ -1054,7 +1055,10 @@ namespace saivpp
         private:
             static int currentMaxInstance;
             std::set<int> availableInstances;
-
+            //1-4095 BD are statically allocated for VLAN by VLAN-ID. Use 4K-16K for dynamic allocation
+            static const uint32_t dynamic_bd_id_base =  4*1024;
+            static const uint16_t dynamic_bd_id_pool_size =  12*1024;
+            BitResourcePool dynamic_bd_id_pool = BitResourcePool(dynamic_bd_id_pool_size, dynamic_bd_id_base);
         public: // TODO private
 
             std::set<FdbInfo> m_fdb_info_set;

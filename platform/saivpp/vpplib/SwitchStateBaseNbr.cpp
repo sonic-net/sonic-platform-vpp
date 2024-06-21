@@ -138,7 +138,7 @@ sai_status_t SwitchStateBase::addRemoveIpNbr(
 	sin.sin_family = AF_INET;
 	sin.sin_addr.s_addr = nbr_entry.ip_address.addr.ip4;
 
-	ip4_nbr_add_del(vpp_ifname, ~0, &sin, false, nbr_mac, is_add);
+	ip4_nbr_add_del(vpp_ifname, ~0, &sin, false, false, nbr_mac, is_add);
 
 	break;
 
@@ -148,7 +148,7 @@ sai_status_t SwitchStateBase::addRemoveIpNbr(
 	sin6.sin6_family = AF_INET6;
 	memcpy(sin6.sin6_addr.s6_addr, nbr_entry.ip_address.addr.ip6, sizeof(sin6.sin6_addr.s6_addr));
 
-	ip6_nbr_add_del(vpp_ifname, ~0, &sin6, false, nbr_mac, is_add);
+	ip6_nbr_add_del(vpp_ifname, ~0, &sin6, false, false, nbr_mac, is_add);
 
 	break;
     }

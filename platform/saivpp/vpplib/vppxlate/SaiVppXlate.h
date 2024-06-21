@@ -191,9 +191,9 @@ typedef enum {
     extern int ip_vrf_del(uint32_t vrf_id, const char *vrf_name, bool is_ipv6);
 
     extern int ip4_nbr_add_del(const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in *addr,
-			       bool is_static, uint8_t *mac, bool is_add);
+			       bool is_static, bool no_fib_entry, uint8_t *mac, bool is_add);
     extern int ip6_nbr_add_del(const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in6 *addr,
-			       bool is_static, uint8_t *mac, bool is_add);
+			       bool is_static, bool no_fib_entry, uint8_t *mac, bool is_add);
     extern int ip_route_add_del(vpp_ip_route_t *prefix, bool is_add);
     extern int vpp_ip_flow_hash_set(uint32_t vrf_id, uint32_t mask, int addr_family);
 
@@ -207,6 +207,7 @@ typedef enum {
     extern int vpp_sync_for_events();
     extern int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add);
     extern int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_enable, uint32_t port_type);
+    extern int set_sw_interface_l2_bridge_by_index(uint32_t sw_if_index, uint32_t bridge_id, bool l2_enable, uint32_t port_type);
     extern int set_l2_interface_vlan_tag_rewrite(const char *hwif_name, uint32_t tag1, uint32_t tag2, uint32_t push_dot1q, uint32_t vtr_op);
     extern int bridge_domain_get_member_count (uint32_t bd_id, uint32_t *member_count);
     extern int create_bvi_interface(uint8_t *mac_address, uint32_t instance);

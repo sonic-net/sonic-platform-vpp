@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <assert.h>
+#include <pthread.h>
 
 #include <vat/vat.h>
 #include <vlibapi/api.h>
@@ -239,6 +240,15 @@ void os_exit(int code) {}
 #define SAIVPP_DEBUG(format,args...) {}
 #define SAIVPP_WARN clib_warning
 #define SAIVPP_ERROR clib_error
+// Wait for results and retry once if necessary
+#define WR(ret)                 \
+do {                            \
+    W (ret);                    \
+    if (ret == -99) {           \
+        W (ret);                \
+        SAIVPP_WARN("Retry and got %d", ret); \
+    }                           \
+} while(0);
 
 #define VPP_MAX_CTX 2
 typedef struct _vpp_index_map_ {
@@ -570,7 +580,7 @@ vl_api_sw_interface_add_del_address_reply_t_handler (vl_api_sw_interface_add_del
 {
     set_reply_status(ntohl(msg->retval));
 
-    SAIVPP_DEBUG("sw interface address add/del %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    SAIVPP_WARN("[%lu]:sw interface address add/del %s(%d)", (unsigned long)(pthread_self()), msg->retval ? "failed" : "successful", msg->retval);
 }
 
 static void
@@ -660,8 +670,7 @@ static void
 vl_api_bvi_create_reply_t_handler (vl_api_bvi_create_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
-
-    SAIVPP_WARN("bvi create reply handler swifIndex:%d  %s(%d)",msg->sw_if_index,  msg->retval ? "failed" : "successful", msg->retval);
+    SAIVPP_WARN("[%lu]:bvi create reply handler swifIndex:%d  %s(%d)",(unsigned long)(pthread_self()), msg->sw_if_index,  msg->retval ? "failed" : "successful", msg->retval);
 }
 
 static void
@@ -701,6 +710,7 @@ vl_api_vxlan_add_del_tunnel_v3_reply_t_handler (
     vat_main_t *vam = &vat_main;
 
     set_reply_sw_if_index(ntohl(msg->sw_if_index));
+    SAIVPP_DEBUG("[%lu] - if_idx,%d,status,%d", (unsigned long)(pthread_self()), vam->sw_if_index, ntohl(msg->retval));
     set_reply_status(ntohl(msg->retval));
 }
 
@@ -1411,7 +1421,7 @@ int ip_vrf_del (u32 vrf_id, const char *vrf_name, bool is_ipv6)
 }
 
 static int __ip_nbr_add_del (vat_main_t *vam, vl_api_address_t *nbr_addr, u32 if_idx,
-			     uint8_t *mac, bool is_static, bool is_add)
+			     uint8_t *mac, bool is_static, bool no_fib_entry, bool is_add)
 {
     vl_api_ip_neighbor_add_del_t *mp;
     int ret;
@@ -1421,7 +1431,13 @@ static int __ip_nbr_add_del (vat_main_t *vam, vl_api_address_t *nbr_addr, u32 if
 
     M (IP_NEIGHBOR_ADD_DEL, mp);
     mp->is_add = is_add;
-    mp->neighbor.flags = (is_static) ? IP_API_NEIGHBOR_FLAG_STATIC : IP_API_NEIGHBOR_FLAG_NONE;
+    mp->neighbor.flags = IP_API_NEIGHBOR_FLAG_NONE;
+    if (is_static) {
+        mp->neighbor.flags |= IP_API_NEIGHBOR_FLAG_STATIC;
+    }   
+    if (no_fib_entry) {
+        mp->neighbor.flags |= IP_API_NEIGHBOR_FLAG_NO_FIB_ENTRY;        
+    }
     mp->neighbor.sw_if_index = htonl(if_idx);
     mp->neighbor.ip_address = *nbr_addr;
     memcpy(mp->neighbor.mac_address, mac, sizeof(mp->neighbor.mac_address));
@@ -1435,7 +1451,7 @@ static int __ip_nbr_add_del (vat_main_t *vam, vl_api_address_t *nbr_addr, u32 if
 }
 
 static int ip_nbr_add_del (const char *hwif_name, uint32_t sw_if_index, struct sockaddr *addr,
-			   bool is_static, uint8_t *mac, bool is_add)
+			   bool is_static, bool no_fib_entry, uint8_t *mac, bool is_add)
 {
     vat_main_t *vam = &vat_main;
     vl_api_address_t api_addr;
@@ -1456,17 +1472,17 @@ static int ip_nbr_add_del (const char *hwif_name, uint32_t sw_if_index, struct s
     } 
     
 
-    return __ip_nbr_add_del(vam, &api_addr, sw_if_index, mac, is_static, is_add);
+    return __ip_nbr_add_del(vam, &api_addr, sw_if_index, mac, is_static, no_fib_entry, is_add);
 }
 
-int ip4_nbr_add_del (const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in *addr, bool is_static, uint8_t *mac, bool is_add)
+int ip4_nbr_add_del (const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in *addr, bool is_static, bool no_fib_entry, uint8_t *mac, bool is_add)
 {
-    return ip_nbr_add_del(hwif_name, sw_if_index, (struct sockaddr *) addr, is_static, mac, is_add);
+    return ip_nbr_add_del(hwif_name, sw_if_index, (struct sockaddr *) addr, is_static, no_fib_entry, mac, is_add);
 }
 
-int ip6_nbr_add_del (const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in6 *addr, bool is_static, uint8_t *mac, bool is_add)
+int ip6_nbr_add_del (const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in6 *addr, bool is_static, bool no_fib_entry, uint8_t *mac, bool is_add)
 {
-    return ip_nbr_add_del(hwif_name, sw_if_index, (struct sockaddr *) addr, is_static, mac, is_add);
+    return ip_nbr_add_del(hwif_name, sw_if_index, (struct sockaddr *) addr, is_static, no_fib_entry, mac, is_add);
 }
 
 int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
@@ -1854,7 +1870,7 @@ int interface_ip_address_add_del (const char *hwif_name, vpp_ip_route_t *prefix,
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -2071,8 +2087,7 @@ int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add)
 
     return ret;
 }
-
-int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_mode, uint32_t port_type)
+int set_sw_interface_l2_bridge_by_index(uint32_t sw_if_index, uint32_t bridge_id, bool l2_mode, uint32_t port_type)
 {
     vat_main_t *vam = &vat_main;
     vl_api_sw_interface_set_l2_bridge_t *mp;
@@ -2091,21 +2106,8 @@ int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l
     __plugin_msg_base = l2_msg_id_base;
 
     M (SW_INTERFACE_SET_L2_BRIDGE, mp);
-    if (hwif_name) {
-	u32 idx;
 
-        idx = get_swif_idx(vam, hwif_name);
-        if (idx != (u32) -1) {
-            mp->rx_sw_if_index = htonl(idx);
-        } else {
-            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
-            VPP_UNLOCK();
-            return -EINVAL;
-        }
-    } else {
-        VPP_UNLOCK();
-        return -EINVAL;
-    }
+    mp->rx_sw_if_index = htonl(sw_if_index);
     mp->bd_id = htonl (bridge_id);
     mp->shg = (u8) shg;
     mp->port_type = htonl (port_type);
@@ -2118,6 +2120,26 @@ int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l
     VPP_UNLOCK();
 
     return ret;
+}
+
+int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_mode, uint32_t port_type)
+{
+    vat_main_t *vam = &vat_main;
+
+    if (hwif_name) {
+	    u32 idx;
+
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1) {
+            return set_sw_interface_l2_bridge_by_index(idx, bridge_id, l2_mode, port_type);
+        } else {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+            return -EINVAL;
+        }
+    } else {
+        return -EINVAL;
+    }
+
 }
 
 int set_l2_interface_vlan_tag_rewrite(const char *hwif_name, uint32_t tag1, uint32_t tag2, uint32_t push_dot1q, uint32_t vtr_op)
@@ -2221,8 +2243,8 @@ int create_bvi_interface(uint8_t *mac_address, u32 instance)
 
     S (mp);
 
-    W (ret);
-
+    WR (ret);
+    SAIVPP_WARN("[%lu]: done: ret,%d,result_ready,%d",(unsigned long)(pthread_self()), ret, vam->result_ready);
     VPP_UNLOCK();
 
     return ret;
@@ -2349,6 +2371,7 @@ int vpp_vxlan_tunnel_add_del(vpp_vxlan_tunnel_t *tunnel, bool is_add, u32 *sw_if
     W (ret); 
     //reply handler needs to set vam->sw_if_index from reply msg
     *sw_if_index = vam->sw_if_index;
+    SAIVPP_DEBUG("[%lu]: done: if_idx,%d",(unsigned long)(pthread_self()), vam->sw_if_index);
     VPP_UNLOCK();
     return ret;
 }

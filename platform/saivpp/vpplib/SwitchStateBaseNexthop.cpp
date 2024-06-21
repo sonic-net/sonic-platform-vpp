@@ -307,6 +307,8 @@ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
             u_int32_t sw_if_index;
             if (m_tunnel_mgr.get_tunnel_if(next_hop_oid, sw_if_index) == SAI_STATUS_SUCCESS) {
                 nxt_grp_member->sw_if_index = sw_if_index;
+                SWSS_LOG_DEBUG("Got tunnel interface %d for nexthop %s", sw_if_index,
+                            sai_serialize_object_id(next_hop_oid).c_str());                
             } else {
                 SWSS_LOG_ERROR("Failed to get tunnel interface name for nexthop %s",
                             sai_serialize_object_id(next_hop_oid).c_str());
