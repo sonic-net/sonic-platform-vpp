@@ -689,24 +689,26 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
     auto br_port_attrs = m_objectHash.at(SAI_OBJECT_TYPE_BRIDGE_PORT).at(sai_serialize_object_id(br_port_id));
     auto meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_BRIDGE_PORT, SAI_BRIDGE_PORT_ATTR_PORT_ID);
     auto bp_attr = br_port_attrs[meta->attridname];
-    auto port_id = bp_attr->getAttr()->value.oid;
-    obj_type = objectTypeQuery(port_id);
 
-    if (obj_type != SAI_OBJECT_TYPE_PORT)
-    {
-        SWSS_LOG_NOTICE("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT but is: %s",
-                sai_serialize_object_id(port_id).c_str(),
-                sai_serialize_object_type(obj_type).c_str());
+    if (bp_attr == NULL) {
+        meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_BRIDGE_PORT, SAI_BRIDGE_PORT_ATTR_TUNNEL_ID);
+        bp_attr = br_port_attrs[meta->attridname];
+    }
+
+    if (bp_attr == NULL) {
+        SWSS_LOG_NOTICE("BRIDGE_PORT 0x%lx has neither SAI_BRIDGE_PORT_ATTR_PORT_ID nor SAI_BRIDGE_PORT_ATTR_TUNNEL_ID",
+                sai_serialize_object_id(br_port_id).c_str());
         return SAI_STATUS_FAILURE;
     }
 
-    std::string if_name;
-    bool found = getTapNameFromPortId(port_id, if_name);
-    if (found == true)
+    auto port_id = bp_attr->getAttr()->value.oid;
+    obj_type = objectTypeQuery(port_id);
+
+    if (obj_type != SAI_OBJECT_TYPE_PORT && obj_type != SAI_OBJECT_TYPE_TUNNEL)
     {
-        hwifname = tap_to_hwif_name(if_name.c_str());
-    }else {
-        SWSS_LOG_NOTICE("No ports found for bridge port id :%s",sai_serialize_object_id(br_port_id).c_str());
+        SWSS_LOG_NOTICE("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be PORT or TUNNEL but is: %s",
+                sai_serialize_object_id(port_id).c_str(),
+                sai_serialize_object_type(obj_type).c_str());
         return SAI_STATUS_FAILURE;
     }
 
@@ -732,16 +734,59 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
     }
 
     uint32_t bridge_id = (uint32_t)vlan_id;
+    char hw_vxlan_name[64];
+
+    if (obj_type == SAI_OBJECT_TYPE_TUNNEL) {
+        uint32_t hw_vxlan_ind;
+
+        /*
+         * We create VxLAN in vpp_create_vlan_member()
+         * as it's the first place where we can unambiguously find out
+         * which VLAN ID associated with VxLAN tunnel.
+         */
+        sai_status_t status = vpp_create_vxlan_tunnel(br_port_id, vlan_oid, &hw_vxlan_ind);
+        if (status != SAI_STATUS_SUCCESS) {
+            SWSS_LOG_ERROR("vpp_create_vxlan_tunnel() = %d", status);
+            return status;
+        }
+
+        refresh_interfaces_list();
+
+        if (vpp_get_if_name(hw_vxlan_ind, hw_vxlan_name, sizeof(hw_vxlan_name)) != 0) {
+            SWSS_LOG_ERROR("Name of interface wasn't found for id %u", hw_vxlan_ind);
+            return SAI_STATUS_FAILURE;
+        }
+        hwifname = hw_vxlan_name;
+    } else {
+        std::string if_name;
+        bool found = getTapNameFromPortId(port_id, if_name);
+        if (found == true) {
+            hwifname = tap_to_hwif_name(if_name.c_str());
+        } else {
+            SWSS_LOG_NOTICE("No ports found for bridge port id :%s", sai_serialize_object_id(br_port_id).c_str());
+            return SAI_STATUS_FAILURE;
+        }
+    }
+
     auto attr_tag_mode = sai_metadata_get_attr_by_id(SAI_VLAN_MEMBER_ATTR_VLAN_TAGGING_MODE, attr_count, attr_list);
     uint32_t tagging_mode = 0;
     const char *hw_ifname;
-    char host_subifname[32];
+    char host_subifname[80];  // Enough for HW interface name of [64] and vlan id
 
     if (attr_tag_mode == NULL)
     {
         SWSS_LOG_ERROR("attr SAI_VLAN_MEMBER_ATTR_VLAN_ID was not passed");
         return SAI_STATUS_FAILURE;
     }
+
+    /*
+     * VPP documentation states that VxLAN interface in bridge domain
+     * shall have non-zero Split Horizon Group.
+     *
+     * https://wiki.fd.io/view/VPP/Using_VPP_as_a_VXLAN_Tunnel_Terminator#Split_Horizon_Group
+     */
+    uint8_t shg = (obj_type == SAI_OBJECT_TYPE_TUNNEL) ? 1 : 0;
+
     tagging_mode = attr_tag_mode->value.u32;
     if (tagging_mode == SAI_VLAN_TAGGING_MODE_TAGGED)
     {
@@ -759,7 +804,7 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
         hw_ifname = host_subifname;
 
         //Create bridge and set the l2 port
-        set_sw_interface_l2_bridge(hw_ifname,bridge_id, true, VPP_API_PORT_TYPE_NORMAL);
+        set_sw_interface_l2_bridge(hw_ifname, bridge_id, true, VPP_API_PORT_TYPE_NORMAL, shg);
 
         //Set interface state up
         interface_set_state(hw_ifname, true);
@@ -767,7 +812,7 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
         hw_ifname = hwifname;
 
         //Create bridge and set the l2 port
-        set_sw_interface_l2_bridge(hw_ifname,bridge_id, true, VPP_API_PORT_TYPE_NORMAL);
+        set_sw_interface_l2_bridge(hw_ifname, bridge_id, true, VPP_API_PORT_TYPE_NORMAL, shg);
 
         //Set the vlan member to bridge and tags rewrite
         vpp_l2_vtr_op_t vtr_op = L2_VTR_PUSH_1;
@@ -858,12 +903,44 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
         return SAI_STATUS_FAILURE;
     }
 
+    char hw_vxlan_name[64];
     const char *hw_ifname = nullptr;
     auto br_port_attrs = m_objectHash.at(SAI_OBJECT_TYPE_BRIDGE_PORT).at(sai_serialize_object_id(br_port_oid));
     auto meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_BRIDGE_PORT, SAI_BRIDGE_PORT_ATTR_PORT_ID);
     auto bp_attr = br_port_attrs[meta->attridname];
+    if(bp_attr == NULL){
+        meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_BRIDGE_PORT, SAI_BRIDGE_PORT_ATTR_TUNNEL_ID);
+        bp_attr = br_port_attrs[meta->attridname];
+    }
     auto port_id = bp_attr->getAttr()->value.oid;
     obj_type = objectTypeQuery(port_id);
+
+    if (obj_type == SAI_OBJECT_TYPE_TUNNEL) {
+        auto it = m_tunnel_oid_to_iface_map.find(port_id);
+        if (it == m_tunnel_oid_to_iface_map.end()) {
+            SWSS_LOG_ERROR("Interface id not found for tunnel oid 0x%lx", port_id);
+            return SAI_STATUS_ITEM_NOT_FOUND;
+        }
+
+        if (vpp_get_if_name(it->second, hw_vxlan_name, sizeof(hw_vxlan_name)) != 0) {
+            SWSS_LOG_ERROR("Name of interface wasn't found for id %u", it->second);
+            return SAI_STATUS_FAILURE;
+        }
+        hw_ifname = hw_vxlan_name;
+        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false, VPP_API_PORT_TYPE_NORMAL, 0);
+
+        status = vpp_remove_vxlan_tunnel(it->second);
+        if (status != SAI_STATUS_SUCCESS) {
+            SWSS_LOG_ERROR("vpp_remove_vxlan_tunnel(%u) = %d", it->second, status);
+            return status;
+        }
+
+        refresh_interfaces_list();
+
+        m_tunnel_oid_to_iface_map.erase(it);
+
+        return SAI_STATUS_SUCCESS;
+    }
 
     if (obj_type != SAI_OBJECT_TYPE_PORT)
     {
@@ -904,14 +981,14 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
         set_l2_interface_vlan_tag_rewrite(hw_ifname, tag1, tag2, push_dot1q, vtr_op);
 
         //Remove interface from bridge, interface type should be changed to others types like l3.
-        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false, VPP_API_PORT_TYPE_NORMAL);
+        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false, VPP_API_PORT_TYPE_NORMAL, 0);
     }else if (tagging_mode == SAI_VLAN_TAGGING_MODE_TAGGED) {
 
         // set interface l2 tag-rewrite GigabitEthernet0/8/0.200 disable
         snprintf(host_subifname, sizeof(host_subifname), "%s.%u", hw_ifname, vlan_id);
         hw_ifname = host_subifname;
         // Remove the l2 port from bridge
-        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false, VPP_API_PORT_TYPE_NORMAL);
+        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false, VPP_API_PORT_TYPE_NORMAL, 0);
 
         // delete subinterface
         delete_sub_interface(hw_ifname, vlan_id);
@@ -989,7 +1066,7 @@ sai_status_t SwitchStateBase::vpp_create_bvi_interface(
     hw_ifname = hw_bviifname;
 
     //Create bridge and set the l2 port as BVI
-    set_sw_interface_l2_bridge(hw_ifname,vlan_id, true, VPP_API_PORT_TYPE_BVI);
+    set_sw_interface_l2_bridge(hw_ifname,vlan_id, true, VPP_API_PORT_TYPE_BVI, 0);
 
     //Set interface state up
     interface_set_state(hw_ifname, true);
@@ -1072,13 +1149,247 @@ sai_status_t SwitchStateBase::vpp_delete_bvi_interface(
     set_l2_interface_vlan_tag_rewrite(hw_ifname, tag1, tag2, push_dot1q, vtr_op);
 
     //Remove interface from bridge, interface type should be changed to others types like l3.
-    set_sw_interface_l2_bridge(hw_ifname, bd_id, false, VPP_API_PORT_TYPE_BVI);
+    set_sw_interface_l2_bridge(hw_ifname, bd_id, false, VPP_API_PORT_TYPE_BVI, 0);
 
     //Remove the bvi interface
     delete_bvi_interface(hw_ifname);
 
     // refresh interfaces from VPP
     refresh_interfaces_list();
+
+    return SAI_STATUS_SUCCESS;
+}
+
+
+sai_status_t SwitchStateBase::vpp_create_vxlan_tunnel(
+        _In_  sai_object_id_t br_port_id,
+        _In_  sai_object_id_t vlan_oid,
+        _Out_ uint32_t *if_ind)
+{
+    const sai_attribute_t     *sip_attr;
+    const sai_attribute_t     *dip_attr;
+    const sai_attribute_t     *vni_attr;
+    const sai_attribute_t     *decap_attr;
+    sai_uint16_t               vlan;
+    sai_object_id_t            tunnel_id;
+    const sai_attr_metadata_t *meta;
+    sai_object_type_t          obj_type = objectTypeQuery(br_port_id);
+
+    // Sanity checks
+    {
+        SWSS_LOG_NOTICE("[E](br_port_id=%s, vlan_oid=%s)", sai_serialize_object_id(br_port_id).c_str(),
+                sai_serialize_object_id(vlan_oid).c_str());
+
+        if (obj_type != SAI_OBJECT_TYPE_BRIDGE_PORT) {
+            SWSS_LOG_ERROR("SAI_OBJECT_TYPE_BRIDGE_PORT expected, but %s is %s",
+                    sai_serialize_object_id(br_port_id).c_str(), sai_serialize_object_type(obj_type).c_str());
+
+            return SAI_STATUS_FAILURE;
+        }
+
+        auto br_port_attrs = m_objectHash.at(SAI_OBJECT_TYPE_BRIDGE_PORT).at(sai_serialize_object_id(br_port_id));
+        meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_BRIDGE_PORT, SAI_BRIDGE_PORT_ATTR_TUNNEL_ID);
+
+        auto bp_attr = br_port_attrs[meta->attridname];
+        if (bp_attr == NULL) {
+            SWSS_LOG_ERROR("BRIDGE_PORT 0x%lx has no SAI_BRIDGE_PORT_ATTR_TUNNEL_ID",
+                    sai_serialize_object_id(br_port_id).c_str());
+            return SAI_STATUS_FAILURE;
+        }
+
+        tunnel_id = bp_attr->getAttr()->value.oid;
+        obj_type = objectTypeQuery(tunnel_id);
+
+        if (obj_type != SAI_OBJECT_TYPE_TUNNEL) {
+            SWSS_LOG_ERROR("SAI_BRIDGE_PORT_ATTR_PORT_ID=%s expected to be TUNNEL but is %s",
+                    sai_serialize_object_id(tunnel_id).c_str(), sai_serialize_object_type(obj_type).c_str());
+            return SAI_STATUS_FAILURE;
+        }
+    }
+
+    auto tunnel_attrs = m_objectHash.at(SAI_OBJECT_TYPE_TUNNEL).at(sai_serialize_object_id(tunnel_id));
+
+    // ATTR_PEER_MODE
+    {
+        meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_TUNNEL, SAI_TUNNEL_ATTR_PEER_MODE);
+        auto attr = tunnel_attrs[meta->attridname];
+        if (attr == NULL) {
+            SWSS_LOG_ERROR("SAI_OBJECT_TYPE_TUNNEL 0x%lx has no SAI_TUNNEL_ATTR_PEER_MODE",
+                    sai_serialize_object_id(tunnel_id).c_str());
+            return SAI_STATUS_FAILURE;
+        }
+
+        if (attr->getAttr()->value.s32 != SAI_TUNNEL_PEER_MODE_P2P) {
+            SWSS_LOG_ERROR("Only SAI_TUNNEL_PEER_MODE_P2P supported", sai_serialize_object_id(tunnel_id).c_str());
+            return SAI_STATUS_FAILURE;
+        }
+    }
+
+    // SIP
+    meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_TUNNEL, SAI_TUNNEL_ATTR_ENCAP_SRC_IP);
+    sip_attr = tunnel_attrs[meta->attridname]->getAttr();
+    if (sip_attr == NULL) {
+        SWSS_LOG_ERROR("SAI_OBJECT_TYPE_TUNNEL 0x%lx has no SAI_TUNNEL_ATTR_ENCAP_SRC_IP",
+                sai_serialize_object_id(tunnel_id).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    // DIP
+    meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_TUNNEL, SAI_TUNNEL_ATTR_ENCAP_DST_IP);
+    dip_attr = tunnel_attrs[meta->attridname]->getAttr();
+    if (dip_attr == NULL) {
+        SWSS_LOG_ERROR("SAI_OBJECT_TYPE_TUNNEL 0x%lx has no SAI_TUNNEL_ATTR_ENCAP_DST_IP",
+                sai_serialize_object_id(tunnel_id).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    // DECAP_MAPPERS
+    meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_TUNNEL, SAI_TUNNEL_ATTR_DECAP_MAPPERS);
+    decap_attr = tunnel_attrs[meta->attridname]->getAttr();
+
+    // VLAN
+    auto attr_vlanid_map = m_objectHash.at(SAI_OBJECT_TYPE_VLAN).at(sai_serialize_object_id(vlan_oid));
+    auto md_vlan_id = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_VLAN, SAI_VLAN_ATTR_VLAN_ID);
+    vlan = attr_vlanid_map.at(md_vlan_id->attridname)->getAttr()->value.u16;
+
+    // VNI lookup
+    if (vpp_find_vni(vlan, decap_attr, &vni_attr) != SAI_STATUS_SUCCESS ){
+        SWSS_LOG_DEBUG("No VNI found for VLAN %hd", vlan);
+        return SAI_STATUS_FAILURE;
+    }
+
+    sai_status_t status = vpp_create_vxlan_tunnel(sip_attr, dip_attr, vni_attr, if_ind);
+    if (status == SAI_STATUS_SUCCESS)
+        m_tunnel_oid_to_iface_map[tunnel_id] = *if_ind;
+
+    return status;
+}
+
+
+/**
+  Lookup for VNI in TUNNEL_MAP_ENTRY's
+
+  Example of  TUNNEL_MAP_ENTRY:
+
+    vpp_create_tunnel_map_entry(
+      SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY
+        #0 SAI_TUNNEL_MAP_ENTRY_ATTR_TUNNEL_MAP_TYPE=VNI_TO_VLAN_ID
+        #1 SAI_TUNNEL_MAP_ENTRY_ATTR_TUNNEL_MAP=0x2900000000
+        #2 SAI_TUNNEL_MAP_ENTRY_ATTR_VLAN_ID_VALUE=100
+        #3 SAI_TUNNEL_MAP_ENTRY_ATTR_VNI_ID_KEY=1000
+    ) = 0x3b00000000
+*/
+
+sai_status_t SwitchStateBase::vpp_find_vni(
+        _In_  sai_uint16_t vlan,
+        _In_  const sai_attribute_t *decap_attr,
+        _Out_ const sai_attribute_t **vni_attr)
+{
+    for (const auto &obj_it : m_objectHash.at(SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY)) {
+        // Check TUNNEL_MAP_TYPE
+        auto m = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY,
+                SAI_TUNNEL_MAP_ENTRY_ATTR_TUNNEL_MAP_TYPE);
+        auto a = obj_it.second.at(m->attridname);
+        if (a->getAttr()->value.s32 != SAI_TUNNEL_MAP_TYPE_VNI_TO_VLAN_ID
+                && a->getAttr()->value.s32 != SAI_TUNNEL_MAP_TYPE_VLAN_ID_TO_VNI)
+            continue;
+
+        // Compare VLAN
+        m = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY, SAI_TUNNEL_MAP_ENTRY_ATTR_VLAN_ID_VALUE);
+        a = obj_it.second.at(m->attridname);
+        if (a->getAttr()->value.u16 != vlan)
+            continue;
+
+        // Compare TUNNEL_MAP
+        m = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY, SAI_TUNNEL_MAP_ENTRY_ATTR_TUNNEL_MAP);
+        a = obj_it.second.at(m->attridname);
+
+        bool found = false;
+        for (uint32_t i = 0; i < decap_attr->value.objlist.count; ++i) {
+            if (a->getAttr()->value.oid == decap_attr->value.objlist.list[i]) {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            continue;
+
+        m = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY, SAI_TUNNEL_MAP_ENTRY_ATTR_VNI_ID_KEY);
+        a = obj_it.second.at(m->attridname);
+        if (a->getAttr() != NULL) {
+            *vni_attr = a->getAttr();
+            return SAI_STATUS_SUCCESS;
+        }
+    }
+
+    SWSS_LOG_DEBUG("No VNI found for VLAN %hd", vlan);
+    return SAI_STATUS_FAILURE;
+}
+
+typedef struct _vpp_vxlan_t {
+    vpp_ip_addr_t sip;
+    vpp_ip_addr_t dip;
+    uint32_t      vni;
+} vpp_vxlan_t;
+
+std::map<uint32_t,vpp_vxlan_t> vpp_vxlan_map;
+
+sai_status_t SwitchStateBase::vpp_create_vxlan_tunnel(
+        _In_ const sai_attribute_t *sip_attr,
+        _In_ const sai_attribute_t *dip_attr,
+        _In_ const sai_attribute_t *vni_attr,
+        _Out_ uint32_t *if_ind)
+{
+    vpp_ip_addr_t v_sip;
+    vpp_ip_addr_t v_dip;
+
+    if (sip_attr == NULL || dip_attr == NULL || vni_attr == NULL) {
+        SWSS_LOG_ERROR("input arg is NULL");
+        return SAI_STATUS_FAILURE;
+    }
+
+    const sai_ip_address_t &s_sip = sip_attr->value.ipaddr;
+    if (s_sip.addr_family == SAI_IP_ADDR_FAMILY_IPV4) {
+        v_sip.sa_family = AF_INET;
+        v_sip.addr.ip4.sin_addr.s_addr = s_sip.addr.ip4;
+    } else {
+        v_sip.sa_family = AF_INET6;
+        memcpy(v_sip.addr.ip6.sin6_addr.s6_addr, s_sip.addr.ip6, sizeof(v_sip.addr.ip6.sin6_addr.s6_addr));
+    }
+
+    const sai_ip_address_t &s_dip = dip_attr->value.ipaddr;
+    if (s_dip.addr_family == SAI_IP_ADDR_FAMILY_IPV4) {
+        v_dip.sa_family = AF_INET;
+        v_dip.addr.ip4.sin_addr.s_addr = s_dip.addr.ip4;
+    } else {
+        v_dip.sa_family = AF_INET6;
+        memcpy(v_dip.addr.ip6.sin6_addr.s6_addr, s_dip.addr.ip6, sizeof(v_dip.addr.ip6.sin6_addr.s6_addr));
+    }
+
+    int ret = vpp_vxlan_tunnel_add_del(&v_sip, &v_dip, vni_attr->value.u32, true, if_ind);
+    if (ret)
+        return SAI_STATUS_FAILURE;
+
+    vpp_vxlan_map[*if_ind].sip = v_sip;
+    vpp_vxlan_map[*if_ind].dip = v_dip;
+    vpp_vxlan_map[*if_ind].vni = vni_attr->value.u32;
+
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::vpp_remove_vxlan_tunnel( _In_ uint32_t if_ind)
+{
+    auto it = vpp_vxlan_map.find(if_ind);
+    if (it == vpp_vxlan_map.end() ) {
+        SWSS_LOG_NOTICE("if_ind %u not found in vpp_vxlan_map", if_ind);
+        return SAI_STATUS_ITEM_NOT_FOUND;
+    }
+
+    int ret = vpp_vxlan_tunnel_add_del(&it->second.sip, &it->second.dip, it->second.vni, false, &if_ind);
+    if (ret)
+        return SAI_STATUS_FAILURE;
+
+    vpp_vxlan_map.erase(it);
 
     return SAI_STATUS_SUCCESS;
 }
