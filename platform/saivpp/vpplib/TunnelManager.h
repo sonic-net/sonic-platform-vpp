@@ -93,13 +93,20 @@ namespace saivpp
         
         const std::array<uint8_t, 6>& get_router_mac() const;
 
-        sai_status_t create_vpp_vxlan_decap(
-                        _In_ uint32_t tunnel_if_index,
+        sai_status_t create_vpp_vxlan_encap(
+                        _In_  vpp_vxlan_tunnel_t& req,
                         _Out_ TunnelVPPData& tunnel_data);
 
-        sai_status_t
-        delete_vpp_vxlan_decap(
+        sai_status_t remove_vpp_vxlan_encap(
+                        _In_  vpp_vxlan_tunnel_t& req,            
                         _In_ TunnelVPPData& tunnel_data);
+
+        sai_status_t create_vpp_vxlan_decap(
+                        _Out_ TunnelVPPData& tunnel_data);
+
+        sai_status_t remove_vpp_vxlan_decap(
+                        _In_ TunnelVPPData& tunnel_data);
+                        
     };
 
 }

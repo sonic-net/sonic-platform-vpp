@@ -18,7 +18,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <assert.h>
-#include <pthread.h>
 
 #include <vat/vat.h>
 #include <vlibapi/api.h>
@@ -240,14 +239,28 @@ void os_exit(int code) {}
 #define SAIVPP_DEBUG(format,args...) {}
 #define SAIVPP_WARN clib_warning
 #define SAIVPP_ERROR clib_error
-// Wait for results and retry once if necessary
-#define WR(ret)                 \
-do {                            \
-    W (ret);                    \
-    if (ret == -99) {           \
-        W (ret);                \
-        SAIVPP_WARN("Retry and got %d", ret); \
-    }                           \
+
+/**
+ * Wait for result and retry if necessary. The retry is necessary because there could be unsolicited
+ * events causing vl_socket_client_read to return before the expected result is received. If 
+ * vam->result_ready is not set, which should be set when API callback function is called, then
+ * it means we get some unsolicited events and we need to retry.
+ */ 
+#define WR(ret)                                                 \
+do {                                                            \
+    f64 timeout = vat_time_now (vam) + 1.0;                     \
+    socket_client_main_t *scm = vam->socket_client_main;    	\
+    ret = -99;                                                  \
+                                                                \
+    while (vat_time_now (vam) < timeout) {                      \
+        if (scm && scm->socket_enable)                          \
+            vl_socket_client_read (5);                          \
+        if (vam->result_ready == 1) {                           \
+            ret = vam->retval;                                  \
+            break;                                              \
+        }                                                       \
+        vat_suspend (vam->vlib_main, 1e-5);                     \
+    }								                            \
 } while(0);
 
 #define VPP_MAX_CTX 2
@@ -580,7 +593,7 @@ vl_api_sw_interface_add_del_address_reply_t_handler (vl_api_sw_interface_add_del
 {
     set_reply_status(ntohl(msg->retval));
 
-    SAIVPP_WARN("[%lu]:sw interface address add/del %s(%d)", (unsigned long)(pthread_self()), msg->retval ? "failed" : "successful", msg->retval);
+    SAIVPP_DEBUG("sw interface address add/del %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
 }
 
 static void
@@ -670,7 +683,8 @@ static void
 vl_api_bvi_create_reply_t_handler (vl_api_bvi_create_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
-    SAIVPP_WARN("[%lu]:bvi create reply handler swifIndex:%d  %s(%d)",(unsigned long)(pthread_self()), msg->sw_if_index,  msg->retval ? "failed" : "successful", msg->retval);
+
+    SAIVPP_WARN("bvi create reply handler %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
 }
 
 static void
@@ -710,8 +724,9 @@ vl_api_vxlan_add_del_tunnel_v3_reply_t_handler (
     vat_main_t *vam = &vat_main;
 
     set_reply_sw_if_index(ntohl(msg->sw_if_index));
-    SAIVPP_DEBUG("[%lu] - if_idx,%d,status,%d", (unsigned long)(pthread_self()), vam->sw_if_index, ntohl(msg->retval));
+
     set_reply_status(ntohl(msg->retval));
+    SAIVPP_DEBUG("vxlan_add_del handler: if_idx,%d,status,%d",vam->sw_if_index, vam->retval);
 }
 
 #define vl_api_get_first_msg_id_reply_t_handler vl_noop_handler
@@ -823,8 +838,7 @@ static void vl_api_acl_del_reply_t_handler(vl_api_acl_del_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
 
-    SAIVPP_DEBUG("acl del %s(%d) acl index %u", msg->retval ? "failed" : "successful", msg->retval,
-		 msg->acl_index);
+    SAIVPP_DEBUG("acl del %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
 }
 
 static void
@@ -1444,7 +1458,7 @@ static int __ip_nbr_add_del (vat_main_t *vam, vl_api_address_t *nbr_addr, u32 if
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
     return ret;
@@ -1454,8 +1468,8 @@ static int ip_nbr_add_del (const char *hwif_name, uint32_t sw_if_index, struct s
 			   bool is_static, bool no_fib_entry, uint8_t *mac, bool is_add)
 {
     vat_main_t *vam = &vat_main;
-    vl_api_address_t api_addr;
 
+    vl_api_address_t api_addr;
     if (addr->sa_family == AF_INET) {
 	struct sockaddr_in *ip4 = (struct sockaddr_in *) addr;
 	api_addr.af = ADDRESS_IP4;
@@ -1573,7 +1587,7 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -1907,7 +1921,7 @@ int interface_set_state (const char *hwif_name, bool is_up)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -2244,7 +2258,7 @@ int create_bvi_interface(uint8_t *mac_address, u32 instance)
     S (mp);
 
     WR (ret);
-    SAIVPP_WARN("[%lu]: done: ret,%d,result_ready,%d",(unsigned long)(pthread_self()), ret, vam->result_ready);
+
     VPP_UNLOCK();
 
     return ret;
@@ -2312,7 +2326,6 @@ int set_bridge_domain_flags(uint32_t bd_id, vpp_bd_flags_t flag, bool enable)
     return ret;
 }
 
-
 int vpp_vxlan_tunnel_add_del(vpp_vxlan_tunnel_t *tunnel, bool is_add, u32 *sw_if_index)
 {
     vat_main_t *vam = &vat_main;
@@ -2368,10 +2381,31 @@ int vpp_vxlan_tunnel_add_del(vpp_vxlan_tunnel_t *tunnel, bool is_add, u32 *sw_if
     mp->decap_next_index = htonl(tunnel->decap_next_index);
 
     S (mp);
-    W (ret); 
+    WR (ret); 
     //reply handler needs to set vam->sw_if_index from reply msg
     *sw_if_index = vam->sw_if_index;
-    SAIVPP_DEBUG("[%lu]: done: if_idx,%d",(unsigned long)(pthread_self()), vam->sw_if_index);
+    SAIVPP_DEBUG("vxlan_add_del done: if_idx,%d",vam->sw_if_index);
     VPP_UNLOCK();
     return ret;
+}
+
+int vpp_ip_addr_t_to_string(vpp_ip_addr_t *ip_addr, char *buffer, size_t maxlen)
+{
+    struct sockaddr_in *ip4;
+    struct sockaddr_in6 *ip6;
+    buffer[0] = 0;
+    if (ip_addr->sa_family == AF_INET) {
+        ip4 = &ip_addr->addr.ip4;
+        if(inet_ntop(AF_INET, &ip4->sin_addr, buffer, maxlen) == NULL){
+            return -1;
+        }
+    } else if (ip_addr->sa_family == AF_INET6) {
+        ip6 = &ip_addr->addr.ip6;
+        if (inet_ntop(AF_INET6, &ip6->sin6_addr, buffer, maxlen) == NULL){
+            return -1;
+        }
+    } else {
+        return -1;
+    }
+    return 0;
 }
