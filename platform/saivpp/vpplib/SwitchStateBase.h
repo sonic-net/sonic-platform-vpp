@@ -756,6 +756,27 @@ namespace saivpp
 		    _Out_ nexthop_grp_config_t **nxthop_group_cfg);
 
         protected:
+            // VXLAN
+            sai_status_t vpp_create_vxlan_tunnel(
+                    _In_ sai_object_id_t br_port_id,
+                    _In_ sai_object_id_t vlan_oid,
+                    _Out_ uint32_t *if_ind);
+            sai_status_t vpp_create_vxlan_tunnel(
+                    _In_ const sai_attribute_t *sip_attr,
+                    _In_ const sai_attribute_t *dip_attr,
+                    _In_ const sai_attribute_t *vni_attr,
+                    _Out_ uint32_t *if_ind);
+            sai_status_t vpp_remove_vxlan_tunnel(
+                    _In_ uint32_t if_ind);
+            sai_status_t vpp_find_vni(
+                    _In_ sai_uint16_t vlan,
+                    _In_ const sai_attribute_t *decap_attr,
+                    _Out_ const sai_attribute_t **vni_attr);
+
+            std::map<sai_object_id_t , uint32_t> m_tunnel_oid_to_iface_map;
+
+
+        protected:
 	    sai_status_t createRouterif(
 		    _In_ sai_object_id_t object_id,
 		    _In_ sai_object_id_t switch_id,

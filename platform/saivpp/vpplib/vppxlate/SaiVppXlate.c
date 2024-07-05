@@ -53,6 +53,56 @@
 #include <vnet/l2/l2.api_enum.h>
 #include <vnet/l2/l2.api_types.h>
 
+
+/* VXLAN-GPE API inclusion */
+
+#include <vnet/vxlan-gpe/vxlan_gpe.api_enum.h>
+#include <vnet/vxlan-gpe/vxlan_gpe.api_types.h>
+#include <vnet/vxlan-gpe/vxlan_gpe_packet.h>
+
+#define vl_typedefs
+#include <vnet/vxlan-gpe/vxlan_gpe.api.h>
+#undef vl_typedefs
+
+#define  vl_endianfun
+#include <vnet/vxlan-gpe/vxlan_gpe.api.h>
+#undef vl_endianfun
+
+#define vl_printfun
+#include <vnet/vxlan-gpe/vxlan_gpe.api.h>
+#undef vl_printfun
+
+#define vl_calcsizefun
+#include <vnet/vxlan-gpe/vxlan_gpe.api.h>
+#undef vl_calcsizefun
+
+#define vl_api_version(n, v) static u32 vxlan_gpe_api_version = v;
+#include <vnet/vxlan-gpe/vxlan_gpe.api.h>
+#undef vl_api_version
+
+
+/* VXLAN API inclusion */
+
+#include <vpp_plugins/vxlan/vxlan.api_enum.h>
+#include <vpp_plugins/vxlan/vxlan.api_types.h>
+
+#define vl_typedefs
+#include <vpp_plugins/vxlan/vxlan.api.h>
+#undef vl_typedefs
+
+#define  vl_endianfun
+#include <vpp_plugins/vxlan/vxlan.api.h>
+#undef vl_endianfun
+
+#define vl_calcsizefun
+#include <vpp_plugins/vxlan/vxlan.api.h>
+#undef vl_calcsizefun
+
+#define vl_api_version(n, v) static u32 vxlan_api_version = v;
+#include <vpp_plugins/vxlan/vxlan.api.h>
+#undef vl_api_version
+
+
 /* l2 API inclusion */
 
 #define vl_typedefs
@@ -611,6 +661,45 @@ vl_api_ip_neighbor_add_del_reply_t_handler (vl_api_ip_neighbor_add_del_reply_t *
 }
 
 static void
+vl_api_vxlan_gpe_add_del_tunnel_v2_reply_t_handler (vl_api_vxlan_gpe_add_del_tunnel_v2_reply_t *msg)
+{
+
+    if (msg->retval == 0) {
+        uint32_t *if_ind = (uint32_t *) get_index_ptr(msg->context);
+
+        *if_ind = ntohl(msg->sw_if_index);
+
+        SAIVPP_DEBUG("vxlan_gpe_add_del_tunnel_v2() sw_if_index %u", *if_ind);
+    } else {
+        SAIVPP_ERROR("vxlan_gpe_add_del_tunnel_v2() failed");
+    }
+
+    release_index(msg->context);
+
+    set_reply_status(ntohl(msg->retval));
+}
+
+static void
+vl_api_vxlan_add_del_tunnel_reply_t_handler (vl_api_vxlan_add_del_tunnel_reply_t *msg)
+{
+
+    if (msg->retval == 0) {
+        uint32_t *if_ind = (uint32_t *) get_index_ptr(msg->context);
+
+        *if_ind = ntohl(msg->sw_if_index);
+
+        SAIVPP_DEBUG("vxlan_add_del_tunnel() sw_if_index %u", *if_ind);
+    } else {
+        SAIVPP_ERROR("vxlan_add_del_tunnel() failed");
+    }
+
+    release_index(msg->context);
+
+    set_reply_status(ntohl(msg->retval));
+}
+
+
+static void
 vl_api_bridge_domain_add_del_reply_t_handler (vl_api_bridge_domain_add_del_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
@@ -685,6 +774,8 @@ vl_api_bridge_domain_details_t_handler (vl_api_bridge_domain_details_t *mp)
     _(MEMCLNT_MSG_ID(CONTROL_PING_REPLY), control_ping_reply)
 
 static u16 interface_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
+static u16 vxlan_msg_id_base;
+static u16 vxlan_gpe_msg_id_base;
 static u16 l2_msg_id_base;
 
 static void vpp_base_vpe_init(void)
@@ -713,6 +804,12 @@ static void vpp_base_vpe_init(void)
 #define IP_NBR_MSG_ID(id) \
     (VL_API_##id + ip_nbr_msg_id_base)
 
+#define VXLAN_MSG_ID(id) \
+    (VL_API_##id + vxlan_msg_id_base)
+
+#define VXLAN_GPE_MSG_ID(id) \
+    (VL_API_##id + vxlan_gpe_msg_id_base)
+
 #define L2_MSG_ID(id) \
     (VL_API_##id + l2_msg_id_base)
 
@@ -733,6 +830,7 @@ static void vpp_base_vpe_init(void)
     _(IP_MSG_ID(IP_ROUTE_ADD_DEL_REPLY), ip_route_add_del_reply) \
     _(IP_MSG_ID(SET_IP_FLOW_HASH_V2_REPLY), set_ip_flow_hash_v2_reply)	\
     _(IP_NBR_MSG_ID(IP_NEIGHBOR_ADD_DEL_REPLY), ip_neighbor_add_del_reply) \
+    _(VXLAN_GPE_MSG_ID(VXLAN_GPE_ADD_DEL_TUNNEL_V2_REPLY), vxlan_gpe_add_del_tunnel_v2_reply) \
     _(L2_MSG_ID(BRIDGE_DOMAIN_ADD_DEL_REPLY), bridge_domain_add_del_reply) \
     _(L2_MSG_ID(SW_INTERFACE_SET_L2_BRIDGE_REPLY), sw_interface_set_l2_bridge_reply) \
     _(L2_MSG_ID(L2_INTERFACE_VLAN_TAG_REWRITE_REPLY), l2_interface_vlan_tag_rewrite_reply) \
@@ -784,8 +882,7 @@ static void vl_api_acl_del_reply_t_handler(vl_api_acl_del_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
 
-    SAIVPP_DEBUG("acl del %s(%d) acl index %u", msg->retval ? "failed" : "successful", msg->retval,
-		 msg->acl_index);
+    SAIVPP_DEBUG("acl del %s(%d) ", msg->retval ? "failed" : "successful", msg->retval);
 }
 
 static void
@@ -814,6 +911,7 @@ vl_api_acl_interface_add_del_reply_t_handler(vl_api_acl_interface_add_del_reply_
 
 #define foreach_vpe_plugin_api_reply_msg                                \
     _(LCP_MSG_ID(LCP_ITF_PAIR_ADD_DEL_REPLY), lcp_itf_pair_add_del_reply) \
+    _(VXLAN_MSG_ID(VXLAN_ADD_DEL_TUNNEL_REPLY), vxlan_add_del_tunnel_reply) \
     _(ACL_MSG_ID(ACL_ADD_REPLACE_REPLY), acl_add_replace_reply)	\
     _(ACL_MSG_ID(ACL_DEL_REPLY), acl_del_reply) \
     _(ACL_MSG_ID(ACL_STATS_INTF_COUNTERS_ENABLE_REPLY), acl_stats_intf_counters_enable_reply) \
@@ -857,6 +955,14 @@ static void get_base_msg_id()
     msg_base_lookup_name = format (0, "acl_%08x%c", acl_api_version, 0);
     acl_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
     assert(acl_msg_id_base != (u16) ~0);
+
+    msg_base_lookup_name = format (0, "vxlan_%08x%c", vxlan_api_version, 0);
+    vxlan_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
+    assert(vxlan_msg_id_base != (u16) ~0);
+
+    msg_base_lookup_name = format (0, "vxlan_gpe_%08x%c", vxlan_gpe_api_version, 0);
+    vxlan_gpe_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
+    assert(vxlan_gpe_msg_id_base != (u16) ~0);
 
     msg_base_lookup_name = format (0, "l2_%08x%c", l2_api_version, 0);
     l2_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
@@ -1009,6 +1115,38 @@ static u32 get_swif_idx (vat_main_t *vam, const char *ifname)
                 if (strcmp((char *) name, ifname) == 0) return value;
             }));
     return ((u32) -1);
+}
+
+/*
+ * no-lock variant is useful if one uses it for debug purpose under lock
+ */
+static int get_hw_if_name_nolock(uint32_t hw_ind, char *hw_ifname, size_t name_len)
+{
+    uword *ptr;
+
+    ptr = hash_get(interface_name_by_sw_index, hw_ind);
+    if (NULL == ptr) {
+        SAIVPP_WARN("vpp cannot get interface name for index %u", hw_ind);
+        return -1;
+    }
+
+    strncpy(hw_ifname, (const char*) ptr[0], name_len);
+
+    return 0;
+}
+
+/*
+ * @return 0 on success, non-zero on failure
+ */
+int vpp_get_if_name(uint32_t hw_ind, char *hw_ifname, size_t name_len)
+{
+    int ret;
+
+    VPP_LOCK();
+    ret = get_hw_if_name_nolock(hw_ind, hw_ifname, name_len);
+    VPP_UNLOCK();
+
+    return ret;
 }
 
 static int config_lcp_hostif (vat_main_t *vam,
@@ -2035,11 +2173,98 @@ int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add)
     return ret;
 }
 
-int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_mode, uint32_t port_type)
+int vpp_vxlan_tunnel_add_del(vpp_ip_addr_t *sip, vpp_ip_addr_t *dip, uint32_t vni, bool is_add, uint32_t *if_ind)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_vxlan_add_del_tunnel_t *mp;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = vxlan_msg_id_base;
+
+    M(VXLAN_ADD_DEL_TUNNEL, mp);
+
+    mp->is_add           = is_add;
+    mp->vni              = htonl(vni);
+    mp->decap_next_index = ~0;         // ~0 - makes VPP choose. VPP chooses VXLAN_INPUT_NEXT_L2_INPUT, for now.
+
+    if (sip->sa_family == AF_INET) {
+        mp->src_address.af = ADDRESS_IP4;
+        memcpy(mp->src_address.un.ip4, &sip->addr.ip4.sin_addr, sizeof(mp->src_address.un.ip4));
+    } else {
+        mp->src_address.af = ADDRESS_IP6;
+        memcpy(mp->src_address.un.ip6, &sip->addr.ip6.sin6_addr, sizeof(mp->src_address.un.ip6));
+    }
+
+    if (dip->sa_family == AF_INET) {
+        mp->dst_address.af = ADDRESS_IP4;
+        memcpy(mp->dst_address.un.ip4, &dip->addr.ip4.sin_addr, sizeof(mp->dst_address.un.ip4));
+    } else {
+        mp->dst_address.af = ADDRESS_IP6;
+        memcpy(mp->dst_address.un.ip6, &dip->addr.ip6.sin6_addr, sizeof(mp->dst_address.un.ip6));
+    }
+
+    mp->context = store_ptr(if_ind);
+
+    S(mp);
+
+    W(ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+
+int vpp_vxlan_gpe_tunnel_add_del(vpp_ip_addr_t *sip, vpp_ip_addr_t *dip, uint32_t vni, bool is_add, uint32_t *if_ind)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_vxlan_gpe_add_del_tunnel_v2_t *mp;
+    u32 shg = 0;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = vxlan_gpe_msg_id_base;
+
+    M(VXLAN_GPE_ADD_DEL_TUNNEL_V2, mp);
+
+    mp->protocol    = VXLAN_GPE_PROTOCOL_ETHERNET;
+    mp->is_add      = is_add;
+    mp->vni         = htonl(vni);
+
+    if (sip->sa_family == AF_INET) {
+        mp->local.af = ADDRESS_IP4;
+        memcpy(mp->local.un.ip4, &sip->addr.ip4.sin_addr, sizeof(mp->local.un.ip4));
+    } else {
+        mp->local.af = ADDRESS_IP6;
+        memcpy(mp->local.un.ip6, &sip->addr.ip6.sin6_addr, sizeof(mp->local.un.ip6));
+    }
+
+    if (dip->sa_family == AF_INET) {
+        mp->remote.af = ADDRESS_IP4;
+        memcpy(mp->remote.un.ip4, &dip->addr.ip4.sin_addr, sizeof(mp->remote.un.ip4));
+    } else {
+        mp->remote.af = ADDRESS_IP6;
+        memcpy(mp->remote.un.ip6, &dip->addr.ip6.sin6_addr, sizeof(mp->remote.un.ip6));
+    }
+
+    mp->context = store_ptr(if_ind);
+
+    S(mp);
+
+    W(ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_mode, uint32_t port_type, uint8_t shg)
 {
     vat_main_t *vam = &vat_main;
     vl_api_sw_interface_set_l2_bridge_t *mp;
-    u32 shg = 0;
     int ret;
 
     VPP_LOCK();
@@ -2070,7 +2295,7 @@ int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l
         return -EINVAL;
     }
     mp->bd_id = htonl (bridge_id);
-    mp->shg = (u8) shg;
+    mp->shg = shg;
     mp->port_type = htonl (port_type);
     mp->enable = l2_mode;
 
