@@ -26,8 +26,8 @@ TunnelManager::get_router_mac() const
  * Here is the VPP config to be programmed in response to the creation of a tunnel encap nexthop entry:
  * 
  * create vxlan tunnel src 1.0.0.1 dst 1.0.0.2 vni 3000
- * ip neighbor vxlan_tunnel0 0.0.0.1 00:00:00:00:00:01
- * ip route add 100.1.1.0/24 via 0.0.0.1 vxlan_tunnel0
+ * ip neighbor vxlan_tunnel0 1.0.0.2 00:00:00:00:00:01 no-fib-entry
+ * ip route add 100.1.1.0/24 via 1.0.0.2 vxlan_tunnel0
  * 
  * bvi create mac 00:00:00:00:00:01 
  * set interface state bvi0 up
