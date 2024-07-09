@@ -1,0 +1,411 @@
+# Copyright (c) 2024 Cisco and/or its affiliates.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: SONiC Software Data Plane Automation - VM VxLAN Bring up
+  hosts: clusters
+  connection: local
+  tasks:
+    - name: Extract SONiC-VPP VM Image
+      shell: | 
+        cd sonic-vpp
+        sudo chown "{{ ansible_user }}" sonic-vpp.img.gz
+        gzip -cd sonic-vpp.img.gz > sonic-vpp.img
+      register: command_result
+      failed_when: command_result.rc != 0
+      tags:
+      - build 
+    - name:  Launch 3 node VXR topology
+      shell: |
+        cd sonic-vpp 
+        /auto/vxr/pyvxr/latest/vxr.py start 2vpp_1xr_topology.yaml
+      register: command_result
+      failed_when: command_result.rc != 0 
+      tags:
+      - build          
+    - name: Pause for 2 minutes for VMs to bootup
+      ansible.builtin.pause:
+        minutes: 2
+      tags:
+      - build
+    - name: Get sim ports from vxr.out/sim-ports.yaml
+      ansible.builtin.slurp:
+        src: sonic-vpp/vxr.out/sim-ports.yaml
+      register: sim_ports_yaml
+      tags:
+      - build
+    - name: Set sim ports facts
+      ansible.builtin.set_fact:
+        sim_ports: "{{ sim_ports_yaml['content'] | b64decode | from_yaml }}"
+      tags:
+      - build
+    - name: Set individual port facts
+      ansible.builtin.set_fact:
+        r0_xr_redir22: "{{ sim_ports['r0']['xr_redir22'] }}"
+        r1_xr_redir22: "{{ sim_ports['r1']['xr_redir22'] }}"
+        r2_xr_redir22: "{{ sim_ports['r2']['xr_redir22'] }}"
+      tags:
+      - build
+    - name: Copy cfg file to SONiC-VPP VM 1
+      ansible.builtin.shell: |
+        set timeout 60
+        spawn sftp -o StrictHostKeyChecking=no -P {{ r1_xr_redir22 }} cisco@localhost
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "sftp>"
+        send "put /nobackup/safaisal/sonic-vpp/sonic_vpp_cfg.sh\n"
+        expect "sftp>"
+        send "\n"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build        
+    - name: Copy cfg file to SONiC-VPP VM 2
+      ansible.builtin.shell: |
+        set timeout 60
+        spawn sftp -o StrictHostKeyChecking=no -P {{ r2_xr_redir22 }} cisco@localhost
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "sftp>"
+        send "put /nobackup/safaisal/sonic-vpp/sonic_vpp_cfg.sh\n"
+        expect "sftp>"
+        send "\n"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build        
+    - name: Configure SONiC and syncd-vpp VM 1
+      ansible.builtin.shell: |
+        set timeout 150
+        spawn ssh -o StrictHostKeyChecking=no cisco@localhost -p {{ r1_xr_redir22 }}
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "cisco@sonic:~$ "
+        send "sudo sonic_vpp_cfg.sh -p -i eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8\n"
+        expect "cisco@sonic:~$ "
+        send "\n"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build        
+    - name: Configure SONiC and syncd-vpp VM 2
+      ansible.builtin.shell: |
+        set timeout 60
+        spawn ssh -o StrictHostKeyChecking=no cisco@localhost -p {{ r2_xr_redir22 }}
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "cisco@sonic:~$ "
+        send "sudo sonic_vpp_cfg.sh -p -i eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8\n"
+        expect "cisco@sonic:~$ "
+        send "\n"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build        
+    - name: Pause for 2 minutes for SONiC VM to bootup
+      ansible.builtin.pause:
+        minutes: 2
+      tags:
+      - build        
+    - name: Configure SONiC-VPP data path interfaces VM 1
+      ansible.builtin.shell: |
+        set timeout 30
+        spawn ssh -o StrictHostKeyChecking=no cisco@localhost -p {{ r1_xr_redir22 }}
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config interface ip add Ethernet0 {{ sonic_vm1_ethernet0 }}/24\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config interface ip add Ethernet1 {{ sonic_vm1_ethernet1 }}/24\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config interface startup Ethernet0\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config interface startup Ethernet1\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config route add prefix {{ sonic_t2_prefix }}/16 nexthop {{ sonic_r0_r1_intf1 }}\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config save -y\n"
+        expect "cisco@sonic:~$ "
+        send "\n"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build        
+    - name: Configure SONiC-VPP data path interfaces VM 2
+      ansible.builtin.shell: |
+        set timeout 30
+        spawn ssh -o StrictHostKeyChecking=no cisco@localhost -p {{ r2_xr_redir22 }}
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config interface ip add Ethernet0 {{ sonic_vm2_ethernet0 }}/24\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config interface ip add Ethernet1 {{ sonic_vm2_ethernet1 }}/24\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config interface startup Ethernet0\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config interface startup Ethernet1\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config route add prefix {{ sonic_t2_prefix }}/16 nexthop {{ sonic_r0_r2_intf1 }}\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config save -y\n"
+        expect "cisco@sonic:~$ "
+        send "\n"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build
+    - name: Configure SONiC-VPP VNET VxLAN VM 1
+      ansible.builtin.shell: |
+        set timeout 30
+        spawn ssh -o StrictHostKeyChecking=no cisco@localhost -p {{ r1_xr_redir22 }}
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "cisco@sonic:~$ "
+        send "jq '. + {
+          \"VXLAN_TUNNEL\": {
+            \"test\": {
+              \"src_ip\": \"{{ sonic_vm1_ethernet0 }}\"
+            }
+          },
+          \"VNET\": {
+            \"Vnet1\": {
+              \"peer_list\": \"\",
+              \"scope\": \"default\",
+              \"vni\": \"10000\",
+              \"vxlan_tunnel\": \"test\"
+            }
+          }
+        }' /etc/sonic/config_db.json > temp.json\n"
+        expect "cisco@sonic:~$ "
+        send "sudo mv temp.json /etc/sonic/config_db.json\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config load -y\n"
+        expect "cisco@sonic:~$ "
+        send "\n"
+        exit 0
+      args: 
+        executable: /usr/bin/expect
+      tags:
+      - build   
+    - name: Configure SONiC-VPP VNET VxLAN VM 2
+      ansible.builtin.shell: |
+        set timeout 30
+        spawn ssh -o StrictHostKeyChecking=no cisco@localhost -p {{ r2_xr_redir22 }}
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "cisco@sonic:~$ "
+        send "jq '. + {
+          \"VXLAN_TUNNEL\": {
+            \"test\": {
+              \"src_ip\": \"{{ sonic_vm2_ethernet0 }}\"
+            }
+          },
+          \"VNET\": {
+            \"Vnet1\": {
+              \"peer_list\": \"\",
+              \"scope\": \"default\",
+              \"vni\": \"10000\",
+              \"vxlan_tunnel\": \"test\"
+            }
+          }
+        }' /etc/sonic/config_db.json > temp.json\n"
+        expect "cisco@sonic:~$ "
+        send "sudo mv temp.json /etc/sonic/config_db.json\n"
+        expect "cisco@sonic:~$ "
+        send "sudo config load -y\n"
+        expect "cisco@sonic:~$ "
+        send "\n"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build         
+    - name: Create VNET tunnel configuration file for SONiC-VPP VM 1
+      template:
+        src: "/nobackup/safaisal/sonic-vpp/vnet_tunnel.json.j2"
+        dest: "/nobackup/safaisal/sonic-vpp/vnet_tunnel_vm1.json"
+      vars:
+        sonic_t0_prefix: "{{ sonic_t0_prefix_r2 }}"
+        sonic_vm_ethernet: "{{ sonic_vm2_ethernet0 }}"
+      tags:
+      - build
+    - name: Create VNET tunnel configuration file for SONiC-VPP VM 2
+      template:
+        src: "/nobackup/safaisal/sonic-vpp/vnet_tunnel.json.j2"
+        dest: "/nobackup/safaisal/sonic-vpp/vnet_tunnel_vm2.json"
+      vars:
+        sonic_t0_prefix: "{{ sonic_t0_prefix_r1 }}"
+        sonic_vm_ethernet: "{{ sonic_vm1_ethernet0 }}"
+      tags:
+      - build
+    - name: Copy VNET tunnel file to SONiC-VPP VM 1
+      ansible.builtin.shell: |
+        set timeout 60
+        spawn sftp -o StrictHostKeyChecking=no -P {{ r1_xr_redir22 }} cisco@localhost
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "sftp>"
+        send "put /nobackup/safaisal/sonic-vpp/vnet_tunnel_vm1.json\n"
+        expect "sftp>"
+        send "\n"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build
+    - name: Copy VNET tunnel file to SONiC-VPP VM 2
+      ansible.builtin.shell: |
+        set timeout 60
+        spawn sftp -o StrictHostKeyChecking=no -P {{ r2_xr_redir22 }} cisco@localhost
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "sftp>"
+        send "put /nobackup/safaisal/sonic-vpp/vnet_tunnel_vm2.json\n"
+        expect "sftp>"
+        send "\n"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build
+    - name: Configure VNET Tunnel VM 1
+      ansible.builtin.shell: |
+        set timeout 30
+        spawn ssh -o StrictHostKeyChecking=no cisco@localhost -p {{ r1_xr_redir22 }}
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "cisco@sonic:~$ "
+        send "docker exec -i swss swssconfig /dev/stdin < vnet_tunnel_vm1.json\n"
+        expect "cisco@sonic:~$ "
+        send "\n"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build
+    - name: Configure VNET Tunnel VM 2
+      ansible.builtin.shell: |
+        set timeout 30
+        spawn ssh -o StrictHostKeyChecking=no cisco@localhost -p {{ r2_xr_redir22 }}
+        expect "cisco@localhost's password:"
+        send "{{ vm_password }}\n"
+        expect "cisco@sonic:~$ "
+        send "docker exec -i swss swssconfig /dev/stdin < vnet_tunnel_vm2.json\n"
+        expect "cisco@sonic:~$ "
+        send "\n"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build
+    - name: Pause for 1 minutes
+      ansible.builtin.pause:
+        minutes: 1
+      tags:
+      - build
+    - name: Bring up XR interfaces
+      ansible.builtin.shell: |
+        set timeout 30
+        spawn ssh -o StrictHostKeyChecking=no cisco@localhost -p {{ r0_xr_redir22 }}
+        expect "Password: "
+        send "{{ vm_password }}\n"
+        expect "RP/0/RP0/CPU0:ios#"
+        send "configure terminal\n"
+        expect "RP/0/RP0/CPU0:ios(config)#"
+        send "interface FourHundredGigE0/0/0/0\n"
+        expect "RP/0/RP0/CPU0:ios(config-if)#"
+        send "ipv4 address {{ sonic_r0_r1_intf1 }} 255.255.255.0\n"
+        send "no shutdown\n"
+        send "exit\n"
+        send "interface FourHundredGigE0/0/0/1\n"
+        expect "RP/0/RP0/CPU0:ios(config-if)#"
+        send "vrf h1\n"
+        send "ipv4 address {{ sonic_r0_r1_intf2 }} 255.255.255.0\n"
+        send "no shutdown\n"
+        send "exit\n"
+        send "interface FourHundredGigE0/0/0/2\n"
+        expect "RP/0/RP0/CPU0:ios(config-if)#"
+        send "ipv4 address {{ sonic_r0_r2_intf1 }} 255.255.255.0\n"
+        send "no shutdown\n"
+        send "exit\n"
+        send "interface FourHundredGigE0/0/0/3\n"
+        expect "RP/0/RP0/CPU0:ios(config-if)#"
+        send "vrf h2\n"
+        send "ipv4 address {{ sonic_r0_r2_intf2 }} 255.255.255.0\n"
+        send "no shutdown\n"
+        send "exit\n"
+        send "commit\n"
+        send "end\n"
+        expect "RP/0/RP0/CPU0:ios#"
+        exit 0
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build    
+    - name: Verify VM1 to VM2 VxLAN Tunnel
+      ansible.builtin.shell: |
+        set timeout 30
+        spawn ssh -o StrictHostKeyChecking=no cisco@localhost -p {{ r0_xr_redir22 }}
+        expect "Password: "
+        send "{{ vm_password }}\n"
+        expect "RP/0/RP0/CPU0:ios#"
+        send "ping vrf h1 {{ sonic_r0_r2_intf2 }} count 100\n"
+        expect "RP/0/RP0/CPU0:ios#"
+        send "\n"
+        exit 0
+      register: command_result
+      failed_when: "'Success rate is 0 percent (0/100)' in command_result.stdout"
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build      
+    - name: Verify VM2 to VM1 VxLAN Tunnel
+      ansible.builtin.shell: |
+        set timeout 30
+        spawn ssh -o StrictHostKeyChecking=no cisco@localhost -p {{ r0_xr_redir22 }}
+        expect "Password: "
+        send "{{ vm_password }}\n"
+        expect "RP/0/RP0/CPU0:ios#"
+        send "ping vrf h2 {{ sonic_r0_r1_intf2 }} count 100\n"
+        expect "RP/0/RP0/CPU0:ios#"
+        send "\n"
+        exit 0
+      register: command_result
+      failed_when: "'Success rate is 0 percent (0/100)' in command_result.stdout"
+      args:
+        executable: /usr/bin/expect
+      tags:
+      - build      
+    - name: Cleaning up SONiC-VPP VM Instance
+      shell: |
+        cd sonic-vpp
+        /auto/vxr/pyvxr/latest/vxr.py clean
+      register: command_result
+      failed_when: command_result.rc != 0
+      tags:
+      - tear      
+    - name: Removing SONiC-VPP VM Image file
+      shell: |
+        cd sonic-vpp
+        rm sonic-vpp.img
+      register: command_result
+      failed_when: command_result.rc != 0 
+      tags:
+      - tear
+     
