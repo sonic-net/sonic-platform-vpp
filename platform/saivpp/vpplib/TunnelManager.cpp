@@ -148,7 +148,7 @@ TunnelManager::tunnel_encap_nexthop_action(
                 return SAI_STATUS_FAILURE;
             }
             vni_to_vrf_map[tunnel_vni] = ip_vrf;
-
+            tunnel_data.ip_vrf = ip_vrf;
             req.vni = tunnel_vni;
 
             if (action == Action::CREATE) {
@@ -308,7 +308,7 @@ TunnelManager::create_vpp_vxlan_decap(
     }
 
     //bind bvi to vrf
-    //todo: allocate bvi IP
+    vpp_status = set_interface_vrf(hw_bvi_ifname, 0, tunnel_data.ip_vrf->m_vrf_id, tunnel_data.ip_vrf->m_is_ipv6);
     bvi_ip_prefix.prefix_len = 32;
     bvi_ip_prefix.prefix_addr.sa_family = AF_INET;
     struct sockaddr_in *sin =  &bvi_ip_prefix.prefix_addr.addr.ip4;

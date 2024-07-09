@@ -20,6 +20,7 @@ namespace saivpp
         u_int32_t encap_vrf_id;
         u_int32_t bd_id;
         vpp_ip_addr_t bvi_addr;
+        std::shared_ptr<IpVrfInfo> ip_vrf;
     };
 
     class TunnelManager {
