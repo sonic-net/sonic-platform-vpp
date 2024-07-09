@@ -70,6 +70,17 @@ Below is one simple example to show VM and Baremetal server VNET peering.
 			Connected on Ethernet1 
 			Ip: 100.100.3.2/24
 			MAC: 00:00:AA:AA:AA:01
+Below diagram shows the connectivity between VM1 and BM1. VxLAN tunnel will be created between SONiC and VM host.
+```
+                                                                         +-----------------+
+    +-------+                                  +-------------+           |                 |
+    |       | 100.100.3.2/24    100.100.3.1/24 |             |           | +-------------+ |
+    |  BM1  +----------------------------------+    SONiC    +----...----+ |    VM1      | | 
+    |       |                                  | 10.10.10.10 |           | | 100.100.1.1 | |
+    +-------+                                  +-------------+           | +-------------+ |
+                                                                         | host 10.10.10.1 |
+                                                                         +-----------------+
+```
 ### ConfigDB objects
 ```
 { 
@@ -133,6 +144,7 @@ ip route add 100.100.1.1/32 table 100 via 10.10.10.1 vxlan_tunnel0
 ```
 MAC 00:00:00:00:00:01 is the VxLAN MAC mentioned above. Table 100 is the table ID assigned to vnet_2000. 
 no-fib-entry is needed to create IP neighbour to avoid the dummy nexthop messing up forwarding.
+
 
 <a id="item-7"></a>
 ## VM to Baremetal
