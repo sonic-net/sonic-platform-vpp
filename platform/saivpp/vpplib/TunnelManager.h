@@ -96,18 +96,30 @@ namespace saivpp
             }
             return SAI_STATUS_ITEM_NOT_FOUND;
         }
+        /**
+         * @brief Set VxLAN router default MAC address.
+         */
+        void set_router_mac(const sai_attribute_t* attr);
 
+        /**
+         * @brief Get VxLAN router default MAC address.
+         */
+        const std::array<uint8_t, 6>& get_router_mac() const;
+
+        /**
+         * @brief Set VxLAN port.
+         */
+        void set_vxlan_port(const sai_attribute_t* attr);        
     private:
         SwitchStateBase* m_switch_db;
         std::array<uint8_t, 6> m_router_mac;
+        u_int16_t m_vxlan_port;
         //nexthop SAI object ID to sw_if_index map
         std::unordered_map<sai_object_id_t, TunnelVPPData> m_tunnel_encap_nexthop_map;
 
         sai_status_t tunnel_encap_nexthop_action(
                         _In_ const SaiObject* tunnel_nh_obj, 
                         _In_ Action action);
-        
-        const std::array<uint8_t, 6>& get_router_mac() const;
 
         sai_status_t create_vpp_vxlan_encap(
                         _In_  vpp_vxlan_tunnel_t& req,

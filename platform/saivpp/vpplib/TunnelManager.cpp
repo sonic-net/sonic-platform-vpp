@@ -27,6 +27,7 @@ using namespace saivpp;
 TunnelManager::TunnelManager(SwitchStateBase* switch_db): m_switch_db(switch_db) 
 {
     m_router_mac = {0, 0, 0, 0, 0, 1};
+    m_vxlan_port = 4789;
 }
 
 const std::array<uint8_t, 6>& 
@@ -35,6 +36,19 @@ TunnelManager::get_router_mac() const
     return m_router_mac;
 }
 
+void
+TunnelManager::set_router_mac(const sai_attribute_t* attr)
+{
+    for (int i = 0; i < 6; ++i) {
+        m_router_mac[i] = attr->value.mac[i];
+    }
+}
+
+void
+TunnelManager::set_vxlan_port(const sai_attribute_t* attr)
+{
+    m_vxlan_port = attr->value.u16;
+}
 /**
  * VxLAN tunnel is created in response to the creation of a tunnel encap nexthop entry. This assumes VxLAN tunnel is bidirectional and symmetric.
  * The local VTEP sends packet through the tunnel to the remote VTEP. The remote VTEP sends packet back to the local VTEP through the same tunnel with the same VNI.
@@ -140,6 +154,8 @@ TunnelManager::tunnel_encap_nexthop_action(
             TunnelVPPData tunnel_data;
 
             memset(&req, 0, sizeof(req));
+            req.dst_port = m_vxlan_port;
+            req.src_port = m_vxlan_port;
             req.instance = ~0;
             sai_ip_address_t_to_vpp_ip_addr_t(src_ip, req.src_address);
             sai_ip_address_t_to_vpp_ip_addr_t(dst_ip, req.dst_address);

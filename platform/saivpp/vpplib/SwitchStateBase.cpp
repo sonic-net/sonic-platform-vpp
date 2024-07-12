@@ -681,6 +681,21 @@ sai_status_t SwitchStateBase::set(
         return setMACsecSA(objectId, attr);
     }
 
+    if (objectType == SAI_OBJECT_TYPE_SWITCH)
+    {
+        switch(attr->id) {
+            case SAI_SWITCH_ATTR_VXLAN_DEFAULT_ROUTER_MAC:
+            {
+                m_tunnel_mgr.set_router_mac(attr);
+                break;
+            }
+            case SAI_SWITCH_ATTR_VXLAN_DEFAULT_PORT:
+            {
+                m_tunnel_mgr.set_vxlan_port(attr);
+                break;
+            }
+        }
+    }
     return set_internal(objectType, serializedObjectId, attr);
 }
 

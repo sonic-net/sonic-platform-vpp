@@ -251,7 +251,6 @@ do {                                                            \
     f64 timeout = vat_time_now (vam) + 1.0;                     \
     socket_client_main_t *scm = vam->socket_client_main;    	\
     ret = -99;                                                  \
-                                                                \
     while (vat_time_now (vam) < timeout) {                      \
         if (scm && scm->socket_enable)                          \
             vl_socket_client_read (5);                          \
@@ -1351,7 +1350,7 @@ static int __set_interface_vrf (vat_main_t *vam, vl_api_interface_index_t if_idx
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -2129,7 +2128,7 @@ int set_sw_interface_l2_bridge_by_index(uint32_t sw_if_index, uint32_t bridge_id
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
