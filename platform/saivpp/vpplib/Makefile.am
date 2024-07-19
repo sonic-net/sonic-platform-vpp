@@ -129,7 +129,8 @@ libsaivpp_la_SOURCES = \
 					  sai_vpp_vlan.cpp \
 					  sai_vpp_wred.cpp \
 					  sai_vpp_my_mac.cpp \
-					  sai_vpp_ipsec.cpp
+					  sai_vpp_ipsec.cpp \
+                                          sai_vpp_poe.cpp
 
 VPP_LIBS        = -lvapiclient
 VPP_LIBS        += -lvppapiclient

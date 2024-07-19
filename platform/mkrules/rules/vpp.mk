@@ -13,8 +13,8 @@
 
 # libvpp package
 
-VPP_VERSION = 23.06
-VPP_VERSION_FULL = 23.06-release
+VPP_VERSION = 24.06
+VPP_VERSION_FULL = 24.06-release
 VPP_PKG_SERVER = "https://packagecloud.io/fdio/release/packages/debian/$(BLDENV)"
 VPP_DIST_VER="/download.deb?distro_version_id=207"
 

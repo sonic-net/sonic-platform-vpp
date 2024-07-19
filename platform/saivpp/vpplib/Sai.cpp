@@ -836,3 +836,20 @@ std::shared_ptr<Context> Sai::getContext(
 
     return it->second;
 }
+
+sai_status_t Sai::queryApiVersion(
+        _Out_ sai_api_version_t *version)
+{
+    MUTEX();
+    SWSS_LOG_ENTER();
+
+    if (!m_apiInitialized)
+    {
+        SWSS_LOG_ERROR("%s: SAI API not initialized", __PRETTY_FUNCTION__);
+
+        return SAI_NULL_OBJECT_ID;
+    }
+
+    return m_meta->queryApiVersion(version);
+}
+

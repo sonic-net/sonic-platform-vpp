@@ -12,10 +12,10 @@
 # limitations under the License.
 
 diff --git a/files/build_templates/per_namespace/syncd.service.j2 b/files/build_templates/per_namespace/syncd.service.j2
-index b509e7732..687553800 100644
+index 842eaebc7..edd48c9f9 100644
 --- a/files/build_templates/per_namespace/syncd.service.j2
 +++ b/files/build_templates/per_namespace/syncd.service.j2
-@@ -23,9 +23,15 @@ Before=ntp-config.service
+@@ -27,9 +27,15 @@ After=nv-syncd-shared.service
  [Service]
  User=root
  Environment=sonic_asic_platform={{ sonic_asic_platform }}

@@ -89,6 +89,7 @@ PRIVATE extern const sai_vlan_api_t                    vpp_vlan_api;
 PRIVATE extern const sai_wred_api_t                    vpp_wred_api;
 PRIVATE extern const sai_my_mac_api_t                  vpp_my_mac_api;
 PRIVATE extern const sai_ipsec_api_t                   vpp_ipsec_api;
+PRIVATE extern const sai_poe_api_t                     vpp_poe_api;
 
 PRIVATE extern std::shared_ptr<sairedis::SaiInterface>      vpp_sai;
 

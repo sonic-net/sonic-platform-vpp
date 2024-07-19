@@ -5,6 +5,7 @@ VPP_BULK_CREATE_ENTRY_EX(ENI_ETHER_ADDRESS_MAP_ENTRY, eni_ether_address_map_entr
 VPP_BULK_REMOVE_ENTRY_EX(ENI_ETHER_ADDRESS_MAP_ENTRY, eni_ether_address_map_entry, eni_ether_address_map_entries);
 
 VPP_GENERIC_QUAD(ENI, eni);
+VPP_GENERIC_STATS(ENI, eni);
 VPP_BULK_CREATE(ENI, enis);
 VPP_BULK_REMOVE(ENI, enis);
 
@@ -14,6 +15,7 @@ const sai_dash_eni_api_t vpp_dash_eni_api = {
     vpp_bulk_remove_eni_ether_address_map_entries,
 
     VPP_GENERIC_QUAD_API(eni)
+    VPP_GENERIC_STATS_API(eni)
     vpp_bulk_create_enis,
     vpp_bulk_remove_enis,
 };

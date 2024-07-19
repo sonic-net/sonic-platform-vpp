@@ -29,8 +29,7 @@ $(DOCKER_SONIC_VPP)_DEPENDS += $(SYNCD_VPP) \
                               $(SONIC_UTILITIES_DATA) \
                               $(SONIC_HOST_SERVICES_DATA) \
 			      $(FRR) $(FRR_SNMP) \
-			      $(LIBYANG2) \
-                              $(IPROUTE2)
+			      $(LIBYANG2)
 
 $(DOCKER_SONIC_VPP)_PYTHON_WHEELS += $(SWSSSDK_PY3) \
                                     $(SONIC_PY_COMMON_PY3) \
@@ -59,7 +58,7 @@ $(DOCKER_SONIC_VPP)_FILES += $(CONFIGDB_LOAD_SCRIPT) \
                             $(UPDATE_CHASSISDB_CONFIG_SCRIPT) \
                             $(COPP_CONFIG_TEMPLATE)
 
-$(DOCKER_SONIC_VPP)_LOAD_DOCKERS += $(DOCKER_SWSS_LAYER_BULLSEYE)
+$(DOCKER_SONIC_VPP)_LOAD_DOCKERS += $(DOCKER_SWSS_LAYER_BOOKWORM)
 SONIC_DOCKER_IMAGES += $(DOCKER_SONIC_VPP)
 
-SONIC_BULLSEYE_DOCKERS += $(DOCKER_SONIC_VPP)
+SONIC_BOOKWORM_DOCKERS += $(DOCKER_SONIC_VPP)
