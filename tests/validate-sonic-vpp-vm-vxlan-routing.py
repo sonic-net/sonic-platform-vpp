@@ -42,9 +42,9 @@ def createInventoryFromTemplate(username, password, host):
 
     environment = Environment(loader=FileSystemLoader("."))
 
-    template = environment.get_template("inventory-vm-vxlan.j2")
+    template = environment.get_template("inventory-vm.j2")
 
-    filename = "inventory-vm-vxlan.yaml"
+    filename = "inventory-vm.yaml"
     content = template.render(
         username = username,
         password = password,
@@ -61,7 +61,7 @@ def runSonic(action, verboselogArg):
 
     print("ansible-playbook : ", ansiblePlaybook, "\n")
 
-    cmd = ['ansible-playbook', '-i', 'inventory-vm-vxlan.yaml',  ansiblePlaybook, '--extra-vars', '@inventory-vm-vxlan.yaml', '--tags', action, verboselogArg]
+    cmd = ['ansible-playbook', '-i', 'inventory-vm.yaml',  ansiblePlaybook, '--extra-vars', '@inventory-vm.yaml', '--tags', action, verboselogArg]
 
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
