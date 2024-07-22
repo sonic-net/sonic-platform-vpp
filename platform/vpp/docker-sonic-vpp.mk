@@ -17,7 +17,6 @@
 DOCKER_SONIC_VPP = docker-sonic-vpp.gz
 $(DOCKER_SONIC_VPP)_PATH = $(PLATFORM_PATH)/docker-sonic-vpp
 $(DOCKER_SONIC_VPP)_DEPENDS += $(SYNCD_VPP) \
-                              $(LIBVPP) \
                               $(PYTHON_SWSSCOMMON) \
                               $(PYTHON3_SWSSCOMMON) \
                               $(LIBTEAMDCTL) \

@@ -31,7 +31,6 @@ DOCKER_SYNCD_PLATFORM_CODE = vpp
 include $(PLATFORM_PATH)/../template/docker-syncd-bookworm.mk
 
 $(DOCKER_SYNCD_BASE)_DEPENDS += $(SYNCD_VPP) \
-                                $(LIBVPP) \
                                 $(IPROUTE2)
 
 $(DOCKER_SYNCD_BASE)_DBG_DEPENDS += $(SYNCD_VPP_DBG) \
