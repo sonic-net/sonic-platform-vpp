@@ -67,70 +67,15 @@ libSaiVPP_a_SOURCES = \
 					  VirtualSwitchSaiInterfaceFdb.cpp \
 					  VirtualSwitchSaiInterfacePort.cpp
 
-libsaivpp_la_SOURCES = \
-					  sai_vpp_acl.cpp \
-					  sai_vpp_ars.cpp \
-					  sai_vpp_ars_profile.cpp \
-					  sai_vpp_twamp.cpp \
-					  sai_vpp_bfd.cpp \
-					  sai_vpp_bmtor.cpp \
-					  sai_vpp_bridge.cpp \
-					  sai_vpp_buffer.cpp \
-					  sai_vpp_counter.cpp \
-					  sai_vpp_dash_vip.cpp \
-					  sai_vpp_dash_pa_validation.cpp \
-					  sai_vpp_dash_vnet.cpp \
-					  sai_vpp_dash_outbound_routing.cpp \
-					  sai_vpp_dash_outbound_ca_to_pa.cpp \
-					  sai_vpp_dash_inbound_routing.cpp \
-					  sai_vpp_dash_meter.cpp \
-					  sai_vpp_dash_eni.cpp \
-					  sai_vpp_dash_direction_lookup.cpp \
-					  sai_vpp_dash_acl.cpp \
-					  sai_vpp_debug_counter.cpp\
-					  sai_vpp_dtel.cpp \
-					  sai_vpp_fdb.cpp \
-					  sai_vpp_genericprogrammable.cpp \
-					  sai_vpp_hash.cpp \
-					  sai_vpp_hostif.cpp \
-					  sai_vpp_interfacequery.cpp \
-					  sai_vpp_ipmc.cpp \
-					  sai_vpp_ipmc_group.cpp \
-					  sai_vpp_isolation_group.cpp \
-					  sai_vpp_l2mc.cpp \
-					  sai_vpp_l2mcgroup.cpp \
-					  sai_vpp_lag.cpp \
-					  sai_vpp_macsec.cpp \
-					  sai_vpp_mcastfdb.cpp \
-					  sai_vpp_mirror.cpp \
-					  sai_vpp_mpls.cpp \
-					  sai_vpp_nat.cpp \
-					  sai_vpp_neighbor.cpp \
-					  sai_vpp_nexthop.cpp \
-					  sai_vpp_nexthopgroup.cpp \
-					  sai_vpp_policer.cpp \
-					  sai_vpp_port.cpp \
-					  sai_vpp_qosmap.cpp \
-					  sai_vpp_queue.cpp \
-					  sai_vpp_route.cpp \
-					  sai_vpp_router_interface.cpp \
-					  sai_vpp_rpfgroup.cpp \
-					  sai_vpp_samplepacket.cpp \
-					  sai_vpp_scheduler.cpp \
-					  sai_vpp_schedulergroup.cpp \
-					  sai_vpp_srv6.cpp \
-					  sai_vpp_stp.cpp \
-					  sai_vpp_switch.cpp \
-					  sai_vpp_system_port.cpp \
-					  sai_vpp_tam.cpp \
-					  sai_vpp_tunnel.cpp \
-					  sai_vpp_udf.cpp \
-					  sai_vpp_virtual_router.cpp \
-					  sai_vpp_vlan.cpp \
-					  sai_vpp_wred.cpp \
-					  sai_vpp_my_mac.cpp \
-					  sai_vpp_ipsec.cpp \
-                                          sai_vpp_poe.cpp
+BUILT_SOURCES = sai_vpp.cpp
+
+sai_vpp.cpp: ../stub.pl $(top_srcdir)/SAI/meta/saimetadata.c
+	../stub.pl -d ../SAI/ -c Sai -n saivpp -f sai_vpp.cpp -s stub
+
+clean-local:
+	rm -f sai_vpp.cpp
+
+libsaivpp_la_SOURCES = sai_vpp.cpp
 
 VPP_LIBS        = -lvapiclient
 VPP_LIBS        += -lvppapiclient
