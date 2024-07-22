@@ -338,6 +338,13 @@ TunnelManager::create_vpp_vxlan_decap(
         return SAI_STATUS_FAILURE;
     }
 
+    //Create bridge and set BVI to the BD
+    vpp_status = set_sw_interface_l2_bridge(hw_bvi_ifname, bd_id, true, VPP_API_PORT_TYPE_BVI);
+    if (vpp_status != 0) {
+        SWSS_LOG_ERROR("Failed to add bvi interface to bd");
+        return SAI_STATUS_FAILURE;
+    }
+    
     //bind bvi to vrf
     vpp_status = set_interface_vrf(hw_bvi_ifname, 0, tunnel_data.ip_vrf->m_vrf_id, tunnel_data.ip_vrf->m_is_ipv6);
     bvi_ip_prefix.prefix_len = 32;
@@ -351,12 +358,7 @@ TunnelManager::create_vpp_vxlan_decap(
         SWSS_LOG_ERROR("Failed to config IP on bvi interface");
         return SAI_STATUS_FAILURE;
     }
-    //Create bridge and set BVI to the BD
-    vpp_status = set_sw_interface_l2_bridge(hw_bvi_ifname, bd_id, true, VPP_API_PORT_TYPE_BVI);
-    if (vpp_status != 0) {
-        SWSS_LOG_ERROR("Failed to add bvi interface to bd");
-        return SAI_STATUS_FAILURE;
-    }
+
     //set vxlan tunnel to bridge domain
     vpp_status = set_sw_interface_l2_bridge_by_index(tunnel_if_index, bd_id, true, VPP_API_PORT_TYPE_NORMAL);
     if (vpp_status != 0) {
