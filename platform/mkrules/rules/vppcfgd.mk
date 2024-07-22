@@ -15,6 +15,7 @@ $(SONIC_VPPCFGD)_DEBS_DEPENDS += $(LIBYANG) \
                                  $(LIBYANG_PY3) \
                                  $(PYTHON3_SWSSCOMMON)
 $(SONIC_VPPCFGD)_PYTHON_VERSION = 3
+$(SONIC_VPPCFGD)_TEST = n
 SONIC_PYTHON_WHEELS += $(SONIC_VPPCFGD)
 
 export vpp_platform_vppcfgd_py3_wheel_path="$(addprefix $(PYTHON_WHEELS_PATH)/,$(SONIC_VPPCFGD))"

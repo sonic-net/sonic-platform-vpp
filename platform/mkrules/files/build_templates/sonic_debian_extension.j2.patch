@@ -12,12 +12,12 @@
 # limitations under the License.
 
 diff --git a/files/build_templates/sonic_debian_extension.j2 b/files/build_templates/sonic_debian_extension.j2
-index 0dc60b2b6..1ec418964 100644
+index ece833119..6aba38d03 100644
 --- a/files/build_templates/sonic_debian_extension.j2
 +++ b/files/build_templates/sonic_debian_extension.j2
-@@ -881,6 +881,26 @@ sudo LANG=C cp $SCRIPTS_DIR/mgmt-framework.sh $FILESYSTEM_ROOT/usr/local/bin/mgm
- sudo LANG=C cp $SCRIPTS_DIR/asic_status.sh $FILESYSTEM_ROOT/usr/local/bin/asic_status.sh
+@@ -1006,6 +1006,27 @@ sudo LANG=C cp $SCRIPTS_DIR/asic_status.sh $FILESYSTEM_ROOT/usr/local/bin/asic_s
  sudo LANG=C cp $SCRIPTS_DIR/asic_status.py $FILESYSTEM_ROOT/usr/local/bin/asic_status.py
+ sudo LANG=C cp $SCRIPTS_DIR/startup_tsa_tsb.py $FILESYSTEM_ROOT/usr/local/bin/startup_tsa_tsb.py
  
 +{% if sonic_asic_platform == "vpp" %}
 +
@@ -38,6 +38,7 @@ index 0dc60b2b6..1ec418964 100644
 +sudo rm -rf $FILESYSTEM_ROOT/$VPP_PLATFORM_VPPCFGD_WHEEL_NAME
 +
 +{% endif %}
++
 +
  # Copy sonic-netns-exec script
  sudo LANG=C cp $SCRIPTS_DIR/sonic-netns-exec $FILESYSTEM_ROOT/usr/bin/sonic-netns-exec

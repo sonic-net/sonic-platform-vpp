@@ -15,7 +15,7 @@
 # docker image for vpp gbsyncd
 
 DOCKER_GBSYNCD_PLATFORM_CODE = vpp
-include $(PLATFORM_PATH)/../template/docker-gbsyncd-base.mk
+include $(PLATFORM_PATH)/../template/docker-gbsyncd-bookworm.mk
 
 $(DOCKER_GBSYNCD_BASE)_DEPENDS += $(SYNCD_VPP)
 
