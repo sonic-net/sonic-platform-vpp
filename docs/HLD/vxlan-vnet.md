@@ -139,7 +139,7 @@ CLI for illustration.
 
 ```
 create vxlan tunnel src 10.10.10.10 dst 10.10.10.1 vni 2000 instance 0
-ip neighbor vxlan_tunnel0 10.10.10.1 100.1.1.0/24 no-fib-entry
+ip neighbor vxlan_tunnel0 10.10.10.1 00:00:00:00:00:01 no-fib-entry
 ip route add 100.100.1.1/32 table 100 via 10.10.10.1 vxlan_tunnel0
 ```
 MAC 00:00:00:00:00:01 is the VxLAN MAC mentioned above. Table 100 is the table ID assigned to vnet_2000. 
