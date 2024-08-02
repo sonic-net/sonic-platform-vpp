@@ -1559,11 +1559,11 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
 	if (addr->sa_family == AF_INET) {
 	    struct sockaddr_in *ip4 = &addr->addr.ip4;
 	    memcpy(nh_addr->ip4, &ip4->sin_addr.s_addr, sizeof(nh_addr->ip4));
-	    fib_path->proto = FIB_API_PATH_NH_PROTO_IP4;
+	    fib_path->proto = htonl(FIB_API_PATH_NH_PROTO_IP4);
 	} else if (addr->sa_family == AF_INET6) {
 	    struct sockaddr_in6 *ip6 =  &addr->addr.ip6;
 	    memcpy(nh_addr->ip6, &ip6->sin6_addr.s6_addr, sizeof(nh_addr->ip6));
-	    fib_path->proto = FIB_API_PATH_NH_PROTO_IP6;
+	    fib_path->proto = htonl(FIB_API_PATH_NH_PROTO_IP6);
 	} else {
 	    VPP_UNLOCK();
 	    return -EINVAL;

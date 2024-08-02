@@ -347,12 +347,26 @@ TunnelManager::create_vpp_vxlan_decap(
     
     //bind bvi to vrf
     vpp_status = set_interface_vrf(hw_bvi_ifname, 0, tunnel_data.ip_vrf->m_vrf_id, tunnel_data.ip_vrf->m_is_ipv6);
+
+    //set bvi IPv4
+    uint16_t offset = (uint16_t)(bd_id - SwitchStateBase::dynamic_bd_id_base) + 2;
     bvi_ip_prefix.prefix_len = 32;
     bvi_ip_prefix.prefix_addr.sa_family = AF_INET;
     struct sockaddr_in *sin =  &bvi_ip_prefix.prefix_addr.addr.ip4;
-    sin->sin_addr.s_addr = htonl(0x00000002 + (bd_id - SwitchStateBase::dynamic_bd_id_base));
+    sin->sin_addr.s_addr = htonl(offset);
+    vpp_status = interface_ip_address_add_del(hw_bvi_ifname, &bvi_ip_prefix, true);
+    if (vpp_status != 0) {
+        SWSS_LOG_ERROR("Failed to config IP on bvi interface");
+        return SAI_STATUS_FAILURE;
+    }
 
-    //set bvi IP
+    //set bvi IPv6 (the same tunnel can carry ipv4 or ipv6)
+    bvi_ip_prefix.prefix_len = 128;
+    bvi_ip_prefix.prefix_addr.sa_family = AF_INET6;
+    struct sockaddr_in6 *sin6 =  &bvi_ip_prefix.prefix_addr.addr.ip6;
+    memset(&sin6->sin6_addr, 0, sizeof(struct in6_addr));
+    sin6->sin6_addr.s6_addr[14] = (uint8_t)(offset >> 8) & 0xFF;
+    sin6->sin6_addr.s6_addr[15] = (uint8_t)(offset & 0xFF);
     vpp_status = interface_ip_address_add_del(hw_bvi_ifname, &bvi_ip_prefix, true);
     if (vpp_status != 0) {
         SWSS_LOG_ERROR("Failed to config IP on bvi interface");

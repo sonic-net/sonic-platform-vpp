@@ -63,32 +63,39 @@ inline static sai_status_t find_attrib_in_list(_In_ uint32_t                    
     return SAI_STATUS_ITEM_NOT_FOUND;
 }
 
-inline static int getPrefixLenFromAddrMask(const uint8_t *addr, int len)
+inline int getPrefixLenFromAddrMask(const uint8_t *addr, int len)
 {
-    int i = 0;
-    uint8_t non_zero = 0xFF;
-    for (i = len - 1; i >=0; i--)
+    // Iterate over each byte from left to right
+    for (int i = 0; i < len; ++i)
     {
-        if (addr[i] != 0)
+        uint8_t byte = addr[i];
+
+        // If the byte is 0xFF, it means all bits are set, continue to the next byte
+        if (byte == 0xFF)
         {
-            non_zero = addr[i];
-            break;
+            continue;
         }
+
+        // If the byte is not 0xFF, count the number of leading 1s in this byte
+        int leading_ones = 0;
+        for (int j = 7; j >= 0; --j)
+        {
+            if ((byte >> j) & 0x1)
+            {
+                ++leading_ones;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        // Return the total number of leading 1s in the address mask
+        return i * 8 + leading_ones;
     }
 
-    if (non_zero == 0xFF)
-    {
-        return (i + 1) * 8;
-    }
-    else
-    {
-        int j = 2;
-        while(((non_zero >> j) & 0x1) == 0)
-        {
-            ++j;
-        }
-        return (i + 1) * 8 - (j + 1);
-    }
+    // If all bytes are 0xFF, return the total length in bits
+    return len * 8;
 }
 
 inline static swss::IpPrefix getIpPrefixFromSaiPrefix(const sai_ip_prefix_t& src)
