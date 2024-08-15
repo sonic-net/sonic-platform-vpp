@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update
 
-RUN apt-get install -f -y libcap2-bin
+RUN apt-get install -f -y libcap2-bin libunwind8
 
 COPY \
 {% for deb in docker_syncd_vpp_debs.split(' ') -%}
