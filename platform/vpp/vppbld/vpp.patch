@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 98866e9be..5cc553fdc 100644
+index 98866e9be..f9d5b349e 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -76,7 +76,7 @@ DEB_DEPENDS += libffi-dev python3-ply libunwind-dev
@@ -11,6 +11,15 @@ index 98866e9be..5cc553fdc 100644
  # DEB_DEPENDS += enchant  # for docs
  DEB_DEPENDS += python3-virtualenv
  DEB_DEPENDS += libssl-dev
+@@ -85,7 +85,7 @@ DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
+ DEB_DEPENDS += nasm
+ DEB_DEPENDS += iperf ethtool  # for 'make test TEST=vm_vpp_interfaces'
+ DEB_DEPENDS += libpcap-dev
+-DEB_DEPENDS += tshark
++#DEB_DEPENDS += tshark
+ DEB_DEPENDS += jq # for extracting test summary from .json report (hs-test)
+ 
+ LIBFFI=libffi6 # works on all but 20.04 and debian-testing
 diff --git a/build/external/packages/xdp-tools.mk b/build/external/packages/xdp-tools.mk
 index b9285971f..c38acc598 100644
 --- a/build/external/packages/xdp-tools.mk
