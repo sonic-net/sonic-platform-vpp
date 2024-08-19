@@ -44,16 +44,16 @@ This document describes the high level design of implementing VxLAN tunnel to su
 | VRF                      | Virtual Routing and Forwarding |
 | VNet                     | Virtual Network                |
 | VPP                      | Vector Packet Processing       |
-
+| VR                       | Virtual Router                 |
 <br/>
 <br/>
 
 <a id="item-4"></a>
 ## Introduction
 SONiC VxLAN HLD (https://github.com/sonic-net/SONiC/blob/master/doc/vxlan/Vxlan_hld.md) describes using VxLAN tunnel to support 
-VNET peering between VMs and baremetal servers. Traffic from baremeta server is routed to VxLAN tunnel through vnet tunnel route.
-VxLAN traffic from VM to baremeta server will be decapsulated first then map to a VR from VNI. DST IP lookup within the VR will
-router the traffic to the baremetal server.
+VNET peering between VMs and baremetal servers. Traffic from baremetal server is routed to VxLAN tunnel through vnet tunnel route.
+VxLAN traffic from VM to baremetal server will be decapsulated first then map to a VR from VNI. DST IP lookup within the VR will
+route the traffic to the baremetal server.
 
 VPP supports bidirectional VxLAN tunnel. We need to build the forwarding chain properly to support above VNET peering using VxLAN
 tunnel.
@@ -131,7 +131,7 @@ Below diagram shows the connectivity between VM1 and BM1. VxLAN tunnel will be c
 ## Baremetal to VM
 
 From baremetal to VM, SONiC needs to encapsulate incoming packets in VxLAN tunnel. With the above example, traffic is from 
-BM1 and to VM1. SONiC needs to encapulate incoming IP packet in VxLAN in DIP 10.10.10.1, SIP 10.10.10.10 and VNI 2000.
+BM1 and to VM1. SONiC needs to encapsulate incoming IP packet in VxLAN in DIP 10.10.10.1, SIP 10.10.10.10 and VNI 2000.
 The inner DMAC is VxLAN MAC (SAI attribute SAI_SWITCH_ATTR_VXLAN_DEFAULT_ROUTER_MAC). To achieve this using VPP dataplane,
 we need to create a dummy IP neighbour with MAC of the VxLAN MAC and interface of VxLAN tunnel. Then the IP route for the 
 prefix in VNET_ROUTE_TUNNEL_TABLE points to the neighbour. Here is the equivalent VPP dataplane programming using VPP debug
