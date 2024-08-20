@@ -115,7 +115,7 @@ sudo ./start_sonic_vpp.sh start -n sonic-br2 -i ac4,ac5,ac6,veth_trunk
 Get into sonic-br1 container and configure vlan and vlan bridging
 sonic-br1:
 ```
-docker exec -it sonic-br2 /bin/bash
+docker exec -it sonic-br1 /bin/bash
 show interface status
 config interface startup Ethernet0
 config interface startup Ethernet1

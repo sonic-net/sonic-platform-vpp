@@ -158,7 +158,11 @@ namespace saivpp
                     _In_ sai_object_id_t objectId);
             sai_status_t vpp_remove_vlan_member(
                     _In_ sai_object_id_t vlan_member_oid);
-
+            sai_status_t vpp_create_bvi_interface(
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+            sai_status_t vpp_delete_bvi_interface(
+                    _In_ sai_object_id_t bvi_obj_id);
         protected:
 
             virtual sai_status_t create_port_dependencies(

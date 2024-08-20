@@ -759,7 +759,7 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
         hw_ifname = host_subifname;
 
         //Create bridge and set the l2 port
-        set_sw_interface_l2_bridge(hw_ifname, bridge_id, true);
+        set_sw_interface_l2_bridge(hw_ifname,bridge_id, true, VPP_API_PORT_TYPE_NORMAL);
 
         //Set interface state up
         interface_set_state(hw_ifname, true);
@@ -767,7 +767,7 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
         hw_ifname = hwifname;
 
         //Create bridge and set the l2 port
-        set_sw_interface_l2_bridge(hw_ifname, bridge_id, true);
+        set_sw_interface_l2_bridge(hw_ifname,bridge_id, true, VPP_API_PORT_TYPE_NORMAL);
 
         //Set the vlan member to bridge and tags rewrite
         vpp_l2_vtr_op_t vtr_op = L2_VTR_PUSH_1;
@@ -904,14 +904,14 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
         set_l2_interface_vlan_tag_rewrite(hw_ifname, tag1, tag2, push_dot1q, vtr_op);
 
         //Remove interface from bridge, interface type should be changed to others types like l3.
-        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false);
+        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false, VPP_API_PORT_TYPE_NORMAL);
     }else if (tagging_mode == SAI_VLAN_TAGGING_MODE_TAGGED) {
 
         // set interface l2 tag-rewrite GigabitEthernet0/8/0.200 disable
         snprintf(host_subifname, sizeof(host_subifname), "%s.%u", hw_ifname, vlan_id);
         hw_ifname = host_subifname;
         // Remove the l2 port from bridge
-        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false);
+        set_sw_interface_l2_bridge(hw_ifname, bridge_id, false, VPP_API_PORT_TYPE_NORMAL);
 
         // delete subinterface
         delete_sub_interface(hw_ifname, vlan_id);
@@ -930,6 +930,155 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
     if (member_count == 0) {
         vpp_bridge_domain_add_del(bridge_id, false);
     }
+
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::vpp_create_bvi_interface(
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list)
+{
+    SWSS_LOG_ENTER();
+
+    auto attr_vlan_oid = sai_metadata_get_attr_by_id(SAI_ROUTER_INTERFACE_ATTR_VLAN_ID, attr_count, attr_list);
+
+    if (attr_vlan_oid == NULL)
+    {
+        SWSS_LOG_ERROR("attr SAI_ROUTER_INTERFACE_ATTR_VLAN_ID was not passed");
+        return SAI_STATUS_SUCCESS;
+    }
+
+    sai_object_id_t vlan_oid = attr_vlan_oid->value.oid;
+
+    sai_object_type_t obj_type = objectTypeQuery(vlan_oid);
+
+    if (obj_type != SAI_OBJECT_TYPE_VLAN)
+    {
+        SWSS_LOG_ERROR(" VLAN object type was not passed");
+        return SAI_STATUS_SUCCESS;
+    }
+    auto vlan_attrs = m_objectHash.at(SAI_OBJECT_TYPE_VLAN).at(sai_serialize_object_id(vlan_oid));
+    auto md_vlan_id = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_VLAN, SAI_VLAN_ATTR_VLAN_ID);
+    auto vlan_id = (uint32_t) vlan_attrs.at(md_vlan_id->attridname)->getAttr()->value.u16;
+
+    if (vlan_id == 0)
+    {
+	SWSS_LOG_NOTICE("attr VLAN object id  was not passed");
+	return SAI_STATUS_FAILURE;
+    }
+
+    auto attr_mac_addr = sai_metadata_get_attr_by_id(SAI_ROUTER_INTERFACE_ATTR_SRC_MAC_ADDRESS, attr_count, attr_list);
+    if (attr_mac_addr == NULL)
+    {
+	SWSS_LOG_NOTICE("attr ROUTER INTERFACE MAC Address is not found");
+	return SAI_STATUS_FAILURE;
+    }
+
+    sai_mac_t mac_addr;
+    memcpy(mac_addr, attr_mac_addr->value.mac, sizeof(sai_mac_t));
+
+    //Create BVI interface
+    create_bvi_interface(mac_addr,vlan_id);
+
+    // Get new list of physical interfaces from VPP
+    refresh_interfaces_list();
+
+    char hw_bviifname[32];
+    const char *hw_ifname;
+    snprintf(hw_bviifname, sizeof(hw_bviifname), "bvi%u",vlan_id);
+    hw_ifname = hw_bviifname;
+
+    //Create bridge and set the l2 port as BVI
+    set_sw_interface_l2_bridge(hw_ifname,vlan_id, true, VPP_API_PORT_TYPE_BVI);
+
+    //Set interface state up
+    interface_set_state(hw_ifname, true);
+
+    //Set the bvi as access or untagged port of the bridge
+    vpp_l2_vtr_op_t vtr_op = L2_VTR_PUSH_1;
+    vpp_vlan_type_t push_dot1q = VLAN_DOT1Q;
+    uint32_t tag1 = (uint32_t)vlan_id;
+    uint32_t tag2 = ~0;
+    set_l2_interface_vlan_tag_rewrite(hw_ifname, tag1, tag2, push_dot1q, vtr_op);
+
+    //Set the arp termination for bridge
+    uint32_t bd_id = (uint32_t) vlan_id;
+    set_bridge_domain_flags(bd_id, VPP_BD_FLAG_ARP_TERM,true);
+
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::vpp_delete_bvi_interface(
+        _In_ sai_object_id_t bvi_obj_id)
+{
+    sai_attribute_t attr;
+
+    SWSS_LOG_ENTER();
+
+    attr.id = SAI_ROUTER_INTERFACE_ATTR_TYPE;
+    sai_status_t status = get(SAI_OBJECT_TYPE_ROUTER_INTERFACE, bvi_obj_id, 1, &attr);
+    if (status != SAI_STATUS_SUCCESS)
+    {
+        SWSS_LOG_ERROR("attr SAI_ROUTER_INTERFACE_ATTR_TYPE is not present");
+        return SAI_STATUS_FAILURE;
+    }
+
+    if (attr.value.s32 != SAI_ROUTER_INTERFACE_TYPE_VLAN)
+    {
+        SWSS_LOG_ERROR("attr SAI_ROUTER_INTERFACE_ATTR_TYPE is not VLAN");
+        return SAI_STATUS_FAILURE;
+    }
+
+    attr.id = SAI_ROUTER_INTERFACE_ATTR_VLAN_ID;
+    status = get(SAI_OBJECT_TYPE_ROUTER_INTERFACE, bvi_obj_id, 1, &attr);
+    if (status != SAI_STATUS_SUCCESS)
+    {
+        SWSS_LOG_ERROR("attr SAI_ROUTER_INTERFACE_ATTR_VLAN_ID is not present");
+        return SAI_STATUS_FAILURE;
+    }
+
+    sai_object_id_t vlan_oid = attr.value.oid;
+    sai_object_type_t obj_type = objectTypeQuery(vlan_oid);
+
+    if (obj_type != SAI_OBJECT_TYPE_VLAN)
+    {
+        SWSS_LOG_ERROR("attr SAI_VLAN_MEMBER_ATTR_VLAN_ID is not valid");
+        return SAI_STATUS_FAILURE;
+    }
+
+    attr.id = SAI_VLAN_ATTR_VLAN_ID;
+    status = get(SAI_OBJECT_TYPE_VLAN, vlan_oid, 1, &attr);
+
+    if (status != SAI_STATUS_SUCCESS)
+    {
+        SWSS_LOG_ERROR("attr SAI_VLAN_ATTR_VLAN_ID is not present");
+        return SAI_STATUS_FAILURE;
+    }
+    auto vlan_id = attr.value.u16;
+    char hw_bviifname[32];
+    const char *hw_ifname;
+    snprintf(hw_bviifname, sizeof(hw_bviifname), "bvi%u",vlan_id);
+    hw_ifname = hw_bviifname;
+
+    //Disable arp termination for bridge
+    uint32_t bd_id = (uint32_t) vlan_id;
+    set_bridge_domain_flags(bd_id, VPP_BD_FLAG_ARP_TERM, false);
+
+    //First disable tag-rewrite.
+    vpp_l2_vtr_op_t vtr_op = L2_VTR_DISABLED;
+    vpp_vlan_type_t push_dot1q = VLAN_DOT1Q;
+    uint32_t tag1 = (uint32_t)vlan_id;
+    uint32_t tag2 = ~0;
+    set_l2_interface_vlan_tag_rewrite(hw_ifname, tag1, tag2, push_dot1q, vtr_op);
+
+    //Remove interface from bridge, interface type should be changed to others types like l3.
+    set_sw_interface_l2_bridge(hw_ifname, bd_id, false, VPP_API_PORT_TYPE_BVI);
+
+    //Remove the bvi interface
+    delete_bvi_interface(hw_ifname);
+
+    // refresh interfaces from VPP
+    refresh_interfaces_list();
 
     return SAI_STATUS_SUCCESS;
 }
