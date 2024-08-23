@@ -89,13 +89,13 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
        expect "password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "while ! docker ps | grep -q pmon; do sleep 10; echo 'Waiting for pmon...'; done\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sleep 5\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo sonic_vpp_cfg.sh -p -i eth2,eth3\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args:
@@ -108,13 +108,13 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
        expect "password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "while ! docker ps | grep -q pmon; do sleep 10; echo 'Waiting for pmon...'; done\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sleep 5\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo sonic_vpp_cfg.sh -p -i eth2,eth3\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args:
@@ -132,17 +132,17 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
        expect "password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config interface ip add Ethernet0 {{ sonic_vm1_ethernet0_vxlan }}/24\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config interface ip add Ethernet1 {{ sonic_vm1_ethernet1_vxlan }}/24\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config interface startup Ethernet0\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config interface startup Ethernet1\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config save -y\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        exit 0
      args:
        executable: /usr/bin/expect
@@ -154,17 +154,17 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
        expect "password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config interface ip add Ethernet0 {{ sonic_vm2_ethernet0_vxlan }}/24\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config interface ip add Ethernet1 {{ sonic_vm2_ethernet1_vxlan }}/24\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config interface startup Ethernet0\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config interface startup Ethernet1\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config save -y\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        exit 0
      args:
        executable: /usr/bin/expect
@@ -201,11 +201,11 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
        expect "admin@localhost's password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config route add prefix {{ sonic_host_2_vxlan_prefix }} nexthop {{ sonic_host_vxlan_tap1 }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config save -y\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args:
@@ -218,11 +218,11 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
        expect "admin@localhost's password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config route add prefix {{ sonic_host_1_vxlan_prefix }} nexthop {{ sonic_host_vxlan_tap2 }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config save -y\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args:
@@ -253,15 +253,15 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
        expect "admin@localhost's password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "ping -c5 {{ sonic_host_vxlan_tap2 }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "ping -c5 {{ sonic_host_vxlan_tap1 }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "ping -c5 {{ sonic_vm2_ethernet0_vxlan }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "ping -c5 {{ sonic_host_vxlan_t0_tap_1 }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args: 
@@ -276,15 +276,15 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
        expect "admin@localhost's password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "ping -c5 {{ sonic_host_vxlan_tap1 }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "ping -c5 {{ sonic_host_vxlan_tap2 }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "ping -c5 {{ sonic_vm1_ethernet0_vxlan }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "ping -c5 {{ sonic_host_vxlan_t0_tap_2 }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args: 
@@ -299,7 +299,7 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
        expect "admin@localhost's password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "jq '. + {
          \"VXLAN_TUNNEL\": {
            \"test\": {
@@ -315,11 +315,11 @@
            }
          }
        }' /etc/sonic/config_db.json > temp.json\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo mv temp.json /etc/sonic/config_db.json\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config load -y\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args: 
@@ -332,7 +332,7 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
        expect "admin@localhost's password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "jq '. + {
          \"VXLAN_TUNNEL\": {
            \"test\": {
@@ -348,11 +348,11 @@
            }
          }
        }' /etc/sonic/config_db.json > temp.json\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo mv temp.json /etc/sonic/config_db.json\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "sudo config load -y\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args:
@@ -413,9 +413,9 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
        expect "admin@localhost's password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "docker exec -i swss swssconfig /dev/stdin < vnet_tunnel_vm1.json\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args:
@@ -428,9 +428,9 @@
        spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
        expect "admin@localhost's password:"
        send "{{ sonic_vm_password }}\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "docker exec -i swss swssconfig /dev/stdin < vnet_tunnel_vm2.json\n"
-       expect "cisco@sonic:~$ "
+       expect "admin@sonic:~$ "
        send "\n"
        exit 0
      args:
