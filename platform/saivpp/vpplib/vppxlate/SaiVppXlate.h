@@ -167,6 +167,7 @@ typedef enum {
     extern int create_loopback_instance(const char *hwif_name, uint32_t instance);
     extern int delete_loopback(const char *hwif_name, uint32_t instance);
     extern int get_sw_if_idx(const char *ifname);
+    extern int vpp_get_if_name(uint32_t hw_ind, char *hw_ifname, size_t name_len);
     extern int create_sub_interface(const char *hwif_name, uint32_t sub_id, uint16_t vlan_id);
     extern int delete_sub_interface(const char *hwif_name, uint32_t sub_id);
     extern int set_interface_vrf(const char *hwif_name, uint32_t sub_id, uint32_t vrf_id, bool is_ipv6);
@@ -193,8 +194,12 @@ typedef enum {
 					bool is_input);
     extern int interface_get_state(const char *hwif_name, bool *link_is_up);
     extern int vpp_sync_for_events();
+
+    extern int vpp_vxlan_tunnel_add_del(vpp_ip_addr_t *sip, vpp_ip_addr_t *dip, uint32_t vni, bool is_add, uint32_t *if_ind);
+    extern int vpp_vxlan_gpe_tunnel_add_del(vpp_ip_addr_t *sip, vpp_ip_addr_t *dip, uint32_t vni, bool is_add, uint32_t *if_ind);
+
     extern int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add);
-    extern int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_enable, uint32_t port_type);
+    extern int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_enable, uint32_t port_type, uint8_t shg);
     extern int set_l2_interface_vlan_tag_rewrite(const char *hwif_name, uint32_t tag1, uint32_t tag2, uint32_t push_dot1q, uint32_t vtr_op);
     extern int bridge_domain_get_member_count (uint32_t bd_id, uint32_t *member_count);
     extern int create_bvi_interface(uint8_t *mac_address, uint32_t instance);
