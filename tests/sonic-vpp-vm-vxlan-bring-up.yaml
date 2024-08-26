@@ -53,36 +53,6 @@
      ignore_errors: yes
      tags:
      - build        
-   - name: Copy cfg file to SONiC-VPP VM 1
-     ansible.builtin.shell: |
-       set timeout 60
-       spawn sftp -o StrictHostKeyChecking=no -P 10021 admin@localhost
-       expect "admin@localhost's password:"
-       send "{{ sonic_vm_password }}\n"
-       expect "sftp>"
-       send "put /home/cisco/sonic-vpp/sonic_vpp_cfg.sh\n"
-       expect "sftp>"
-       send "\n"
-       exit 0
-     args:
-       executable: /usr/bin/expect
-     tags:
-     - build        
-   - name: Copy cfg file to SONiC-VPP VM 2
-     ansible.builtin.shell: |
-       set timeout 60
-       spawn sftp -o StrictHostKeyChecking=no -P 10022 admin@localhost
-       expect "admin@localhost's password:"
-       send "{{ sonic_vm_password }}\n"
-       expect "sftp>"
-       send "put /home/cisco/sonic-vpp/sonic_vpp_cfg.sh\n"
-       expect "sftp>"
-       send "\n"
-       exit 0
-     args:
-       executable: /usr/bin/expect
-     tags:
-     - build    
    - name: Configure SONiC and syncd-vpp VM 1
      ansible.builtin.shell: |
        set timeout 400
@@ -90,13 +60,6 @@
        expect "password:"
        send "{{ sonic_vm_password }}\n"
        expect "admin@sonic:~$ "
-       send "while ! docker ps | grep -q pmon; do sleep 10; echo 'Waiting for pmon...'; done\n"
-       expect "admin@sonic:~$ "
-       send "sleep 5\n"
-       expect "admin@sonic:~$ "
-       send "sudo sonic_vpp_cfg.sh -p -i eth2,eth3\n"
-       expect "admin@sonic:~$ "
-       send "\n"
        exit 0
      args:
        executable: /usr/bin/expect
@@ -109,21 +72,9 @@
        expect "password:"
        send "{{ sonic_vm_password }}\n"
        expect "admin@sonic:~$ "
-       send "while ! docker ps | grep -q pmon; do sleep 10; echo 'Waiting for pmon...'; done\n"
-       expect "admin@sonic:~$ "
-       send "sleep 5\n"
-       expect "admin@sonic:~$ "
-       send "sudo sonic_vpp_cfg.sh -p -i eth2,eth3\n"
-       expect "admin@sonic:~$ "
-       send "\n"
        exit 0
      args:
        executable: /usr/bin/expect
-     tags:
-     - build        
-   - name: Pause for 2 minutes for SONiC VM to bootup
-     ansible.builtin.pause:
-       minutes: 2
      tags:
      - build        
    - name: Configure SONiC-VPP data path interfaces VM 1

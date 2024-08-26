@@ -52,7 +52,7 @@ Perform following steps to deploy and validate SONiC VPP docker image.
 ## SONiC VPP VM image Deployment and Validation
 
 Perform following steps to deploy and validate SONiC VPP VM image.
-1. Downalod SONiC-VPP VM image ("sonic-vpp.img.gz") and script "sonic_vpp_cfg.sh" to VM in directory "/home/\<user-name\>/sonic-vpp". Script "sonic_vpp_cfg.sh" is available at https://github.com/sonic-net/sonic-platform-vpp/blob/main/platform/mkrules/files/scripts/sonic_vpp_cfg.sh. For VM VxLAN test, download the VxLAN file tests/vxlan-configs/vnet_tunnel.json.j2 to "/home/\<user-name\>/sonic-vpp" as well.
+1. Downalod SONiC-VPP VM image ("sonic-vpp.img.gz")
 
 2. Clone repository https://github.com/sonic-net/sonic-platform-vpp 
    ```
