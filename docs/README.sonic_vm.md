@@ -8,8 +8,6 @@ Testing this image is simple.
 . Fireup qemu-system (kvm) with the sonic-vpp.img as disk image
 . Connect to the running vm either by serial port or by vncviewer
 . Configure an IP address on eth0 of the SONiC so that you can access it from a linux system.
-. Configure the SONiC-VPP using sonic_vpp_cfg.sh script to pass the required interfaces list.
-. Reboot the SONiC.
 . Configure the network addresses on the host and on the SONiC VM.
 . Run a ping. Voila!!! the sonic-vpp is up and running
 
@@ -61,22 +59,7 @@ sudo ip addr add 10.0.0.2/24 dev tap0
 
 Now you should be able ssh into the VM using credentials admin/YourPaSsWoRd.
 
-4. Time to configure the vpp. In the SSH session run
-```
-sudo sonic_vpp_cfg.sh -p -i eth1,eth2
-```
-The above command will generate required configuration of SONiC and syncd-vpp. It will prompt user for confirmation unless -p option is chosen.
-
-> Note: The mgmt eth0 address is saved to config_db(in step 3) so there is no need to reconfigure the ip address of mgmt interface most of the time. After reboot if mgmt interface address is lost  rerun the step 3.
-
-5. After reboot you should be able to see syncd container running and the "ip link" should list Ethernet0, Ethernet1 interfaces. Connect the SONiC either using serial port or ssh of mgmt IP address.
-```
-docker ps | grep syncd
-ip link | grep Ethernet
-
-```
-
-6. Now we are ready to configure the IP addresses for data path interfaces
+4. Now we are ready to configure the IP addresses for data path interfaces
 
 ```
 sudo config interface ip add Ethernet0 20.0.0.2/24
@@ -85,7 +68,7 @@ sudo config interface startup Ethernet0
 sudo config interface startup Ethernet1
 sudo config save -y
 ```
-7. On the host configure ip addresses on the host side of interfaces
+5. On the host configure ip addresses on the host side of interfaces
 
 ```
 sudo ip link set dev sonic-tap1 up
