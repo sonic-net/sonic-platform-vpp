@@ -173,6 +173,45 @@ namespace saivpp
                     _In_ const sai_attribute_t *attr_list);
             sai_status_t vpp_delete_bvi_interface(
                     _In_ sai_object_id_t bvi_obj_id);
+
+            /*FDB Entry and Flush SAI Objects*/
+            sai_status_t FdbEntryadd(
+                    _In_ const std::string &serializedObjectId,
+                    _In_ sai_object_id_t switch_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+            sai_status_t vpp_fdbentry_add(
+                    _In_ const std::string &serializedObjectId,
+                    _In_ sai_object_id_t switch_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+	    sai_status_t FdbEntrydel(
+                    _In_ const std::string &serializedObjectId);
+            sai_status_t vpp_fdbentry_del(
+                    _In_ const std::string &serializedObjectId);
+
+            sai_status_t vpp_fdbentry_flush(
+                    _In_ sai_object_id_t switch_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+
+            /* BFD Session */
+            sai_status_t bfd_session_add(
+                    _In_ const std::string &serializedObjectId,
+                    _In_ sai_object_id_t switch_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+            sai_status_t vpp_bfd_session_add(
+                    _In_ const std::string &serializedObjectId,
+                    _In_ sai_object_id_t switch_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+            sai_status_t bfd_session_del(
+                    _In_ const std::string &serializedObjectId);
+            sai_status_t vpp_bfd_session_del(
+                    _In_ const std::string &serializedObjectId);
+
+
         protected:
 
             virtual sai_status_t create_port_dependencies(

@@ -213,6 +213,14 @@ typedef enum {
     extern int create_bvi_interface(uint8_t *mac_address, uint32_t instance);
     extern int delete_bvi_interface(const char *hwif_name);
     extern int set_bridge_domain_flags(uint32_t bd_id, vpp_bd_flags_t flag, bool enable);
+    extern int l2fib_add_del(const char *hwif_name, const uint8_t *mac, uint32_t bd_id, bool is_add, bool is_static_mac);
+    extern int l2fib_flush_all();
+    extern int l2fib_flush_int(const char *hwif_name);
+    extern int l2fib_flush_bd(uint32_t bd_id);
+    extern int bfd_udp_add(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr, uint8_t detect_mult,\
+                           uint32_t desired_min_tx, uint32_t required_min_rx);
+    extern int bfd_udp_del(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr);
+
     extern int vpp_vxlan_tunnel_add_del(vpp_vxlan_tunnel_t *tunnel, bool is_add,  uint32_t *sw_if_index);
     extern int vpp_ip_addr_t_to_string(vpp_ip_addr_t *ip_addr, char *buffer, size_t maxlen);
 #ifdef __cplusplus

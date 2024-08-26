@@ -107,7 +107,7 @@ There are NO changes to the SONiC system architecture. VPP fits in the same mann
 
 The salient aspects of the architecture are listed below
  - SONIC components and VPP run as Linux processes inside the container.
- - The container needs to be run in privilaged mode. This requirement is driven by VPP needs. 
+ - The container needs to be run in privileged mode. This requirement is driven by VPP needs.
  - A new platform construct called `sonic-platform-vpp` is added to support VPP.
  - SONIC interacts with VPP to configure features, get statistics, get asynchronous notifications (e.g. link down events)
  - There is no change to the way SONiC operates. The configurations are handled by SONiC control plane components and updated into ASIC_DB.  
@@ -165,7 +165,7 @@ VPP is responsible for the following functions
 It has two functional parts.
 
  - Master Thread\
-   Takes care of handling configuration requests from various clients and program the VPP datapath strutures. The clients could be VPP CLI (*vppctl*) or applications (*syncd*) that use [VPP Binary APIs](https://docs.fd.io/vpp/17.10/api_doc.html). Care needs to be taken so that the control path-data path messaging design doesnt overwhelm this thread. There is only one master thread. The queries, get requests, sent by clients are processed by the Master thread. The master thread also sends asynchronous notifications, say interface link going down to the client application/s.
+   Takes care of handling configuration requests from various clients and program the VPP datapath structures. The clients could be VPP CLI (*vppctl*) or applications (*syncd*) that use [VPP Binary APIs](https://docs.fd.io/vpp/17.10/api_doc.html). Care needs to be taken so that the control path-data path messaging design doesn't overwhelm this thread. There is only one master thread. The queries, get requests, sent by clients are processed by the Master thread. The master thread also sends asynchronous notifications, say interface link going down to the client application/s.
    
  - Data Workers\
    They handle the packet/flow processing needed by the features enabled. The packets ingress and egress from the worker threads. Each worker is instantiated as a POSIX thread. The number of workers is configurable at VPP boot time (*via startup.conf*). 
@@ -182,7 +182,7 @@ See link for [VPP Supported Features](https://s3-docs.fd.io/vpp/22.06/aboutvpp/f
 
 <a id="item-103"></a>
 ### How is VPP consumed 
-At the time of writing the document, we do not have any VPP specific changes for SONiC integration. We use a official prebuilt binary of VPP release 22.06 to build SONiC-VPP. At some cadence we will upgrade the VPP version. The prebuilt binary is picked up from [VPP prebuilt binaries](https://packagecloud.io/fdio/release/). As we add new features to SONiC-VPP (e.g. Statefull firewall) we will need to add these features into VPP and upstream the changes. In future it is likely the VPP consumption model could change.     
+At the time of writing the document, we do not have any VPP specific changes for SONiC integration. We use a official prebuilt binary of VPP release 22.06 to build SONiC-VPP. At some cadence we will upgrade the VPP version. The prebuilt binary is picked up from [VPP prebuilt binaries](https://packagecloud.io/fdio/release/). As we add new features to SONiC-VPP (e.g. Stateful firewall) we will need to add these features into VPP and upstream the changes. In future it is likely the VPP consumption model could change.
 
 
 <a id="item-11"></a>
@@ -190,7 +190,7 @@ At the time of writing the document, we do not have any VPP specific changes for
 
 <a id="item-111"></a>
 ### API Semantics
-The SAI APIs are a set of CRUD operations on an Object type (~100+). Each object type has specific atributes. 
+The SAI APIs are a set of CRUD operations on an Object type (~100+). Each object type has specific attributes.
 
 VPP supports a message passing interface called VPP Binary APIs. VPP supports the following method types 
  - Request/Reply\
@@ -212,10 +212,10 @@ The SAI APIs need to be translated to the corresponding VPP API/s. Figure below 
 The flow is 
  - All configuration, updates get reflected in ASIC_DB
  - Any updates to ASIC_DB triggers the libsaiapp.so in syncd process. There is a translation logic here that maps the SAI APIs to VPP binary APIs. 
- - There is a Request-Response pattern between the libsaivpp and VPP. VPP sends back a response to each request. It returns an OK in case the API was processed succesfully. In case of error the libsaivpp propagates the error via the SAI API error response message to the control plane. 
+ - There is a Request-Response pattern between the libsaivpp and VPP. VPP sends back a response to each request. It returns an OK in case the API was processed successfully. In case of error the libsaivpp propagates the error via the SAI API error response message to the control plane.
 
 The API  mapping is often non-trivial and requires state to be maintained for objects configured. The fact the VPP unlike SAI does not support 
- - Single atribute update or 
+ - Single attribute update or
  - Bulk updates
 
 making the translation non-trivial.  
@@ -309,8 +309,8 @@ SONiC-VPP is packaged into
 
 <a id="item-19"></a>
 ## Restrictions and Limitations
-Intial releases supports limited functionality and features. Over time more features will be added. The following limitations apply
- - Single contai
+Initial releases supports limited functionality and features. Over time more features will be added. The following limitations apply
+ - Single container
 
 Details of execution plan can be found [here](https://github.com/sonic-net/sonic-platform-vpp/blob/main/TODO.md)
 
@@ -340,7 +340,7 @@ The test frameworks and topologies will be made part of the Jenkins test pipelin
 ## Troubleshooting
 There are some SONiC tools to debug SONiC side of functionality such as show commands, redis-dump, log files /var/log/syslog, /var/log/swss/ etc. You can connect gdb to the running processes and get useful debug information provided the image is built with INSTALL_DEBUG_TOOLS=y option.
  
-For vpp data path troubleshooting a user can invoke vppctl to connec to VPP and run a CLI. Other option is to run “show platform vpp” command to see the working of vpp. “show platform” command of SONiC is extended to support vpp platform side of commands.
+For vpp data path troubleshooting a user can invoke vppctl to connect to VPP and run a CLI. Other option is to run “show platform vpp” command to see the working of vpp. “show platform” command of SONiC is extended to support vpp platform side of commands.
 
 ## References
 
