@@ -24,6 +24,7 @@ typedef struct nexthop_grp_member_ {
     sai_object_id_t rif_oid;
     uint32_t weight;
     uint32_t seq_id;
+    uint32_t sw_if_index;
 } nexthop_grp_member_t;
 
 typedef struct nexthop_grp_config_ {
