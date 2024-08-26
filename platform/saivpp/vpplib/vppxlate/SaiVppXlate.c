@@ -53,6 +53,11 @@
 #include <vnet/l2/l2.api_enum.h>
 #include <vnet/l2/l2.api_types.h>
 
+#include <vpp_plugins/vxlan/vxlan.api_enum.h>
+#include <vpp_plugins/vxlan/vxlan.api_types.h>
+#include <vnet/bfd/bfd.api_enum.h>
+#include <vnet/bfd/bfd.api_types.h>
+
 /* l2 API inclusion */
 
 #define vl_typedefs
@@ -187,6 +192,23 @@
 #include <vpp_plugins/acl/acl.api.h>
 #undef vl_api_version
 
+/* vxlan API inclusion */
+#define vl_typedefs
+#include <vpp_plugins/vxlan/vxlan.api.h>
+#undef vl_typedefs
+
+#define  vl_endianfun
+#include <vpp_plugins/vxlan/vxlan.api.h>
+#undef vl_endianfun
+
+#define vl_calcsizefun
+#include <vpp_plugins/vxlan/vxlan.api.h>
+#undef vl_calcsizefun
+
+#define vl_api_version(n, v) static u32 vxlan_api_version = v;
+#include <vpp_plugins/vxlan/vxlan.api.h>
+#undef vl_api_version
+
 /* memclnt API inclusion */
 
 #define vl_typedefs /* define message structures */
@@ -214,12 +236,56 @@
 #undef vl_api_version
 */
 
+/*include bfd */
+#define vl_typedefs
+#include <vnet/bfd/bfd.api.h>
+#undef vl_typedefs
+
+#define  vl_endianfun
+#include <vnet/bfd/bfd.api.h>
+#undef vl_endianfun
+
+#define vl_printfun
+#include <vnet/bfd/bfd.api.h>
+#undef vl_printfun
+
+#define vl_calcsizefun
+#include <vnet/bfd/bfd.api.h>
+#undef vl_calcsizefun
+
+#define vl_api_version(n, v) static u32 bfd_api_version = v;
+#include <vnet/bfd/bfd.api.h>
+#undef vl_api_version
+
+
 void classify_get_trace_chain(void ){}
 void os_exit(int code) {}
 
 #define SAIVPP_DEBUG(format,args...) {}
 #define SAIVPP_WARN clib_warning
 #define SAIVPP_ERROR clib_error
+
+/**
+ * Wait for result and retry if necessary. The retry is necessary because there could be unsolicited
+ * events causing vl_socket_client_read to return before the expected result is received. If 
+ * vam->result_ready is not set, which should be set when API callback function is called, then
+ * it means we get some unsolicited events and we need to retry.
+ */ 
+#define WR(ret)                                                 \
+do {                                                            \
+    f64 timeout = vat_time_now (vam) + 1.0;                     \
+    socket_client_main_t *scm = vam->socket_client_main;    	\
+    ret = -99;                                                  \
+    while (vat_time_now (vam) < timeout) {                      \
+        if (scm && scm->socket_enable)                          \
+            vl_socket_client_read (5);                          \
+        if (vam->result_ready == 1) {                           \
+            ret = vam->retval;                                  \
+            break;                                              \
+        }                                                       \
+        vat_suspend (vam->vlib_main, 1e-5);                     \
+    }								                            \
+} while(0);
 
 #define VPP_MAX_CTX 2
 typedef struct _vpp_index_map_ {
@@ -642,7 +708,7 @@ vl_api_bvi_create_reply_t_handler (vl_api_bvi_create_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
 
-    SAIVPP_WARN("bvi create reply handler swifIndex:%d  %s(%d)",msg->sw_if_index,  msg->retval ? "failed" : "successful", msg->retval);
+    SAIVPP_WARN("bvi create reply handler %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
 }
 
 static void
@@ -661,6 +727,63 @@ vl_api_bridge_flags_reply_t_handler (vl_api_bridge_flags_reply_t *msg)
     SAIVPP_WARN("bridge flags reply handler  %s(%d)",  msg->retval ? "failed" : "successful", msg->retval);
 }
 
+static void
+vl_api_l2fib_add_del_reply_t_handler (vl_api_l2fib_add_del_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("l2fib add del reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("l2fib add del reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+static void
+vl_api_l2fib_flush_all_reply_t_handler (vl_api_l2fib_flush_all_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("l2fib flush all reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("l2fib flush all reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+static void
+vl_api_l2fib_flush_int_reply_t_handler (vl_api_l2fib_flush_int_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("l2fib flush int reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("l2fib flush int reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+
+static void
+vl_api_l2fib_flush_bd_reply_t_handler (vl_api_l2fib_flush_bd_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("l2fib flush bd reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("l2fib flush bd reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+
+static void
+vl_api_bfd_udp_add_reply_t_handler (vl_api_bfd_udp_add_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("bfd udp add reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("bfd udp add reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+
+static void
+vl_api_bfd_udp_del_reply_t_handler (vl_api_bfd_udp_del_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("bfd udp del reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    //SAIVPP_ERROR("bfd udp del reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
 
 static void
 vl_api_bridge_domain_details_t_handler (vl_api_bridge_domain_details_t *mp)
@@ -675,6 +798,18 @@ vl_api_bridge_domain_details_t_handler (vl_api_bridge_domain_details_t *mp)
   return;
 }
 
+static void
+vl_api_vxlan_add_del_tunnel_v3_reply_t_handler (
+    vl_api_vxlan_add_del_tunnel_v3_reply_t * msg)
+{
+    vat_main_t *vam = &vat_main;
+
+    set_reply_sw_if_index(ntohl(msg->sw_if_index));
+
+    set_reply_status(ntohl(msg->retval));
+    SAIVPP_DEBUG("vxlan_add_del handler: if_idx,%d,status,%d",vam->sw_if_index, vam->retval);
+}
+
 #define vl_api_get_first_msg_id_reply_t_handler vl_noop_handler
 #define vl_api_get_first_msg_id_reply_t_handler_json vl_noop_handler
 
@@ -685,7 +820,8 @@ vl_api_bridge_domain_details_t_handler (vl_api_bridge_domain_details_t *mp)
     _(MEMCLNT_MSG_ID(CONTROL_PING_REPLY), control_ping_reply)
 
 static u16 interface_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
-static u16 l2_msg_id_base;
+static u16 l2_msg_id_base, vxlan_msg_id_base;
+static u16 bfd_msg_id_base;
 
 static void vpp_base_vpe_init(void)
 {
@@ -716,6 +852,9 @@ static void vpp_base_vpe_init(void)
 #define L2_MSG_ID(id) \
     (VL_API_##id + l2_msg_id_base)
 
+#define BFD_MSG_ID(id) \
+    (VL_API_##id + bfd_msg_id_base)
+
 #define foreach_vpe_ext_api_reply_msg                                   \
     _(INTERFACE_MSG_ID(SW_INTERFACE_DETAILS), sw_interface_details)     \
     _(INTERFACE_MSG_ID(CREATE_LOOPBACK_INSTANCE_REPLY), create_loopback_instance_reply) \
@@ -739,7 +878,13 @@ static void vpp_base_vpe_init(void)
     _(L2_MSG_ID(BRIDGE_DOMAIN_DETAILS), bridge_domain_details) \
     _(L2_MSG_ID(BVI_CREATE_REPLY), bvi_create_reply) \
     _(L2_MSG_ID(BVI_DELETE_REPLY), bvi_delete_reply) \
-    _(L2_MSG_ID(BRIDGE_FLAGS_REPLY), bridge_flags_reply)
+    _(L2_MSG_ID(BRIDGE_FLAGS_REPLY), bridge_flags_reply) \
+    _(L2_MSG_ID(L2FIB_ADD_DEL_REPLY), l2fib_add_del_reply) \
+    _(L2_MSG_ID(L2FIB_FLUSH_ALL_REPLY), l2fib_flush_all_reply) \
+    _(L2_MSG_ID(L2FIB_FLUSH_INT_REPLY), l2fib_flush_int_reply) \
+    _(L2_MSG_ID(L2FIB_FLUSH_BD_REPLY), l2fib_flush_bd_reply) \
+    _(BFD_MSG_ID(BFD_UDP_ADD_REPLY), bfd_udp_add_reply) \
+    _(BFD_MSG_ID(BFD_UDP_DEL_REPLY), bfd_udp_del_reply) \
 
 static u16 interface_msg_id_base, ip_msg_id_base, ip_nbr_msg_id_base, lcp_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
 static u16 acl_msg_id_base;
@@ -784,8 +929,7 @@ static void vl_api_acl_del_reply_t_handler(vl_api_acl_del_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
 
-    SAIVPP_DEBUG("acl del %s(%d) acl index %u", msg->retval ? "failed" : "successful", msg->retval,
-		 msg->acl_index);
+    SAIVPP_DEBUG("acl del %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
 }
 
 static void
@@ -805,20 +949,22 @@ vl_api_acl_interface_add_del_reply_t_handler(vl_api_acl_interface_add_del_reply_
 		 msg->retval);
 }
 
-
 #define LCP_MSG_ID(id) \
     (VL_API_##id + lcp_msg_id_base)
 
 #define ACL_MSG_ID(id) \
     (VL_API_##id + acl_msg_id_base)
 
+#define VXLAN_MSG_ID(id) \
+    (VL_API_##id + vxlan_msg_id_base)
+
 #define foreach_vpe_plugin_api_reply_msg                                \
     _(LCP_MSG_ID(LCP_ITF_PAIR_ADD_DEL_REPLY), lcp_itf_pair_add_del_reply) \
     _(ACL_MSG_ID(ACL_ADD_REPLACE_REPLY), acl_add_replace_reply)	\
     _(ACL_MSG_ID(ACL_DEL_REPLY), acl_del_reply) \
     _(ACL_MSG_ID(ACL_STATS_INTF_COUNTERS_ENABLE_REPLY), acl_stats_intf_counters_enable_reply) \
-    _(ACL_MSG_ID(ACL_INTERFACE_ADD_DEL_REPLY), acl_interface_add_del_reply)
-    
+    _(ACL_MSG_ID(ACL_INTERFACE_ADD_DEL_REPLY), acl_interface_add_del_reply) \
+    _(VXLAN_MSG_ID(VXLAN_ADD_DEL_TUNNEL_V3_REPLY), vxlan_add_del_tunnel_v3_reply)
 static void vpp_plugin_vpe_init(void)
 {
 #define _(N,n)                                                  \
@@ -864,7 +1010,15 @@ static void get_base_msg_id()
     //SAIVPP_ERROR("DELME: l2_msg_id_base %s msg_base_lookup_name:%s l2_api_version:%08x\n", l2_msg_id_base,msg_base_lookup_name,l2_api_version);
     //printf("DELME: New change added l2_msg_id_base %s\n", l2_msg_id_base);
 
+    msg_base_lookup_name = format (0, "bfd_%08x%c", bfd_api_version, 0);
+    bfd_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
+    assert(bfd_msg_id_base != (u16) ~0);
+
     memclnt_msg_id_base = 0;
+
+    msg_base_lookup_name = format (0, "vxlan_%08x%c", vxlan_api_version, 0);
+    vxlan_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
+    assert(vxlan_msg_id_base != (u16) ~0);
 }
 
 #define API_SOCKET_FILE "/run/vpp/api.sock"
@@ -1292,7 +1446,7 @@ static int __set_interface_vrf (vat_main_t *vam, vl_api_interface_index_t if_idx
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -1376,38 +1530,41 @@ int ip_vrf_del (u32 vrf_id, const char *vrf_name, bool is_ipv6)
 }
 
 static int __ip_nbr_add_del (vat_main_t *vam, vl_api_address_t *nbr_addr, u32 if_idx,
-			     uint8_t *mac, bool is_static, bool is_add)
+			     uint8_t *mac, bool is_static, bool no_fib_entry, bool is_add)
 {
     vl_api_ip_neighbor_add_del_t *mp;
     int ret;
-
     VPP_LOCK();
 
     __plugin_msg_base = ip_nbr_msg_id_base;
 
     M (IP_NEIGHBOR_ADD_DEL, mp);
     mp->is_add = is_add;
-    mp->neighbor.flags = (is_static) ? IP_API_NEIGHBOR_FLAG_STATIC : IP_API_NEIGHBOR_FLAG_NONE;
+    mp->neighbor.flags = IP_API_NEIGHBOR_FLAG_NONE;
+    if (is_static) {
+        mp->neighbor.flags |= IP_API_NEIGHBOR_FLAG_STATIC;
+    }   
+    if (no_fib_entry) {
+        mp->neighbor.flags |= IP_API_NEIGHBOR_FLAG_NO_FIB_ENTRY;        
+    }
     mp->neighbor.sw_if_index = htonl(if_idx);
     mp->neighbor.ip_address = *nbr_addr;
     memcpy(mp->neighbor.mac_address, mac, sizeof(mp->neighbor.mac_address));
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
-
     return ret;
 }
 
-static int ip_nbr_add_del (const char *hwif_name, struct sockaddr *addr,
-			   bool is_static, uint8_t *mac, bool is_add)
+static int ip_nbr_add_del (const char *hwif_name, uint32_t sw_if_index, struct sockaddr *addr,
+			   bool is_static, bool no_fib_entry, uint8_t *mac, bool is_add)
 {
-    u32 idx;
     vat_main_t *vam = &vat_main;
-    vl_api_address_t api_addr;
 
+    vl_api_address_t api_addr;
     if (addr->sa_family == AF_INET) {
 	struct sockaddr_in *ip4 = (struct sockaddr_in *) addr;
 	api_addr.af = ADDRESS_IP4;
@@ -1419,19 +1576,22 @@ static int ip_nbr_add_del (const char *hwif_name, struct sockaddr *addr,
     } else {
 	return -EINVAL;
     }
-    idx = get_swif_idx(vam, hwif_name);
+    if (sw_if_index == ~0) {
+        sw_if_index = get_swif_idx(vam, hwif_name);
+    } 
+    
 
-    return __ip_nbr_add_del(vam, &api_addr, idx, mac, is_static, is_add);
+    return __ip_nbr_add_del(vam, &api_addr, sw_if_index, mac, is_static, no_fib_entry, is_add);
 }
 
-int ip4_nbr_add_del (const char *hwif_name, struct sockaddr_in *addr, bool is_static, uint8_t *mac, bool is_add)
+int ip4_nbr_add_del (const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in *addr, bool is_static, bool no_fib_entry, uint8_t *mac, bool is_add)
 {
-    return ip_nbr_add_del(hwif_name, (struct sockaddr *) addr, is_static, mac, is_add);
+    return ip_nbr_add_del(hwif_name, sw_if_index, (struct sockaddr *) addr, is_static, no_fib_entry, mac, is_add);
 }
 
-int ip6_nbr_add_del (const char *hwif_name, struct sockaddr_in6 *addr, bool is_static, uint8_t *mac, bool is_add)
+int ip6_nbr_add_del (const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in6 *addr, bool is_static, bool no_fib_entry, uint8_t *mac, bool is_add)
 {
-    return ip_nbr_add_del(hwif_name, (struct sockaddr *) addr, is_static, mac, is_add);
+    return ip_nbr_add_del(hwif_name, sw_if_index, (struct sockaddr *) addr, is_static, no_fib_entry, mac, is_add);
 }
 
 int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
@@ -1476,8 +1636,10 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
 	vl_api_fib_path_t *fib_path = &ip_route->paths[i];
 	vl_api_address_union_t *nh_addr = &fib_path->nh.address;
 	memset (fib_path, 0, sizeof (*fib_path));
-
-	if (nexthop->hwif_name) {
+    if (nexthop->sw_if_index != (u32) - 1) {
+        fib_path->sw_if_index = htonl(nexthop->sw_if_index);
+    }
+	else if (nexthop->hwif_name) {
 	    idx = get_swif_idx(vam, nexthop->hwif_name);
 	    if (idx != (u32) -1) {
 		fib_path->sw_if_index = htonl(idx);
@@ -1493,11 +1655,11 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
 	if (addr->sa_family == AF_INET) {
 	    struct sockaddr_in *ip4 = &addr->addr.ip4;
 	    memcpy(nh_addr->ip4, &ip4->sin_addr.s_addr, sizeof(nh_addr->ip4));
-	    fib_path->proto = FIB_API_PATH_NH_PROTO_IP4;
+	    fib_path->proto = htonl(FIB_API_PATH_NH_PROTO_IP4);
 	} else if (addr->sa_family == AF_INET6) {
 	    struct sockaddr_in6 *ip6 =  &addr->addr.ip6;
 	    memcpy(nh_addr->ip6, &ip6->sin6_addr.s6_addr, sizeof(nh_addr->ip6));
-	    fib_path->proto = FIB_API_PATH_NH_PROTO_IP6;
+	    fib_path->proto = htonl(FIB_API_PATH_NH_PROTO_IP6);
 	} else {
 	    VPP_UNLOCK();
 	    return -EINVAL;
@@ -1520,7 +1682,7 @@ int ip_route_add_del (vpp_ip_route_t *prefix, bool is_add)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -1817,7 +1979,7 @@ int interface_ip_address_add_del (const char *hwif_name, vpp_ip_route_t *prefix,
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -1854,7 +2016,7 @@ int interface_set_state (const char *hwif_name, bool is_up)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -2034,8 +2196,7 @@ int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add)
 
     return ret;
 }
-
-int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_mode, uint32_t port_type)
+int set_sw_interface_l2_bridge_by_index(uint32_t sw_if_index, uint32_t bridge_id, bool l2_mode, uint32_t port_type)
 {
     vat_main_t *vam = &vat_main;
     vl_api_sw_interface_set_l2_bridge_t *mp;
@@ -2054,21 +2215,8 @@ int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l
     __plugin_msg_base = l2_msg_id_base;
 
     M (SW_INTERFACE_SET_L2_BRIDGE, mp);
-    if (hwif_name) {
-	u32 idx;
 
-        idx = get_swif_idx(vam, hwif_name);
-        if (idx != (u32) -1) {
-            mp->rx_sw_if_index = htonl(idx);
-        } else {
-            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
-            VPP_UNLOCK();
-            return -EINVAL;
-        }
-    } else {
-        VPP_UNLOCK();
-        return -EINVAL;
-    }
+    mp->rx_sw_if_index = htonl(sw_if_index);
     mp->bd_id = htonl (bridge_id);
     mp->shg = (u8) shg;
     mp->port_type = htonl (port_type);
@@ -2076,11 +2224,31 @@ int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
     return ret;
+}
+
+int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_mode, uint32_t port_type)
+{
+    vat_main_t *vam = &vat_main;
+
+    if (hwif_name) {
+	    u32 idx;
+
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1) {
+            return set_sw_interface_l2_bridge_by_index(idx, bridge_id, l2_mode, port_type);
+        } else {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+            return -EINVAL;
+        }
+    } else {
+        return -EINVAL;
+    }
+
 }
 
 int set_l2_interface_vlan_tag_rewrite(const char *hwif_name, uint32_t tag1, uint32_t tag2, uint32_t push_dot1q, uint32_t vtr_op)
@@ -2184,7 +2352,7 @@ int create_bvi_interface(uint8_t *mac_address, u32 instance)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -2244,6 +2412,388 @@ int set_bridge_domain_flags(uint32_t bd_id, vpp_bd_flags_t flag, bool enable)
     mp->bd_id = htonl(bd_id);
     mp->is_set = enable;
     mp->flags = htonl(flag);
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int vpp_vxlan_tunnel_add_del(vpp_vxlan_tunnel_t *tunnel, bool is_add, u32 *sw_if_index)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_vxlan_add_del_tunnel_v3_t *mp;
+    int ret;
+    vpp_ip_addr_t *addr;
+    vl_api_address_t *api_addr;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = vxlan_msg_id_base;
+
+    M (VXLAN_ADD_DEL_TUNNEL_V3, mp);
+
+    mp->is_add = is_add;
+    mp->instance = htonl(tunnel->instance);
+    api_addr = &mp->src_address;
+    addr = &tunnel->src_address;
+    if (addr->sa_family == AF_INET) {
+        struct sockaddr_in *ip4 = &addr->addr.ip4;
+        api_addr->af = ADDRESS_IP4;
+        memcpy(api_addr->un.ip4, &ip4->sin_addr.s_addr, sizeof(api_addr->un.ip4));
+    } else if (addr->sa_family == AF_INET6) {
+        struct sockaddr_in6 *ip6 =  &addr->addr.ip6;
+        api_addr->af = ADDRESS_IP6;
+        memcpy(api_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(api_addr->un.ip6));
+    } else {
+	    VPP_UNLOCK();
+	    return -EINVAL;
+    }
+
+    api_addr = &mp->dst_address;
+    addr = &tunnel->dst_address;
+    if (addr->sa_family == AF_INET) {
+        struct sockaddr_in *ip4 = &addr->addr.ip4;
+        api_addr->af = ADDRESS_IP4;
+        memcpy(api_addr->un.ip4, &ip4->sin_addr.s_addr, sizeof(api_addr->un.ip4));
+    } else if (addr->sa_family == AF_INET6) {
+        struct sockaddr_in6 *ip6 =  &addr->addr.ip6;
+        api_addr->af = ADDRESS_IP6;
+        memcpy(api_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(api_addr->un.ip6));
+    } else {
+	    VPP_UNLOCK();
+	    return -EINVAL;
+    }
+
+    mp->src_port = htons(tunnel->src_port);
+    mp->dst_port = htons(tunnel->dst_port);
+    mp->mcast_sw_if_index = htonl(tunnel->mcast_sw_if_index);
+    mp->encap_vrf_id = htonl(tunnel->encap_vrf_id);
+    mp->vni = htonl(tunnel->vni);
+    mp->is_l3 = tunnel->is_l3;
+    mp->decap_next_index = htonl(tunnel->decap_next_index);
+
+    S (mp);
+    WR (ret); 
+    //reply handler needs to set vam->sw_if_index from reply msg
+    *sw_if_index = vam->sw_if_index;
+    SAIVPP_DEBUG("vxlan_add_del done: if_idx,%d",vam->sw_if_index);
+    VPP_UNLOCK();
+    return ret;
+}
+
+int vpp_ip_addr_t_to_string(vpp_ip_addr_t *ip_addr, char *buffer, size_t maxlen)
+{
+    struct sockaddr_in *ip4;
+    struct sockaddr_in6 *ip6;
+    buffer[0] = 0;
+    if (ip_addr->sa_family == AF_INET) {
+        ip4 = &ip_addr->addr.ip4;
+        if(inet_ntop(AF_INET, &ip4->sin_addr, buffer, maxlen) == NULL){
+            return -1;
+        }
+    } else if (ip_addr->sa_family == AF_INET6) {
+        ip6 = &ip_addr->addr.ip6;
+        if (inet_ntop(AF_INET6, &ip6->sin6_addr, buffer, maxlen) == NULL){
+            return -1;
+        }
+    } else {
+        return -1;
+    }
+    return 0;
+}
+int l2fib_add_del(const char *hwif_name, const uint8_t *mac, uint32_t bd_id, bool is_add, bool is_static_mac)
+{
+
+    vat_main_t *vam = &vat_main;
+    vl_api_l2fib_add_del_t* mp;
+
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (L2FIB_ADD_DEL, mp);
+
+    if (hwif_name)
+    {
+        u32 idx;
+
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1) 
+        {
+            mp->sw_if_index = htonl(idx);
+        } 
+        else 
+        {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    } 
+    else
+    {
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    if (bd_id == 0 || bd_id == ~0) 
+    {
+        SAIVPP_ERROR("Invalid bridge id for add/del\n");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+    memcpy(mp->mac, mac, sizeof(mp->mac));
+    mp->bd_id = htonl(bd_id);
+    mp->is_add = is_add;
+    mp->static_mac = is_static_mac;
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int l2fib_flush_all()
+{
+
+    vat_main_t *vam = &vat_main;
+    vl_api_l2fib_flush_all_t* mp;
+
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (L2FIB_FLUSH_ALL, mp);
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int l2fib_flush_int(const char *hwif_name)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_l2fib_flush_int_t* mp;
+
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (L2FIB_FLUSH_INT, mp);
+
+    if (hwif_name)
+    {
+        u32 idx;
+
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1)
+        {
+            mp->sw_if_index = htonl(idx);
+        }
+        else 
+        {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    }
+    else
+    {
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int l2fib_flush_bd(uint32_t bd_id)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_l2fib_flush_bd_t* mp;
+
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = l2_msg_id_base;
+
+    M (L2FIB_FLUSH_BD, mp);
+
+    if (bd_id == 0 || bd_id == ~0) 
+    {
+        SAIVPP_ERROR("Invalid bridge id for Flush FDB Entry\n");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    mp->bd_id = htonl(bd_id);
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+static bool vpp_ip_addr_for_bfd(vl_api_address_t *vpp_addr, vpp_ip_addr_t *ipaddr)
+{
+    bool ret = true;
+    if (ipaddr->sa_family == AF_INET)
+    {
+        struct sockaddr_in *ip4 = &(ipaddr->addr.ip4);
+        vpp_addr->af = ADDRESS_IP4;
+        memcpy(&vpp_addr->un.ip4, &ip4->sin_addr.s_addr, sizeof(vpp_addr->un.ip4));
+    }
+    else if (ipaddr->sa_family == AF_INET6)
+    {
+        struct sockaddr_in6 *ip6 = &(ipaddr->addr.ip6);
+        vpp_addr->af = ADDRESS_IP6;
+        memcpy(&vpp_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(vpp_addr->un.ip6));
+    }
+    else
+    {
+        return false;
+    }
+    return ret;
+}
+
+int bfd_udp_add(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr, \
+                uint8_t detect_mult, uint32_t desired_min_tx, uint32_t required_min_rx )
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_bfd_udp_add_t* mp;
+
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = bfd_msg_id_base;
+
+    M (BFD_UDP_ADD, mp);
+
+    if (hwif_name)
+    {
+        u32 idx;
+
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1)
+        {
+            mp->sw_if_index = htonl(idx);
+        }
+        else
+        {
+            SAIVPP_WARN("Unable to get sw_index for %s\n", hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    }
+    else
+    {
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    vl_api_address_t vpp_local_addr, vpp_peer_addr;
+    memset(&vpp_local_addr, 0, sizeof(vl_api_address_t));
+    memset(&vpp_peer_addr, 0, sizeof(vl_api_address_t));
+
+    if(!((true == vpp_ip_addr_for_bfd(&vpp_local_addr, local_addr)) && \
+         (true == vpp_ip_addr_for_bfd(&vpp_peer_addr, peer_addr))))
+    {
+        SAIVPP_WARN("Invalid IP address passed for vpp for bfd_add");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    mp->desired_min_tx = htonl(desired_min_tx);
+    mp->required_min_rx = htonl(required_min_rx);
+    mp->detect_mult = detect_mult;
+    mp->local_addr = vpp_local_addr;
+    mp->peer_addr = vpp_peer_addr;
+    mp->is_authenticated = false;
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int bfd_udp_del(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_bfd_udp_del_t* mp;
+
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = bfd_msg_id_base;
+
+    M (BFD_UDP_DEL, mp);
+
+    if (hwif_name)
+    {
+        u32 idx;
+
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1)
+        {
+            mp->sw_if_index = htonl(idx);
+        }
+        else
+        {
+            SAIVPP_WARN("Unable to get sw_index for %s\n", hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    }
+    else
+    {
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    vl_api_address_t vpp_local_addr, vpp_peer_addr;
+    memset(&vpp_local_addr, 0, sizeof(vl_api_address_t));
+    memset(&vpp_peer_addr, 0, sizeof(vl_api_address_t));
+
+    if(!((true == vpp_ip_addr_for_bfd(&vpp_local_addr, local_addr)) && \
+         (true == vpp_ip_addr_for_bfd(&vpp_peer_addr, peer_addr))))
+    {
+        SAIVPP_WARN("Invalid IP address passed for vpp for bfd_del");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    mp->local_addr = vpp_local_addr;
+    mp->peer_addr = vpp_peer_addr;
+
     S (mp);
 
     W (ret);

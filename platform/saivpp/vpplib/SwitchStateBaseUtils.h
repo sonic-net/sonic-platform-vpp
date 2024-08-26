@@ -19,6 +19,7 @@
 extern "C" {
 #include "sai.h"
 }
+#include "vppxlate/SaiVppXlate.h"
 #include "swss/ipaddress.h"
 #include "swss/ipprefix.h"
 
@@ -62,32 +63,39 @@ inline static sai_status_t find_attrib_in_list(_In_ uint32_t                    
     return SAI_STATUS_ITEM_NOT_FOUND;
 }
 
-inline static int getPrefixLenFromAddrMask(const uint8_t *addr, int len)
+inline int getPrefixLenFromAddrMask(const uint8_t *addr, int len)
 {
-    int i = 0;
-    uint8_t non_zero = 0xFF;
-    for (i = len - 1; i >=0; i--)
+    // Iterate over each byte from left to right
+    for (int i = 0; i < len; ++i)
     {
-        if (addr[i] != 0)
+        uint8_t byte = addr[i];
+
+        // If the byte is 0xFF, it means all bits are set, continue to the next byte
+        if (byte == 0xFF)
         {
-            non_zero = addr[i];
-            break;
+            continue;
         }
+
+        // If the byte is not 0xFF, count the number of leading 1s in this byte
+        int leading_ones = 0;
+        for (int j = 7; j >= 0; --j)
+        {
+            if ((byte >> j) & 0x1)
+            {
+                ++leading_ones;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        // Return the total number of leading 1s in the address mask
+        return i * 8 + leading_ones;
     }
 
-    if (non_zero == 0xFF)
-    {
-        return (i + 1) * 8;
-    }
-    else
-    {
-        int j = 2;
-        while(((non_zero >> j) & 0x1) == 0)
-        {
-            ++j;
-        }
-        return (i + 1) * 8 - (j + 1);
-    }
+    // If all bytes are 0xFF, return the total length in bits
+    return len * 8;
 }
 
 inline static swss::IpPrefix getIpPrefixFromSaiPrefix(const sai_ip_prefix_t& src)
@@ -152,5 +160,22 @@ inline static sai_ip_prefix_t& copy(sai_ip_prefix_t& dst, const swss::IpPrefix& 
     return dst;
 }
 
+inline static void
+sai_ip_address_t_to_vpp_ip_addr_t(sai_ip_address_t& src, vpp_ip_addr_t& dst)
+{
+    if (SAI_IP_ADDR_FAMILY_IPV4 == src.addr_family) {
+        struct sockaddr_in *sin =  &dst.addr.ip4;
+
+        dst.sa_family = AF_INET;
+        sin->sin_family = AF_INET;
+        sin->sin_addr.s_addr = src.addr.ip4;
+    } else {
+        struct sockaddr_in6 *sin6 =  &dst.addr.ip6;
+
+        dst.sa_family = AF_INET6;
+        sin6->sin6_family = AF_INET6;
+	    memcpy(sin6->sin6_addr.s6_addr, src.addr.ip6, sizeof(sin6->sin6_addr.s6_addr));
+    }
+}
 }
 
