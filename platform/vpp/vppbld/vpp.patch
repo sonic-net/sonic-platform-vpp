@@ -1,0 +1,35 @@
+diff --git a/Makefile b/Makefile
+index 98866e9be..f9d5b349e 100644
+--- a/Makefile
++++ b/Makefile
+@@ -76,7 +76,7 @@ DEB_DEPENDS += libffi-dev python3-ply libunwind-dev
+ DEB_DEPENDS += cmake ninja-build python3-jsonschema python3-yaml
+ DEB_DEPENDS += python3-venv  # ensurepip
+ DEB_DEPENDS += python3-dev python3-pip
+-DEB_DEPENDS += libnl-3-dev libnl-route-3-dev libmnl-dev
++DEB_DEPENDS += libmnl-dev
+ # DEB_DEPENDS += enchant  # for docs
+ DEB_DEPENDS += python3-virtualenv
+ DEB_DEPENDS += libssl-dev
+@@ -85,7 +85,7 @@ DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
+ DEB_DEPENDS += nasm
+ DEB_DEPENDS += iperf ethtool  # for 'make test TEST=vm_vpp_interfaces'
+ DEB_DEPENDS += libpcap-dev
+-DEB_DEPENDS += tshark
++#DEB_DEPENDS += tshark
+ DEB_DEPENDS += jq # for extracting test summary from .json report (hs-test)
+ 
+ LIBFFI=libffi6 # works on all but 20.04 and debian-testing
+diff --git a/build/external/packages/xdp-tools.mk b/build/external/packages/xdp-tools.mk
+index b9285971f..c38acc598 100644
+--- a/build/external/packages/xdp-tools.mk
++++ b/build/external/packages/xdp-tools.mk
+@@ -24,7 +24,7 @@ define  xdp-tools_config_cmds
+ endef
+ 
+ define  xdp-tools_build_cmds
+-	@cd ${xdp-tools_src_dir} && $(MAKE) V=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
++	@cd ${xdp-tools_src_dir} && $(MAKE) FORCE_SUBDIR_LIBBPF=1 V=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
+ endef
+ 
+ define  xdp-tools_install_cmds

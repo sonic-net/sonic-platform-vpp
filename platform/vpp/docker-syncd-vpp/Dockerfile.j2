@@ -1,4 +1,4 @@
-FROM docker-config-engine-bullseye-{{DOCKER_USERNAME}}:{{DOCKER_USERTAG}}
+FROM docker-config-engine-bookworm-{{DOCKER_USERNAME}}:{{DOCKER_USERTAG}}
 
 ARG docker_container_name
 
@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update
 
-RUN apt-get install -f -y libcap2-bin
+RUN apt-get install -f -y libcap2-bin libunwind8
 
 COPY \
 {% for deb in docker_syncd_vpp_debs.split(' ') -%}
