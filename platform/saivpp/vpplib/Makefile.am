@@ -65,7 +65,9 @@ libSaiVPP_a_SOURCES = \
 					  TrafficForwarder.cpp \
 					  VirtualSwitchSaiInterface.cpp \
 					  VirtualSwitchSaiInterfaceFdb.cpp \
-					  VirtualSwitchSaiInterfacePort.cpp
+					  VirtualSwitchSaiInterfacePort.cpp \
+					  SaiObjectDB.cpp \
+					  TunnelManager.cpp
 
 BUILT_SOURCES = sai_vpp.cpp
 

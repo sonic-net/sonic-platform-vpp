@@ -36,7 +36,8 @@ extern "C" {
     } vpp_ip_addr_t;
 
     typedef struct vpp_ip_nexthop_ {
-	vpp_ip_addr_t addr;
+	    vpp_ip_addr_t addr;
+        uint32_t      sw_if_index;
         const char *hwif_name;
 	uint8_t weight;
         uint8_t preference;
@@ -156,7 +157,18 @@ typedef enum {
     VPP_BD_FLAG_ARP_UFWD = 32,
 } vpp_bd_flags_t;
 
-
+    typedef struct  _vpp_vxlan_tunnel {
+        vpp_ip_addr_t src_address;
+        vpp_ip_addr_t dst_address;
+        uint16_t      src_port;
+        uint16_t      dst_port;
+        uint32_t      vni;
+        uint32_t      instance; /* If non-~0, specifies a custom dev instance */
+        uint32_t      mcast_sw_if_index;
+        uint32_t      encap_vrf_id;
+        uint32_t      decap_next_index;
+        bool          is_l3;
+     } vpp_vxlan_tunnel_t;
 
     extern vpp_event_info_t * vpp_ev_dequeue();
     extern void vpp_ev_free(vpp_event_info_t *evp);
@@ -178,10 +190,10 @@ typedef enum {
     extern int ip_vrf_add(uint32_t vrf_id, const char *vrf_name, bool is_ipv6);
     extern int ip_vrf_del(uint32_t vrf_id, const char *vrf_name, bool is_ipv6);
 
-    extern int ip4_nbr_add_del(const char *hwif_name, struct sockaddr_in *addr,
-			       bool is_static, uint8_t *mac, bool is_add);
-    extern int ip6_nbr_add_del(const char *hwif_name, struct sockaddr_in6 *addr,
-			       bool is_static, uint8_t *mac, bool is_add);
+    extern int ip4_nbr_add_del(const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in *addr,
+			       bool is_static, bool no_fib_entry, uint8_t *mac, bool is_add);
+    extern int ip6_nbr_add_del(const char *hwif_name, uint32_t sw_if_index, struct sockaddr_in6 *addr,
+			       bool is_static, bool no_fib_entry, uint8_t *mac, bool is_add);
     extern int ip_route_add_del(vpp_ip_route_t *prefix, bool is_add);
     extern int vpp_ip_flow_hash_set(uint32_t vrf_id, uint32_t mask, int addr_family);
 
@@ -195,12 +207,22 @@ typedef enum {
     extern int vpp_sync_for_events();
     extern int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add);
     extern int set_sw_interface_l2_bridge(const char *hwif_name, uint32_t bridge_id, bool l2_enable, uint32_t port_type);
+    extern int set_sw_interface_l2_bridge_by_index(uint32_t sw_if_index, uint32_t bridge_id, bool l2_enable, uint32_t port_type);
     extern int set_l2_interface_vlan_tag_rewrite(const char *hwif_name, uint32_t tag1, uint32_t tag2, uint32_t push_dot1q, uint32_t vtr_op);
     extern int bridge_domain_get_member_count (uint32_t bd_id, uint32_t *member_count);
     extern int create_bvi_interface(uint8_t *mac_address, uint32_t instance);
     extern int delete_bvi_interface(const char *hwif_name);
     extern int set_bridge_domain_flags(uint32_t bd_id, vpp_bd_flags_t flag, bool enable);
+    extern int l2fib_add_del(const char *hwif_name, const uint8_t *mac, uint32_t bd_id, bool is_add, bool is_static_mac);
+    extern int l2fib_flush_all();
+    extern int l2fib_flush_int(const char *hwif_name);
+    extern int l2fib_flush_bd(uint32_t bd_id);
+    extern int bfd_udp_add(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr, uint8_t detect_mult,\
+                           uint32_t desired_min_tx, uint32_t required_min_rx);
+    extern int bfd_udp_del(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr);
 
+    extern int vpp_vxlan_tunnel_add_del(vpp_vxlan_tunnel_t *tunnel, bool is_add,  uint32_t *sw_if_index);
+    extern int vpp_ip_addr_t_to_string(vpp_ip_addr_t *ip_addr, char *buffer, size_t maxlen);
 #ifdef __cplusplus
 }
 #endif

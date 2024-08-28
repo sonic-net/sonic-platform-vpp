@@ -160,6 +160,10 @@ COPY ["conf/sai.profile", "/usr/share/sonic/device/x86_64-kvm_x86_64-r0/Force10-
 COPY ["conf/sai.profile", "/usr/share/sonic/device/x86_64-kvm_x86_64-r0/brcm_gearbox_vs/"]
 COPY ["conf/sai.profile", "/usr/share/sonic/device/x86_64-kvm_x86_64-r0/Mellanox-SN2700/"]
 
+RUN sed -i -e "s/^debian_version:.*$/debian_version: '`cat /etc/debian_version`'/" \
+           -e "s/^kernel_version:.*$/kernel_version: '`uname -r`'/" \
+           /etc/sonic/sonic_version.yml
+
 RUN mkdir -p /etc/supervisor/conf.d/
 RUN sonic-cfggen -a "{\"ENABLE_ASAN\":\"{{ENABLE_ASAN}}\"}" -t /usr/share/sonic/templates/supervisord.conf.j2 > /etc/supervisor/conf.d/supervisord.conf
 RUN rm -f /usr/share/sonic/templates/supervisord.conf.j2

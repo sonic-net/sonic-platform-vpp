@@ -98,6 +98,7 @@ void create_vpp_nexthop_entry (
     }
     vpp_nexthop->type = type;
     vpp_nexthop->hwif_name = hwif_name;
+    vpp_nexthop->sw_if_index = nxt_grp_member->sw_if_index;
     vpp_nexthop->weight = (uint8_t) nxt_grp_member->weight;
     vpp_nexthop->preference = (uint8_t) nxt_grp_member->seq_id;
 }
@@ -214,15 +215,29 @@ sai_status_t SwitchStateBase::addIpRoute(
         _In_ uint32_t attr_count,
         _In_ const sai_attribute_t *attr_list)
 {
-    SWSS_LOG_ENTER();
     bool isLoopback = false;
-    process_interface_loopback(serializedObjectId, isLoopback, true);
+    bool isTunnelNh = false;
+    SWSS_LOG_ENTER();
 
-    if (isLoopback == false && is_ip_nbr_active() == true)
-    {
-	    IpRouteAddRemove(serializedObjectId, attr_count, attr_list, true);
+    SaiCachedObject ip_route_obj(this, SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, attr_count, attr_list);
+    auto nh_obj = ip_route_obj.get_linked_object(SAI_OBJECT_TYPE_NEXT_HOP, SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID);
+    if (nh_obj != nullptr) {
+        sai_attribute_t attr;
+        attr.id = SAI_NEXT_HOP_ATTR_TYPE;
+        CHECK_STATUS_W_MSG(nh_obj->get_attr(attr), "Missing SAI_NEXT_HOP_ATTR_TYPE in tunnel obj");       
+        isTunnelNh = (attr.value.s32 == SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP); 
     }
-
+    
+    if (isTunnelNh) {
+        IpRouteAddRemove(serializedObjectId, attr_count, attr_list, true);
+    } else {
+        process_interface_loopback(serializedObjectId, isLoopback, true);
+        if (isLoopback == false && is_ip_nbr_active() == true)
+        {
+            IpRouteAddRemove(serializedObjectId, attr_count, attr_list, true);
+        }
+    }
+    
     CHECK_STATUS(create_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, switch_id, attr_count, attr_list));
 
     return SAI_STATUS_SUCCESS;

@@ -8,6 +8,7 @@
     - [Test case #3](#test-case-3)
     - [Test case #4](#test-case-4)
     - [Test case #5](#test-case-5)
+    - [Test case #6](#test-case-6)
 
 #### Overview
 The purpose is to validate SONiC container and VM image with VPP based software data path.
@@ -36,6 +37,7 @@ Please refer to the test case for detailed description.
 | 3 | SONiC VPP Container Image BGP Routing  |BGP|
 | 4 | SONiC VPP VM Image BGP Routing  |BGP|
 | 5 | SONiC VPP VM PTF on T0 Topology  |To Identified|
+| 6 | SONiC VPP VM Image VxLAN  |To Be Identified|
 
 
 #### General test flow
@@ -101,4 +103,15 @@ Verify SONiC VPP VM image with T0 topology configuration for existing feature/fu
 ##### Test steps
 - Build T0 topology using script `create_sonic_t0_topo.py`
 - Run feature/functional test cases using script `run_tests.py <text-file-containing-list-of-tests>`
+
+#### Test case #6
+##### Test objective
+
+Verify basic routing and VxLAN encap and decap of SONiC VPP VM image in multi-hop topology
+
+##### Test steps
+Run test script `validate-sonic-vpp-vm-vxlan-routing`:
+   ```
+    python validate-sonic-vpp-vm-vxlan-routing.py --host <VM IP Address> --username <SSH Username> --password <SSH User Password>
+   ```
 
