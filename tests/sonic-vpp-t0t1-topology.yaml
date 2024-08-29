@@ -67,36 +67,6 @@
        sudo ssh-keygen -f "/home/{{ ansible_user }}/.ssh/known_hosts" -R "10.250.0.101"
      tags:
      - buildt0     
-   - name: Copy sonic_vpp_cfg.sh to T0 DUT
-     ansible.builtin.shell: |
-       set timeout 60
-       spawn sftp -o StrictHostKeyChecking=no admin@10.250.0.101
-       expect "admin@localhost's password:"
-       send "{{ dut_password }}\n"
-       expect "sftp>"
-       send "put /home/cisco/sonic-vpp/sonic_vpp_cfg.sh\n"
-       expect "sftp>"
-       send "\n"
-       exit 0
-     args:
-       executable: /usr/bin/expect
-     tags:
-     - buildt0 
-   - name: Copy sonic_vpp_cfg.sh to T1 DUT
-     ansible.builtin.shell: |
-       set timeout 60
-       spawn sftp -o StrictHostKeyChecking=no admin@10.250.0.105
-       expect "admin@10.250.0.105's password:"
-       send "{{ dut_password }}\n"
-       expect "sftp>"
-       send "put /home/cisco/sonic-vpp/sonic_vpp_cfg.sh\n"
-       expect "sftp>"
-       send "\n"
-       exit 0
-     args:
-       executable: /usr/bin/expect
-     tags:
-     - buildt1     
    - name: Configure mgmt interface on T0 DUT
      ansible.builtin.shell: |
        set timeout 60
@@ -108,9 +78,6 @@
        expect "admin@vlab-01:~$ "
        send "sudo config save -y\n"
        expect "admin@vlab-01:~$ "
-       #send "sudo SONIC_VPP_SWITCH=y PERPORT_BUF=4096 LANES=4 sonic_vpp_cfg.sh -p -i $(DLM=''; for idx in `seq 1 32`; do echo -n "${DLM}eth$idx"; DLM=','; done)\n"
-       send "sudo SONIC_VPP_SWITCH=y PERPORT_BUF=4096 LANES=4 sonic_vpp_cfg.sh -p -i eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8,eth9,eth10,eth11,eth12,eth13,eth14,eth15,eth16,eth17,eth18,eth19,eth20,eth21,eth22,eth23,eth24,eth25,eth26,eth27,eth28,eth29,eth30,eth31,eth32\n"
-       expect "admin@vlab-03:~$"
        exit 0
      args:
        executable: /usr/bin/expect
@@ -127,20 +94,11 @@
        expect "admin@vlab-03:~$ "
        send "sudo config save -y\n"
        expect "admin@vlab-03:~$ "
-       #send "sudo SONIC_VPP_SWITCH=y PERPORT_BUF=4096 LANES=4 sonic_vpp_cfg.sh -p -i $(DLM=''; for idx in `seq 1 32`; do echo -n "${DLM}eth$idx"; DLM=','; done)\n"
-       send "sudo SONIC_VPP_SWITCH=y PERPORT_BUF=4096 LANES=4 sonic_vpp_cfg.sh -p -i eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8,eth9,eth10,eth11,eth12,eth13,eth14,eth15,eth16,eth17,eth18,eth19,eth20,eth21,eth22,eth23,eth24,eth25,eth26,eth27,eth28,eth29,eth30,eth31,eth32\n"
-       expect "admin@vlab-03:~$ "
        exit 0
      args:
        executable: /usr/bin/expect
      tags:
      - buildt1     
-   - name: Pause for 5 minutes for DUT to reboot      
-     ansible.builtin.pause:
-       minutes: 5
-     tags:
-     - buildt0
-     - buildt1
    - name: Verify DUT is reachable for T1 after configuring mgmt interface
      shell: |
        ping -c5 10.250.0.105
