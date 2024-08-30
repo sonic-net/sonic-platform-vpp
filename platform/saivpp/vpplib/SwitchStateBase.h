@@ -1073,7 +1073,6 @@ namespace saivpp
 	       _Out_ std::string& ifname);
 
         protected:
-            bool is_sonic_vpp_switch ();
 	    void populate_if_mapping();
 	    const char *tap_to_hwif_name(const char *name);
             const char *hwif_to_tap_name(const char *name);
@@ -1085,8 +1084,6 @@ namespace saivpp
 	    std::map<std::string, std::string> m_hostif_hwif_map;
 	    std::map<std::string, std::string> m_hwif_hostif_map;
 	    int mapping_init = 0;
-            bool vpp_switch_env_read = false;
-            bool sonic_vpp_switch = false;
             bool m_run_vpp_events_thread = true;
             bool VppEventsThreadStarted = false;
 	    std::shared_ptr<std::thread> m_vpp_thread;

@@ -635,7 +635,13 @@ vl_api_sw_interface_set_mtu_reply_t_handler (vl_api_sw_interface_set_mtu_reply_t
 
     SAIVPP_DEBUG("sw interface mtu set %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
 }
+static void
+vl_api_sw_interface_set_mac_address_reply_t_handler (vl_api_sw_interface_set_mac_address_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
 
+    SAIVPP_DEBUG("sw interface mac set %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+}
 static void
 vl_api_hw_interface_set_mtu_reply_t_handler (vl_api_hw_interface_set_mtu_reply_t *msg)
 {
@@ -865,6 +871,7 @@ static void vpp_base_vpe_init(void)
     _(INTERFACE_MSG_ID(SW_INTERFACE_ADD_DEL_ADDRESS_REPLY), sw_interface_add_del_address_reply) \
     _(INTERFACE_MSG_ID(SW_INTERFACE_SET_FLAGS_REPLY), sw_interface_set_flags_reply) \
     _(INTERFACE_MSG_ID(SW_INTERFACE_SET_MTU_REPLY), sw_interface_set_mtu_reply) \
+    _(INTERFACE_MSG_ID(SW_INTERFACE_SET_MAC_ADDRESS_REPLY), sw_interface_set_mac_address_reply) \ 
     _(INTERFACE_MSG_ID(HW_INTERFACE_SET_MTU_REPLY), hw_interface_set_mtu_reply) \
     _(INTERFACE_MSG_ID(WANT_INTERFACE_EVENTS), want_interface_events_reply) \
     _(INTERFACE_MSG_ID(SW_INTERFACE_EVENT), sw_interface_event) \
@@ -2131,6 +2138,50 @@ int sw_interface_set_mtu (const char *hwif_name, uint32_t mtu, int type)
     S (mp);
 
     W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int sw_interface_set_mac (const char *hwif_name, uint8_t *mac_address)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_sw_interface_set_mac_address_t *mp;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = interface_msg_id_base;
+
+    M (SW_INTERFACE_SET_MAC_ADDRESS, mp);
+    
+    if (hwif_name) {
+        u32 idx;
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1) {
+            mp->sw_if_index = htonl(idx);
+        } else {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    } else {
+        SAIVPP_ERROR("hwif_name cannot be NULL");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+    
+    if (mac_address == NULL) {
+        SAIVPP_ERROR("mac address can't be NULL");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+    memcpy(mp->mac_address, mac_address, sizeof(mp->mac_address));
+
+    S (mp);
+
+    WR (ret);
 
     VPP_UNLOCK();
 

@@ -67,7 +67,6 @@ git apply $MKRULES_PATH/files/build_templates/sonic_debian_extension.j2.patch
 cp $MKRULES_PATH/files/sai.profile ./src/sonic-device-data/src/sai.vs_profile
 
 # Copy the sonic-vpp configuration scripts
-cp $MKRULES_PATH/files/scripts/sonic_vpp_cfg.sh ./files/scripts/sonic_vpp_cfg.sh
 cp $MKRULES_PATH/files/scripts/vpp_ports_setup.sh ./files/scripts/vpp_ports_setup.sh
 
 # Setup the swss docker file template to ignore the vpp sysctl during installation
