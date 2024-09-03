@@ -728,20 +728,20 @@ sai_status_t SwitchStateBase::vpp_create_hostif_tap_interface(
 
     sai_attribute_t attr;
 
-	memset(&attr, 0, sizeof(attr));
+    memset(&attr, 0, sizeof(attr));
 
-	attr.id = SAI_SWITCH_ATTR_SRC_MAC_ADDRESS;
+    attr.id = SAI_SWITCH_ATTR_SRC_MAC_ADDRESS;
 
-	sai_status_t status = get(SAI_OBJECT_TYPE_SWITCH, m_switch_id, 1, &attr);
+    sai_status_t status = get(SAI_OBJECT_TYPE_SWITCH, m_switch_id, 1, &attr);
 
-	if (status != SAI_STATUS_SUCCESS)
-        {
-	    SWSS_LOG_ERROR("failed to get SAI_SWITCH_ATTR_SRC_MAC_ADDRESS on switch %s: %s",
-			   sai_serialize_object_id(m_switch_id).c_str(),
-			   sai_serialize_status(status).c_str());
-	}
+    if (status != SAI_STATUS_SUCCESS)
+    {
+        SWSS_LOG_ERROR("failed to get SAI_SWITCH_ATTR_SRC_MAC_ADDRESS on switch %s: %s",
+                       sai_serialize_object_id(m_switch_id).c_str(),
+                       sai_serialize_status(status).c_str());
+    }
 
-	int err = vpp_set_dev_mac_address(name.c_str(), attr.value.mac);
+    int err = vpp_set_dev_mac_address(name.c_str(), attr.value.mac);
 
     if (err < 0)
     {
