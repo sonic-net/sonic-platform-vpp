@@ -335,6 +335,7 @@ static void vpp_evq_init ()
 
 static int vpp_acl_counters_enable_disable(bool enable);
 static int vpp_intf_events_enable_disable(bool enable);
+static int vpp_bfd_events_enable_disable(bool enable);
 
 static pthread_mutex_t vpp_mutex;
 
@@ -437,6 +438,51 @@ vl_msg_api_set_handlers (int id, char *name, void *handler, void *cleanup,
     c->fromjson = fromjson;
     c->calc_size = calc_size;
     vl_msg_api_config (c);
+}
+
+static bool vl_api_to_vpp_ip_addr(vl_api_address_t *vpp_addr, vpp_ip_addr_t *ipaddr)
+{
+    bool ret = true;
+    if (vpp_addr->af == ADDRESS_IP4)
+    {
+        ipaddr->sa_family = AF_INET;
+        struct sockaddr_in *ip4 = &(ipaddr->addr.ip4);
+        memcpy(&(ip4->sin_addr.s_addr), &vpp_addr->un.ip4, sizeof(ip4->sin_addr.s_addr));
+
+    }
+    else if (vpp_addr->af == ADDRESS_IP6)
+    {
+        ipaddr->sa_family = AF_INET6;
+        struct sockaddr_in6 *ip6 = &(ipaddr->addr.ip6);
+        memcpy(&(ip6->sin6_addr.s6_addr), &vpp_addr->un.ip6, sizeof(ip6->sin6_addr.s6_addr));
+    }
+    else
+    {
+        return false;
+    }
+    return ret;
+}
+
+static bool vpp_to_vl_api_ip_addr(vl_api_address_t *vpp_addr, vpp_ip_addr_t *ipaddr)
+{
+    bool ret = true;
+    if (ipaddr->sa_family == AF_INET)
+    {
+        struct sockaddr_in *ip4 = &(ipaddr->addr.ip4);
+        vpp_addr->af = ADDRESS_IP4;
+        memcpy(&vpp_addr->un.ip4, &ip4->sin_addr.s_addr, sizeof(vpp_addr->un.ip4));
+    }
+    else if (ipaddr->sa_family == AF_INET6)
+    {
+        struct sockaddr_in6 *ip6 = &(ipaddr->addr.ip6);
+        vpp_addr->af = ADDRESS_IP6;
+        memcpy(&vpp_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(vpp_addr->un.ip6));
+    }
+    else
+    {
+        return false;
+    }
+    return ret;
 }
 
 void
@@ -777,7 +823,6 @@ vl_api_bfd_udp_add_reply_t_handler (vl_api_bfd_udp_add_reply_t *msg)
     set_reply_status(ntohl(msg->retval));
 
     SAIVPP_DEBUG("bfd udp add reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
-    //SAIVPP_ERROR("bfd udp add reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
 
 }
 
@@ -787,8 +832,55 @@ vl_api_bfd_udp_del_reply_t_handler (vl_api_bfd_udp_del_reply_t *msg)
     set_reply_status(ntohl(msg->retval));
 
     SAIVPP_DEBUG("bfd udp del reply handler  %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
-    //SAIVPP_ERROR("bfd udp del reply handler %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
 
+}
+
+static void
+vl_api_want_bfd_events_reply_t_handler (vl_api_want_bfd_events_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("bfd events enable %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_bfd_udp_session_event_t_handler (vl_api_bfd_udp_session_event_t *msg)
+{
+
+    SAIVPP_WARN("Sending bfd state change event, multihop: %d, sw_if_index: %d, "
+                "state: %d ",
+                msg->multihop, htonl(msg->sw_if_index), htonl(msg->state));
+
+    vpp_event_info_t *evinfo;
+    evinfo = calloc(1, sizeof(*evinfo));
+
+    vpp_ip_addr_t vpp_local_addr, vpp_peer_addr;
+    memset(&vpp_local_addr, 0, sizeof(vl_api_address_t));
+    memset(&vpp_peer_addr, 0, sizeof(vl_api_address_t));
+
+    if (evinfo) {
+       evinfo->type = VPP_BFD_STATE_CHANGE;
+       vpp_bfd_state_notif_t *bfd_notif = &evinfo->data.bfd_notif;
+
+       bfd_notif->multihop = msg->multihop;
+       bfd_notif->sw_if_index = htonl(msg->sw_if_index);
+       bfd_notif->state = htonl(msg->state);
+
+        if(!((true == vl_api_to_vpp_ip_addr(&msg->local_addr, &bfd_notif->local_addr)) && \
+             (true == vl_api_to_vpp_ip_addr(&msg->peer_addr, &bfd_notif->peer_addr))))
+        {
+            SAIVPP_WARN("Invalid IP address passed from vpp for bfd event");
+            return;
+        }
+        
+       vpp_ev_enqueue(evinfo);
+    }
+
+    set_reply_status(0);
+
+    SAIVPP_DEBUG("BFD udp session event, multihop: %d, sw_if_index: %d, "
+                "state: %d ",
+                msg->multihop, htonl(msg->sw_if_index), htonl(msg->state));
 }
 
 static void
@@ -892,6 +984,9 @@ static void vpp_base_vpe_init(void)
     _(L2_MSG_ID(L2FIB_FLUSH_BD_REPLY), l2fib_flush_bd_reply) \
     _(BFD_MSG_ID(BFD_UDP_ADD_REPLY), bfd_udp_add_reply) \
     _(BFD_MSG_ID(BFD_UDP_DEL_REPLY), bfd_udp_del_reply) \
+    _(BFD_MSG_ID(BFD_UDP_SESSION_EVENT), bfd_udp_session_event) \
+    _(BFD_MSG_ID(WANT_BFD_EVENTS), want_bfd_events_reply) \
+
 
 static u16 interface_msg_id_base, ip_msg_id_base, ip_nbr_msg_id_base, lcp_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
 static u16 acl_msg_id_base;
@@ -1366,6 +1461,10 @@ int init_vpp_client()
 	 * Revisit the async mechanism if there is greater reason.
 	 */
 	vpp_intf_events_enable_disable(true);
+
+        /* Register with VPP for BFD notifications */
+        vpp_bfd_events_enable_disable(true);
+
 
 	vpp_evq_init();
 	vpp_client_init = 1;
@@ -2663,7 +2762,7 @@ int l2fib_flush_int(const char *hwif_name)
             return -EINVAL;
         }
     }
-    else
+    else if (!multihop)
     {
         VPP_UNLOCK();
         return -EINVAL;
@@ -2709,30 +2808,9 @@ int l2fib_flush_bd(uint32_t bd_id)
     return ret;
 }
 
-static bool vpp_ip_addr_for_bfd(vl_api_address_t *vpp_addr, vpp_ip_addr_t *ipaddr)
-{
-    bool ret = true;
-    if (ipaddr->sa_family == AF_INET)
-    {
-        struct sockaddr_in *ip4 = &(ipaddr->addr.ip4);
-        vpp_addr->af = ADDRESS_IP4;
-        memcpy(&vpp_addr->un.ip4, &ip4->sin_addr.s_addr, sizeof(vpp_addr->un.ip4));
-    }
-    else if (ipaddr->sa_family == AF_INET6)
-    {
-        struct sockaddr_in6 *ip6 = &(ipaddr->addr.ip6);
-        vpp_addr->af = ADDRESS_IP6;
-        memcpy(&vpp_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(vpp_addr->un.ip6));
-    }
-    else
-    {
-        return false;
-    }
-    return ret;
-}
-
-int bfd_udp_add(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr, \
-                uint8_t detect_mult, uint32_t desired_min_tx, uint32_t required_min_rx )
+int bfd_udp_add(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
+                vpp_ip_addr_t *peer_addr, uint8_t detect_mult,
+                uint32_t desired_min_tx, uint32_t required_min_rx)
 {
     vat_main_t *vam = &vat_main;
     vl_api_bfd_udp_add_t* mp;
@@ -2761,7 +2839,7 @@ int bfd_udp_add(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t 
             return -EINVAL;
         }
     }
-    else
+    else if (!multihop)
     {
         VPP_UNLOCK();
         return -EINVAL;
@@ -2771,14 +2849,15 @@ int bfd_udp_add(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t 
     memset(&vpp_local_addr, 0, sizeof(vl_api_address_t));
     memset(&vpp_peer_addr, 0, sizeof(vl_api_address_t));
 
-    if(!((true == vpp_ip_addr_for_bfd(&vpp_local_addr, local_addr)) && \
-         (true == vpp_ip_addr_for_bfd(&vpp_peer_addr, peer_addr))))
+    if(!((true == vpp_to_vl_api_ip_addr(&vpp_local_addr, local_addr)) && \
+         (true == vpp_to_vl_api_ip_addr(&vpp_peer_addr, peer_addr))))
     {
         SAIVPP_WARN("Invalid IP address passed for vpp for bfd_add");
         VPP_UNLOCK();
         return -EINVAL;
     }
 
+    mp->multihop = multihop;
     mp->desired_min_tx = htonl(desired_min_tx);
     mp->required_min_rx = htonl(required_min_rx);
     mp->detect_mult = detect_mult;
@@ -2795,7 +2874,8 @@ int bfd_udp_add(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t 
     return ret;
 }
 
-int bfd_udp_del(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr)
+int bfd_udp_del(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
+                vpp_ip_addr_t *peer_addr)
 {
     vat_main_t *vam = &vat_main;
     vl_api_bfd_udp_del_t* mp;
@@ -2834,14 +2914,15 @@ int bfd_udp_del(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t 
     memset(&vpp_local_addr, 0, sizeof(vl_api_address_t));
     memset(&vpp_peer_addr, 0, sizeof(vl_api_address_t));
 
-    if(!((true == vpp_ip_addr_for_bfd(&vpp_local_addr, local_addr)) && \
-         (true == vpp_ip_addr_for_bfd(&vpp_peer_addr, peer_addr))))
+    if(!((true == vpp_to_vl_api_ip_addr(&vpp_local_addr, local_addr)) && \
+         (true == vpp_to_vl_api_ip_addr(&vpp_peer_addr, peer_addr))))
     {
         SAIVPP_WARN("Invalid IP address passed for vpp for bfd_del");
         VPP_UNLOCK();
         return -EINVAL;
     }
 
+    mp->multihop = multihop;
     mp->local_addr = vpp_local_addr;
     mp->peer_addr = vpp_peer_addr;
 
@@ -2853,3 +2934,27 @@ int bfd_udp_del(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t 
 
     return ret;
 }
+
+static int vpp_bfd_events_enable_disable (bool enable)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_want_bfd_events_t *mp;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = bfd_msg_id_base;
+
+    M (WANT_BFD_EVENTS, mp);
+    mp->enable_disable = enable;
+    mp->pid = htonl(getpid());
+
+    S (mp);
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+

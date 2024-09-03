@@ -44,6 +44,33 @@ using namespace saivpp;
 
 int SwitchStateBase::currentMaxInstance = 0;
 
+/* Utility function for IP addr translation from VPP to SAI */
+static void vpp_to_sai_ip_addr(
+    _Out_  sai_ip_address_t* ip_addr,
+    _In_ vpp_ip_addr_t* vpp_ip_addr)
+{
+    if (NULL == vpp_ip_addr || NULL == ip_addr)
+    {
+        SWSS_LOG_ERROR(" Invalid argumets passed for memcpy NULL ptr!");
+        return;
+    }
+
+    if (vpp_ip_addr->sa_family == AF_INET)
+    {
+        ip_addr->addr_family = SAI_IP_ADDR_FAMILY_IPV4;
+        struct sockaddr_in* sin = &vpp_ip_addr->addr.ip4;
+        memcpy(&ip_addr->addr.ip4, &sin->sin_addr.s_addr,
+               sizeof(sin->sin_addr.s_addr));
+    }
+    else if (vpp_ip_addr->sa_family == AF_INET6)
+    {
+        ip_addr->addr_family = SAI_IP_ADDR_FAMILY_IPV6;
+        struct sockaddr_in6* sin6 = &vpp_ip_addr->addr.ip6;
+        memcpy(&ip_addr->addr.ip6, &sin6->sin6_addr.s6_addr,
+        sizeof(sin6->sin6_addr.s6_addr));
+    }
+}
+
 IpVrfInfo::IpVrfInfo(
     _In_ sai_object_id_t obj_id,
     _In_ uint32_t vrf_id,
@@ -379,10 +406,64 @@ void SwitchStateBase::vppProcessEvents ()
 		SWSS_LOG_NOTICE("Received port link event for %s state %s",
 				evp->data.intf_status.hwif_name,
 				evp->data.intf_status.link_up ? "UP" : "DOWN");
-	    }
+	    } else if (evp->type == VPP_BFD_STATE_CHANGE) {
+                SWSS_LOG_NOTICE("Received bfd state change event, multihop:%d, "
+                                "sw_idx:%d, state %d",
+                                evp->data.bfd_notif.multihop,
+                                evp->data.bfd_notif.sw_if_index,
+                                evp->data.bfd_notif.state);
+                asyncBfdStateUpdate(&evp->data.bfd_notif);
+            }
 	    vpp_ev_free(evp);
 	}
     }
+}
+
+sai_status_t SwitchStateBase::asyncBfdStateUpdate(vpp_bfd_state_notif_t *bfd_notif)
+{
+    sai_bfd_session_state_t sai_state;
+    vpp_bfd_info_t bfd_info;
+    memset(&bfd_info, 0, sizeof(bfd_info));
+
+    // Convert vpp state to sai state
+    switch(bfd_notif->state) {
+    case VPP_API_BFD_STATE_ADMIN_DOWN:
+        sai_state = SAI_BFD_SESSION_STATE_ADMIN_DOWN;
+        break;
+    case VPP_API_BFD_STATE_DOWN:
+        sai_state = SAI_BFD_SESSION_STATE_DOWN;
+        break;
+    case VPP_API_BFD_STATE_INIT:
+        sai_state = SAI_BFD_SESSION_STATE_INIT;
+        break;
+    case VPP_API_BFD_STATE_UP:
+        sai_state = SAI_BFD_SESSION_STATE_UP;
+        break;
+    default:
+        sai_state = SAI_BFD_SESSION_STATE_DOWN;
+        break;
+    }
+
+    bfd_info.multihop = bfd_notif->multihop;
+    vpp_to_sai_ip_addr(&bfd_info.local_addr, &bfd_notif->local_addr);
+    vpp_to_sai_ip_addr(&bfd_info.peer_addr, &bfd_notif->peer_addr);
+
+    // Find the BFD session
+    auto it = m_bfd_info_map.find(bfd_info);
+
+    // Check if the key was found
+    if (it != m_bfd_info_map.end()) {
+        sai_object_id_t bfd_oid = it->second;
+        sai_object_type_t obj_type = objectTypeQuery(bfd_oid);
+       SWSS_LOG_NOTICE("Found existing bfd object %s, type %s",
+            sai_serialize_object_id(bfd_oid).c_str(),
+            sai_serialize_object_type(obj_type).c_str());
+        send_bfd_state_change_notification(bfd_oid, sai_state, false);
+    } else {
+        SWSS_LOG_NOTICE("Existing bfd object not found");
+    }
+
+    return SAI_STATUS_SUCCESS;
 }
 
 sai_status_t SwitchStateBase::vpp_dp_initialize()

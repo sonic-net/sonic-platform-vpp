@@ -28,6 +28,7 @@
 #include "SaiObjectDB.h"
 #include "BitResourcePool.h"
 #include "TunnelManager.h"
+#include "vppxlate/SaiVppXlate.h"
 
 #include <set>
 #include <unordered_set>
@@ -211,7 +212,46 @@ namespace saivpp
             sai_status_t vpp_bfd_session_del(
                     _In_ const std::string &serializedObjectId);
 
+        private: // BFD related
+            struct vpp_bfd_info_t {
+                //uint32_t sw_if_index;
+                bool multihop;
+                sai_ip_address_t local_addr;
+                sai_ip_address_t peer_addr;
+            
+                // Define the < operator for comparison
+                bool operator<(const vpp_bfd_info_t& other) const {
+            
+                    // compare local IP address first
+                    int cmp = std::memcmp(&local_addr, &other.local_addr, sizeof(sai_ip_address_t));
+                    if (cmp != 0) {
+                        return cmp < 0;
+                    }
+            
+                    // compare peer IP address
+                    cmp = std::memcmp(&peer_addr, &other.peer_addr, sizeof(sai_ip_address_t));
+                    if (cmp != 0) {
+                        return cmp < 0;
+                    }
+            
+                    // compare multihop flag
+                    return multihop < other.multihop;
+                }
+            };
 
+            std::map<vpp_bfd_info_t, sai_object_id_t> m_bfd_info_map;
+
+            void send_bfd_state_change_notification(
+                    _In_ sai_object_id_t bfd_oid,
+                    _In_ sai_bfd_session_state_t state,
+                    _In_ bool force);
+
+            void update_bfd_session_state(
+                    _In_ sai_object_id_t bfd_oid,
+                    _In_ sai_bfd_session_state_t state);
+
+            sai_status_t asyncBfdStateUpdate(vpp_bfd_state_notif_t *bfd_notif);
+ 
         protected:
 
             virtual sai_status_t create_port_dependencies(
