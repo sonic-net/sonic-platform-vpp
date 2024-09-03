@@ -610,21 +610,6 @@ bool SwitchStateBase::hostif_create_tap_veth_forwarding(
     return true;
 }
 
-bool SwitchStateBase::is_sonic_vpp_switch ()
-{
-    if (vpp_switch_env_read == false)
-    {
-	const char *val;
-
-	val = getenv("SONIC_VPP_SWITCH");
-	if (val && (*val == 'y' || *val == 'Y')) {
-	    sonic_vpp_switch = true;
-	}
-	vpp_switch_env_read = true;
-    }
-    return sonic_vpp_switch;
-}
-
 sai_status_t SwitchStateBase::vpp_create_hostif_tap_interface(
         _In_ uint32_t attr_count,
         _In_ const sai_attribute_t *attr_list)
@@ -740,82 +725,46 @@ sai_status_t SwitchStateBase::vpp_create_hostif_tap_interface(
 	SWSS_LOG_NOTICE("VPP interface %s(%s) oper state %s", hwif_name, dev,
 			(link_up ? "UP" : "DOWN"));
     }
-    if (is_sonic_vpp_switch()) {
-        sai_attribute_t attr;
 
-	memset(&attr, 0, sizeof(attr));
+    sai_attribute_t attr;
 
-	attr.id = SAI_SWITCH_ATTR_SRC_MAC_ADDRESS;
+    memset(&attr, 0, sizeof(attr));
 
-	sai_status_t status = get(SAI_OBJECT_TYPE_SWITCH, m_switch_id, 1, &attr);
+    attr.id = SAI_SWITCH_ATTR_SRC_MAC_ADDRESS;
 
-	if (status != SAI_STATUS_SUCCESS)
-        {
-	    SWSS_LOG_ERROR("failed to get SAI_SWITCH_ATTR_SRC_MAC_ADDRESS on switch %s: %s",
-			   sai_serialize_object_id(m_switch_id).c_str(),
-			   sai_serialize_status(status).c_str());
-	}
-
-	int err = vpp_set_dev_mac_address(name.c_str(), attr.value.mac);
-
-	if (err < 0)
-        {
-	    SWSS_LOG_ERROR("failed to set MAC address %s for %s",
-			   sai_serialize_mac(attr.value.mac).c_str(),
-			   name.c_str());
-	    close(tapfd);
-
-	    return SAI_STATUS_FAILURE;
-	}
-    }
-
-    /*
-    std::string vname = vpp_get_veth_name(name, obj_id);
-
-    int mtu = ETH_FRAME_BUFFER_SIZE;
-
-    sai_attribute_t attrmtu;
-
-    attrmtu.id = SAI_PORT_ATTR_MTU;
-
-    if (get(SAI_OBJECT_TYPE_PORT, obj_id, 1, &attrmtu) == SAI_STATUS_SUCCESS)
-    {
-        mtu = attrmtu.value.u32;
-
-        SWSS_LOG_INFO("setting new MTU: %d on %s", mtu, vname.c_str());
-    }
-
-    vpp_set_dev_mtu(vname.c_str(), mtu);
-
-    attr.id = SAI_PORT_ATTR_ADMIN_STATE;
-
-    status = get(SAI_OBJECT_TYPE_PORT, obj_id, 1, &attr);
+    sai_status_t status = get(SAI_OBJECT_TYPE_SWITCH, m_switch_id, 1, &attr);
 
     if (status != SAI_STATUS_SUCCESS)
     {
-        SWSS_LOG_ERROR("failed to get admin state for port %s",
-                sai_serialize_object_id(obj_id).c_str());
-
-        return status;
+        SWSS_LOG_ERROR("failed to get SAI_SWITCH_ATTR_SRC_MAC_ADDRESS on switch %s: %s",
+                       sai_serialize_object_id(m_switch_id).c_str(),
+                       sai_serialize_status(status).c_str());
     }
 
-    if (ifup(vname.c_str(), obj_id, attr.value.booldata, false))
+    int err = vpp_set_dev_mac_address(name.c_str(), attr.value.mac);
+
+    if (err < 0)
     {
-        SWSS_LOG_ERROR("ifup failed on %s", vname.c_str());
+        SWSS_LOG_ERROR("failed to set MAC address %s for %s",
+            sai_serialize_mac(attr.value.mac).c_str(),
+            name.c_str());
+        close(tapfd);
 
         return SAI_STATUS_FAILURE;
     }
 
-    if (!hostif_create_tap_veth_forwarding(name, tapfd, obj_id))
+    err = sw_interface_set_mac(hwif_name, attr.value.mac);
+    if (err < 0)
     {
-        SWSS_LOG_ERROR("forwarding rule on %s was not added", name.c_str());
+        SWSS_LOG_ERROR("failed to set MAC address %s for %s",
+            sai_serialize_mac(attr.value.mac).c_str(),
+            hwif_name);
+        close(tapfd);
+
+        return SAI_STATUS_FAILURE;
     }
+    SWSS_LOG_INFO("Successfully set mac to %s for %s", sai_serialize_mac(attr.value.mac).c_str(), name.c_str());
 
-    SWSS_LOG_INFO("mapping interface %s to port id %s",
-            vname.c_str(),
-            sai_serialize_object_id(obj_id).c_str());
-
-    */
     setIfNameToPortId(name, obj_id);
     setPortIdToTapName(obj_id, name);
 

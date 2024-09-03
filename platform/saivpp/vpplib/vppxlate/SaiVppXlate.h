@@ -186,7 +186,7 @@ typedef enum {
     extern int interface_set_state (const char *hwif_name, bool is_up);
     extern int hw_interface_set_mtu(const char *hwif_name, uint32_t mtu);
     extern int sw_interface_set_mtu(const char *hwif_name, uint32_t mtu, int type);
-
+    extern int sw_interface_set_mac(const char *hwif_name, uint8_t *mac_address);
     extern int ip_vrf_add(uint32_t vrf_id, const char *vrf_name, bool is_ipv6);
     extern int ip_vrf_del(uint32_t vrf_id, const char *vrf_name, bool is_ipv6);
 
