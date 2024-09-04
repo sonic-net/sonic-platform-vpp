@@ -1,0 +1,13 @@
+---
+name: Tunnel Termination ACL
+maintainer: Akeel Ali <akeel@gatech.edu>
+features:
+  - Applies ACL after Tunnel Decap
+  - Current support is limited to a specific use-case
+    - Tunnel: IPv4 VxLAN Tunnel Termination
+    - Fields: DST IPv4/6 Classification
+    - Action: Redirect (ip4/6-rewrite)
+description: "Tunnel Termination ACL plugin"
+state: experimental
+properties: [CLI, API]
+
