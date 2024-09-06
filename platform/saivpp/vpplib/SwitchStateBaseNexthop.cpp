@@ -42,201 +42,85 @@ sai_status_t SwitchStateBase::IpRouteNexthopGroupEntry(
 {
     sai_attribute_t attr;
     int32_t group_type;
+    auto nhg_soid = sai_serialize_object_id(next_hop_grp_oid);
 
     attr.id = SAI_NEXT_HOP_GROUP_ATTR_TYPE;
-
-    if (get(SAI_OBJECT_TYPE_NEXT_HOP_GROUP, next_hop_grp_oid, 1, &attr) != SAI_STATUS_SUCCESS) {
-        return SAI_STATUS_SUCCESS;
+    auto nhg_obj = get_sai_object(SAI_OBJECT_TYPE_NEXT_HOP_GROUP, nhg_soid);
+    if (!nhg_obj) {
+        SWSS_LOG_ERROR("Failed to find SAI_OBJECT_TYPE_NEXT_HOP_GROUP SaiObject: %s", nhg_soid.c_str());
+        return SAI_STATUS_FAILURE;        
     }
+    
+    CHECK_STATUS_QUIET(nhg_obj->get_manditory_attr(attr));
     if (attr.value.s32 != SAI_NEXT_HOP_GROUP_TYPE_DYNAMIC_UNORDERED_ECMP &&
         attr.value.s32 != SAI_NEXT_HOP_GROUP_TYPE_DYNAMIC_ORDERED_ECMP) {
-	return SAI_STATUS_SUCCESS;
+        SWSS_LOG_ERROR("Unsupported type (%d) in nexthop group %s", attr.value.s32, nhg_soid.c_str());
+	    return SAI_STATUS_NOT_IMPLEMENTED;
     }
+
     group_type = attr.value.s32;
-
-    auto it = m_nxthop_grp_mbr_map.find(next_hop_grp_oid);
-
-    std::list<sai_object_id_t> member_list;
-
-    if (it == m_nxthop_grp_mbr_map.end()) {
-        SWSS_LOG_WARN("Nexthop member list missing for Nexthop group %s",
-                      sai_serialize_object_id(next_hop_grp_oid).c_str());
-        return SAI_STATUS_FAILURE;
-    } else {
-        member_list = it->second;
-        if (!member_list.size()) {
-            SWSS_LOG_WARN("Nexthop member list empty for Nexthop group %s",
-                          sai_serialize_object_id(next_hop_grp_oid).c_str());
-            return SAI_STATUS_FAILURE;
-        }
-    }
-
-    uint32_t next_hop_weight, next_hop_sequence;
-    sai_object_id_t next_hop_oid, rif_oid;
-    sai_ip_address_t ip_address;
-    nexthop_grp_config_t *nxthop_grp_cfg;
-
-    size_t grp_size = sizeof(nexthop_grp_config_t) + (member_list.size() * sizeof(nexthop_grp_member_t));
-
-    nxthop_grp_cfg = (nexthop_grp_config_t *) calloc(1, grp_size);
-    if (nxthop_grp_cfg == NULL) {
+    auto member_map = nhg_obj->get_child_objs(SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER);
+    if (member_map == nullptr || member_map->size() == 0) {
+        SWSS_LOG_INFO("Empty nexthop_group. OID %s", 
+            nhg_soid.c_str());
         return SAI_STATUS_FAILURE;
     }
-    nexthop_grp_member_t *nxt_grp_member;
 
-    nxt_grp_member = nxthop_grp_cfg->grp_members;
-
-    for (sai_object_id_t member_oid : member_list) {
-        next_hop_weight = 1;
-        next_hop_sequence = 0;
-        rif_oid = 0;
-
+    uint32_t next_hop_sequence = 0;
+    std::map<uint32_t, nexthop_grp_member_t> nh_member_map;
+    for (auto pair : *member_map) {
+        auto member_obj = pair.second;
+        sai_object_id_t next_hop_oid;
+        uint32_t next_hop_weight = 1;
+        nexthop_grp_member_t mbr;
+        
         attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_ID;
-        if (get(SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, member_oid, 1, &attr) == SAI_STATUS_SUCCESS)
-        {
-            next_hop_oid = attr.value.oid;
-        } else {
-            SWSS_LOG_ERROR("Nexthop oid missing for member %s",
-			   sai_serialize_object_id(member_oid).c_str());
-            free(nxthop_grp_cfg);
-            return SAI_STATUS_FAILURE;
-        }
+        CHECK_STATUS_QUIET(member_obj->get_manditory_attr(attr));
+        next_hop_oid = attr.value.oid;
+
         attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_WEIGHT;
-        if (get(SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, member_oid, 1, &attr) == SAI_STATUS_SUCCESS)
+        member_obj->get_attr(attr);
+        if (member_obj->get_attr(attr) == SAI_STATUS_SUCCESS)
         {
             next_hop_weight = attr.value.u32;
         }
-        attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_SEQUENCE_ID;
-        if (get(SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, member_oid, 1, &attr) == SAI_STATUS_SUCCESS)
-        {
+
+        if (group_type == SAI_NEXT_HOP_GROUP_TYPE_DYNAMIC_ORDERED_ECMP) {
+            attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_SEQUENCE_ID;
+            CHECK_STATUS_QUIET(member_obj->get_manditory_attr(attr));
             next_hop_sequence = attr.value.u32;
         }
-
-        attr.id = SAI_NEXT_HOP_ATTR_IP;
-        if (get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS)
-        {
-            ip_address = attr.value.ipaddr;
+        else {
+            // sequence_id will not be set if it is not ordered_ecmp. Then just use the order of the member.
+            next_hop_sequence++;
         }
 
-        attr.id = SAI_NEXT_HOP_ATTR_ROUTER_INTERFACE_ID;
-        if (get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS)
-        {
-            rif_oid = attr.value.oid;
+        if(fillNHGrpMember(&mbr, next_hop_oid, next_hop_weight, next_hop_sequence) != SAI_STATUS_SUCCESS) {
+            return SAI_STATUS_FAILURE;
         }
+        nh_member_map[next_hop_sequence] = mbr;
+    }
+    nexthop_grp_config_t *nxthop_grp_cfg;
 
-        nxt_grp_member->addr = ip_address;
-        nxt_grp_member->seq_id = next_hop_sequence;
-        nxt_grp_member->weight = next_hop_weight;
-        nxt_grp_member->rif_oid = rif_oid;
-        nxt_grp_member->sw_if_index = ~0;
+    size_t grp_size = sizeof(nexthop_grp_config_t) + (nh_member_map.size() * sizeof(nexthop_grp_member_t));
+
+    nxthop_grp_cfg = (nexthop_grp_config_t *) calloc(1, grp_size);
+    if (nxthop_grp_cfg == NULL) {
+        SWSS_LOG_ERROR("Failed to allocate memory for nxthop_grp_cfg. member size %zu", nh_member_map.size());
+        return SAI_STATUS_FAILURE;
+    }
+    nexthop_grp_member_t *nxt_grp_member;
+    nxt_grp_member = nxthop_grp_cfg->grp_members;
+    for (auto pair : nh_member_map) {
+        *nxt_grp_member = pair.second;
         nxt_grp_member++;
     }
-
     nxthop_grp_cfg->grp_type = group_type;
-    nxthop_grp_cfg->nmembers = (uint32_t) member_list.size();
+    nxthop_grp_cfg->nmembers = (uint32_t) nh_member_map.size();
 
     *nxthop_group = nxthop_grp_cfg;
 
     return SAI_STATUS_SUCCESS;
-}
-
-sai_status_t SwitchStateBase::NexthopGrpMemberAdd(
-        _In_ const std::string &serializedObjectId,
-        _In_ sai_object_id_t switch_id,
-        _In_ uint32_t attr_count,
-        _In_ const sai_attribute_t *attr_list)
-{
-    SWSS_LOG_ENTER();
-    sai_status_t                 status;
-    const sai_attribute_value_t  *next_hop_grp;
-    sai_object_id_t              next_hop_grp_oid;
-    uint32_t                     next_hop_index;
-
-    status = find_attrib_in_list(attr_count, attr_list, SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID,
-                                 &next_hop_grp, &next_hop_index);
-    if (status != SAI_STATUS_SUCCESS) {
-	return status;
-    }
-    next_hop_grp_oid = next_hop_grp->oid;
-
-    if (SAI_OBJECT_TYPE_NEXT_HOP_GROUP != sai_object_type_query(next_hop_grp_oid)) {
-	return SAI_STATUS_SUCCESS;
-    }
-    sai_object_id_t member_oid;
-
-    sai_deserialize_object_id(serializedObjectId, member_oid);
-    auto it = m_nxthop_grp_mbr_map.find(next_hop_grp_oid);
-
-    if (it == m_nxthop_grp_mbr_map.end()) {
-        std::list<sai_object_id_t> member_list;
-
-        member_list = { member_oid };
-        m_nxthop_grp_mbr_map[next_hop_grp_oid] = member_list;
-    } else {
-        std::list<sai_object_id_t>& member_list = it->second;
-
-        member_list.push_back(member_oid);
-    }
-    SWSS_LOG_NOTICE("Nextop group member %s added to nexthop group %s",
-		    serializedObjectId.c_str(), sai_serialize_object_id(next_hop_grp_oid).c_str());
-
-    return create_internal(SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, serializedObjectId,
-			   switch_id, attr_count, attr_list);
-}
-
-sai_status_t SwitchStateBase::NexthopGrpMemberRemove(
-        _In_ const std::string &serializedObjectId)
-{
-    SWSS_LOG_ENTER();
-    sai_object_id_t member_oid, next_hop_grp_oid;
-
-    sai_deserialize_object_id(serializedObjectId, member_oid);
-
-    sai_attribute_t attr;
-
-    attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID;
-
-    CHECK_STATUS(get(SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, member_oid, 1, &attr));
-
-    next_hop_grp_oid = attr.value.oid;
-
-    auto it = m_nxthop_grp_mbr_map.find(next_hop_grp_oid);
-
-    if (it == m_nxthop_grp_mbr_map.end()) {
-        SWSS_LOG_WARN("Nextop member list not found for nexthop group %s", serializedObjectId.c_str());
-    } else {
-        std::list<sai_object_id_t>& member_list = it->second;
-
-        member_list.remove(member_oid);
-	SWSS_LOG_NOTICE("Nextop group member %s removed from nexthop group %s",
-			serializedObjectId.c_str(), sai_serialize_object_id(next_hop_grp_oid).c_str());
-    }
-
-    return remove_internal(SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, serializedObjectId);
-}
-
-sai_status_t SwitchStateBase::NexthopGrpRemove(
-        _In_ const std::string &serializedObjectId)
-{
-    SWSS_LOG_ENTER();
-    sai_object_id_t next_hop_grp_oid;
-
-    sai_deserialize_object_id(serializedObjectId, next_hop_grp_oid);
-
-    auto it = m_nxthop_grp_mbr_map.find(next_hop_grp_oid);
-
-    if (it == m_nxthop_grp_mbr_map.end()) {
-        SWSS_LOG_DEBUG("Nextop member list not found for nexthop group %s", serializedObjectId.c_str());
-    } else {
-        std::list<sai_object_id_t>& member_list = it->second;
-
-        member_list.clear();
-        m_nxthop_grp_mbr_map.erase(it);
-
-	SWSS_LOG_NOTICE("Nextop group %s removed", serializedObjectId.c_str());
-    }
-
-    return remove_internal(SAI_OBJECT_TYPE_NEXT_HOP_GROUP, serializedObjectId);
 }
 
 sai_status_t SwitchStateBase::IpRouteNexthopEntry(
@@ -248,8 +132,7 @@ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
     const sai_attribute_value_t  *next_hop;
     sai_object_id_t              next_hop_oid;
     uint32_t                     next_hop_index;
-    sai_ip_address_t             ip_address;
-    uint32_t                     next_hop_type;
+    nexthop_grp_config_t        *nxthop_group;
     status = find_attrib_in_list(attr_count, attr_list, SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID,
                                  &next_hop, &next_hop_index);
     if (status != SAI_STATUS_SUCCESS) {
@@ -257,71 +140,91 @@ sai_status_t SwitchStateBase::IpRouteNexthopEntry(
     }
     next_hop_oid = next_hop->oid;
 
-    if (SAI_OBJECT_TYPE_NEXT_HOP != sai_object_type_query(next_hop_oid)) {
-	return SAI_STATUS_FAILURE;
-    }
-    sai_attribute_t attr;
-    attr.id = SAI_NEXT_HOP_ATTR_TYPE;
-
-    CHECK_STATUS(get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr));
-    next_hop_type = attr.value.s32;
-    if (next_hop_type!= SAI_NEXT_HOP_TYPE_IP && next_hop_type != SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP) {
-	return SAI_STATUS_SUCCESS;
-    }
-    attr.id = SAI_NEXT_HOP_ATTR_IP;
-    if (get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS)
-    {
-	ip_address = attr.value.ipaddr;
-    } else {
-        SWSS_LOG_ERROR("IP address missing in nexthop %s", sai_serialize_object_id(next_hop_oid).c_str());
-        return SAI_STATUS_SUCCESS;
-    }
-
-    nexthop_grp_config_t *nxthop_group;
-
     nxthop_group = (nexthop_grp_config_t *)
       calloc(1, sizeof(nexthop_grp_config_t) + (1 * sizeof(nexthop_grp_member_t)));
     if (!nxthop_group) {
+        SWSS_LOG_ERROR("Failed to allocate memory for nxthop_grp_cfg. member size 1");
         return SAI_STATUS_FAILURE;
     }
-    nexthop_grp_member_t *nxt_grp_member;
-
     nxthop_group->nmembers = 1;
-    nxt_grp_member = nxthop_group->grp_members;
 
-    nxt_grp_member->addr = ip_address;
-    nxt_grp_member->weight = 1;
-    nxt_grp_member->seq_id = 0;
-    nxt_grp_member->sw_if_index = ~0;
-    switch (next_hop_type)
-    {
-    case SAI_NEXT_HOP_TYPE_IP:
-        attr.id = SAI_NEXT_HOP_ATTR_ROUTER_INTERFACE_ID;
-        if (get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS)
-        {
-            nxt_grp_member->rif_oid = attr.value.oid;
-        }
-        break;
-    case SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP:
-        {
-            u_int32_t sw_if_index;
-            if (m_tunnel_mgr.get_tunnel_if(next_hop_oid, sw_if_index) == SAI_STATUS_SUCCESS) {
-                nxt_grp_member->sw_if_index = sw_if_index;
-                SWSS_LOG_DEBUG("Got tunnel interface %d for nexthop %s", sw_if_index,
-                            sai_serialize_object_id(next_hop_oid).c_str());                
-            } else {
-                SWSS_LOG_ERROR("Failed to get tunnel interface name for nexthop %s",
-                            sai_serialize_object_id(next_hop_oid).c_str());
-                free(nxthop_group);
-                return SAI_STATUS_FAILURE;
-            }
-            break;
-        }
-    default:
-        break;
+    nexthop_grp_member_t *nxt_grp_member = nxthop_group->grp_members;
+
+    status = fillNHGrpMember(nxt_grp_member, next_hop_oid, 1, 0);
+
+    if (status != SAI_STATUS_SUCCESS) {
+        free(nxthop_group);
+        return status;
     }
 
     *nxthop_group_cfg = nxthop_group;
+    return SAI_STATUS_SUCCESS;
+}
+
+// This function is responsible for filling the nexthop group member structure
+// with the necessary information such as the next hop IP address, weight, sequence,
+// and router interface or tunnel interface information.
+// It takes the next hop object ID, next hop weight, and next hop sequence as input
+// and retrieves the required attributes from the next hop object.
+// The function returns SAI_STATUS_SUCCESS if the member is filled successfully,
+// otherwise it returns an appropriate error status.
+sai_status_t 
+SwitchStateBase::fillNHGrpMember(nexthop_grp_member_t *nxt_grp_member, sai_object_id_t next_hop_oid, uint32_t next_hop_weight, uint32_t next_hop_sequence) 
+{
+    sai_attribute_t attr;
+    auto nh_soid = sai_serialize_object_id(next_hop_oid);
+
+    if (SAI_OBJECT_TYPE_NEXT_HOP != sai_object_type_query(next_hop_oid)) {
+        SWSS_LOG_ERROR("Not a SAI_OBJECT_TYPE_NEXT_HOP: %s", nh_soid.c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    auto nh_obj = get_sai_object(SAI_OBJECT_TYPE_NEXT_HOP, nh_soid);
+    if (!nh_obj) {
+        SWSS_LOG_ERROR("Failed to find SAI_OBJECT_TYPE_NEXT_HOP SaiObject: %s", nh_soid.c_str());
+        return SAI_STATUS_FAILURE;
+    }
+    
+    attr.id = SAI_NEXT_HOP_ATTR_TYPE;
+    CHECK_STATUS_QUIET(nh_obj->get_manditory_attr(attr));
+    int32_t next_hop_type = attr.value.s32;
+    if (next_hop_type != SAI_NEXT_HOP_TYPE_IP && next_hop_type != SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP) {
+        return SAI_STATUS_NOT_IMPLEMENTED;
+    }
+
+    attr.id = SAI_NEXT_HOP_ATTR_IP;
+    sai_ip_address_t ip_address;
+    CHECK_STATUS_QUIET(nh_obj->get_manditory_attr(attr));
+    ip_address = attr.value.ipaddr;
+
+    nxt_grp_member->addr = ip_address;
+    nxt_grp_member->weight = next_hop_weight;
+    nxt_grp_member->seq_id = next_hop_sequence;
+    nxt_grp_member->sw_if_index = ~0;
+
+    switch (next_hop_type) {
+    case SAI_NEXT_HOP_TYPE_IP:
+        attr.id = SAI_NEXT_HOP_ATTR_ROUTER_INTERFACE_ID;
+        if (get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS) {
+            nxt_grp_member->rif_oid = attr.value.oid;
+        }
+        break;
+    case SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP: {
+        u_int32_t sw_if_index;
+        if (m_tunnel_mgr.get_tunnel_if(next_hop_oid, sw_if_index) == SAI_STATUS_SUCCESS) {
+            nxt_grp_member->sw_if_index = sw_if_index;
+            SWSS_LOG_DEBUG("Got tunnel interface %d for nexthop %s", sw_if_index,
+                           sai_serialize_object_id(next_hop_oid).c_str());
+        } else {
+            SWSS_LOG_ERROR("Failed to get tunnel interface name for nexthop %s",
+                           sai_serialize_object_id(next_hop_oid).c_str());
+            return SAI_STATUS_FAILURE;
+        }
+        break;
+    }
+    default:
+        break;
+    }
 
     return SAI_STATUS_SUCCESS;
 }

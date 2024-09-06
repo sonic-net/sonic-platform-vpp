@@ -196,11 +196,6 @@ sai_status_t SwitchStateBase::create(
     {       
         return createNexthop(serializedObjectId, switch_id, attr_count, attr_list);
     }
-    
-    if (object_type == SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER)
-    {
-        return NexthopGrpMemberAdd(serializedObjectId, switch_id, attr_count, attr_list);
-    }
 
     if (object_type == SAI_OBJECT_TYPE_NEIGHBOR_ENTRY)
     {
@@ -483,16 +478,6 @@ sai_status_t SwitchStateBase::remove(
     if (object_type == SAI_OBJECT_TYPE_ROUTE_ENTRY)
     {
         return removeIpRoute(serializedObjectId);
-    }
-
-    if (object_type == SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER)
-    {
-        return NexthopGrpMemberRemove(serializedObjectId);
-    }
-
-    if (object_type == SAI_OBJECT_TYPE_NEXT_HOP_GROUP)
-    {
-        return NexthopGrpRemove(serializedObjectId);
     }
     
     if (object_type == SAI_OBJECT_TYPE_NEXT_HOP)
@@ -854,11 +839,7 @@ sai_status_t SwitchStateBase::get(
 
         if (ait == attrHash.end())
         {
-            SWSS_LOG_WARN("%s not implemented on %s",
-                    meta->attridname,
-                    serializedObjectId.c_str());
-
-            return SAI_STATUS_NOT_IMPLEMENTED;
+            return SAI_STATUS_ITEM_NOT_FOUND;
         }
 
         auto attr = ait->second->getAttr();
@@ -1125,7 +1106,7 @@ sai_status_t SwitchStateBase::bulkSet(
     return status;
 }
 
-std::shared_ptr<SaiObject> 
+std::shared_ptr<SaiDBObject> 
 SwitchStateBase::get_sai_object(
                 _In_ sai_object_type_t object_type,
                 _In_ const std::string &serializedObjectId)

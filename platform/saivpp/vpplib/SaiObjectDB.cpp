@@ -43,7 +43,8 @@ std::map<sai_object_type_t, std::vector<SaiChildRelation>> sai_child_relation_de
     {SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY, {{SAI_OBJECT_TYPE_TUNNEL_MAP, SAI_TUNNEL_MAP_ENTRY_ATTR_TUNNEL_MAP, SAI_ATTR_VALUE_TYPE_OBJECT_ID}}},
     {SAI_OBJECT_TYPE_TUNNEL,           {{SAI_OBJECT_TYPE_TUNNEL_MAP, SAI_TUNNEL_ATTR_DECAP_MAPPERS, SAI_ATTR_VALUE_TYPE_OBJECT_LIST},
                                         {SAI_OBJECT_TYPE_TUNNEL_MAP, SAI_TUNNEL_ATTR_ENCAP_MAPPERS, SAI_ATTR_VALUE_TYPE_OBJECT_LIST}}},
-    {SAI_OBJECT_TYPE_TUNNEL_TERM_TABLE_ENTRY, {{SAI_OBJECT_TYPE_TUNNEL, SAI_TUNNEL_TERM_TABLE_ENTRY_ATTR_ACTION_TUNNEL_ID, SAI_ATTR_VALUE_TYPE_OBJECT_ID}}}
+    {SAI_OBJECT_TYPE_TUNNEL_TERM_TABLE_ENTRY, {{SAI_OBJECT_TYPE_TUNNEL, SAI_TUNNEL_TERM_TABLE_ENTRY_ATTR_ACTION_TUNNEL_ID, SAI_ATTR_VALUE_TYPE_OBJECT_ID}}},
+    {SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, {{SAI_OBJECT_TYPE_NEXT_HOP_GROUP, SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID, SAI_ATTR_VALUE_TYPE_OBJECT_ID}}},
 };
 
 static std::vector<std::string>
@@ -203,7 +204,7 @@ SaiObjectDB::remove(
     return SAI_STATUS_SUCCESS;
 }
 
-std::shared_ptr<SaiObject> 
+std::shared_ptr<SaiDBObject> 
 SaiObjectDB::get(
                 _In_ sai_object_type_t object_type,
                 _In_ const std::string& id)
@@ -218,14 +219,14 @@ SaiObjectDB::get(
             return sai_parent_it->second;
         } else {
             SWSS_LOG_WARN("Parent is not found in SaiObjectDB %s", id.c_str());
-            return std::shared_ptr<SaiObject>();
+            return std::shared_ptr<SaiDBObject>();
         }
     }
     // check if the object exists
     status = m_switch_db->get(object_type, id, 0, &attr);
     if (status != SAI_STATUS_SUCCESS) {
-        SWSS_LOG_WARN("Parent object is not found in SaiObjectDB %s", id.c_str());
-        return std::shared_ptr<SaiObject>();
+        SWSS_LOG_WARN("Object is not found in SwitchStateBase %s:%s", sai_serialize_object_type(object_type).c_str(), id.c_str());
+        return std::shared_ptr<SaiDBObject>();
     }
     /*
      return a SaiObject as a wrapper to underlaying object is switch_db.
@@ -234,7 +235,7 @@ SaiObjectDB::get(
     return std::make_shared<SaiDBObject>(m_switch_db, object_type, id);
 }
 
-std::shared_ptr<SaiObject>
+std::shared_ptr<SaiDBObject>
 SaiObject::get_linked_object(
             _In_ sai_object_type_t linked_object_type,
             _In_ sai_attr_id_t link_attr_id) const 
@@ -247,14 +248,14 @@ SaiObject::get_linked_object(
     status = get_attr(attr);
     if (status != SAI_STATUS_SUCCESS) {
         SWSS_LOG_ERROR("Failed to get attribute %d from object %s", link_attr_id, m_id.c_str());
-        return std::shared_ptr<SaiObject>();
+        return std::shared_ptr<SaiDBObject>();
     }
     linked_obj_id = sai_serialize_object_id(attr.value.oid);
 
     return m_switch_db->get_sai_object(linked_object_type, linked_obj_id);
 }
 
-std::vector<std::shared_ptr<SaiObject>>
+std::vector<std::shared_ptr<SaiDBObject>>
 SaiObject::get_linked_objects(
             _In_ sai_object_type_t linked_object_type,
             _In_ sai_attr_id_t link_attr_id) const 
@@ -262,14 +263,14 @@ SaiObject::get_linked_objects(
     sai_status_t status;
     sai_attribute_t attr;
     std::string linked_obj_id;
-    std::vector<std::shared_ptr<SaiObject>> linked_objs;
+    std::vector<std::shared_ptr<SaiDBObject>> linked_objs;
     sai_object_id_t obj_list[MAX_OBJLIST_LEN];
     attr.id = link_attr_id;
     attr.value.objlist.count = MAX_OBJLIST_LEN;
     attr.value.objlist.list = obj_list;
     status = get_attr(attr);
     if (status != SAI_STATUS_SUCCESS) {
-        SWSS_LOG_ERROR("Failed to get attribute %d from object %s", link_attr_id, m_id.c_str());
+        SWSS_LOG_ERROR("Failed to get attribute %d from object %s", get_attr_name(link_attr_id), m_id.c_str());
         return linked_objs;
     }
     sai_object_list_t& linked_obj_list = attr.value.objlist;
@@ -282,7 +283,16 @@ SaiObject::get_linked_objects(
     }
     return linked_objs;
 }
-
+const char* 
+SaiObject::get_attr_name(_In_ sai_attr_id_t attr_id) const
+{
+    auto meta = sai_metadata_get_attr_metadata(m_type, attr_id);
+    if (meta == NULL) {
+        return "unknown";
+    } else {
+        return meta->attridname;
+    }
+}
 sai_status_t 
 SaiCachedObject::get_attr(sai_attribute_t &attr) const 
 {
@@ -294,9 +304,32 @@ SaiCachedObject::get_attr(sai_attribute_t &attr) const
     return SAI_STATUS_ITEM_NOT_FOUND;
 }
 
+sai_status_t 
+SaiCachedObject::get_manditory_attr(sai_attribute_t &attr) const 
+{
+    for (uint32_t ii = 0; ii < m_attr_count; ii++) {
+        if (m_attr_list[ii].id == attr.id) {
+            return transfer_attributes(m_type, 1, &(m_attr_list[ii]), &attr, false);
+        }
+    }
+    SWSS_LOG_ERROR("Failed to get attribute %d from object %s", get_attr_name(attr.id), m_id.c_str());
+    return SAI_STATUS_ITEM_NOT_FOUND;
+}
+
 sai_status_t
 SaiDBObject::get_attr(sai_attribute_t &attr) const 
 {
     /* we could make a copy of all the attributes and cache in this object*/
     return m_switch_db->get(m_type, m_id, 1, &attr);
+}
+
+sai_status_t
+SaiDBObject::get_manditory_attr(sai_attribute_t &attr) const 
+{
+    /* we could make a copy of all the attributes and cache in this object*/
+    auto status = m_switch_db->get(m_type, m_id, 1, &attr);
+    if (SAI_STATUS_SUCCESS != status) {
+        SWSS_LOG_ERROR("Failed to get attribute %d from object %s", get_attr_name(attr.id), m_id.c_str());
+    }
+    return status;
 }
