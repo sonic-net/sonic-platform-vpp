@@ -57,15 +57,18 @@ static int update_classify_table_and_sessions (bool is_ipv6, u32 count, vl_api_t
   int rv = 0;
 #define CLASSIFY_TABLE_VECTOR_SIZE 16
   u8 mask[7*CLASSIFY_TABLE_VECTOR_SIZE];
-
   clib_memset (mask, 0, sizeof (mask));
-  u32 nbuckets = 2;
+
+  /* Table Configs (TBD optimal values for expected use-cases) */
+  u32 nbuckets = 32;
   u32 memory_size = 2 << 22;
   u32 skip = 5;
-  u32 match;
+  u32 match = 1;
 
   /* Create the table if it's an add operation */
   if (table_index == ~0) {
+
+    /* Mask inner DIP */
     if (is_ipv6) {
       match = 2;
       for (int i = 8; i <= 23; i++) {
@@ -78,8 +81,8 @@ static int update_classify_table_and_sessions (bool is_ipv6, u32 count, vl_api_t
       }
     }
 
-    rv = vnet_classify_add_del_table (cm, mask, nbuckets /* nbuckets */, memory_size /* memory_size */,
-                                      skip /* skip */, match,  ~0 /* next_table_index */,
+    rv = vnet_classify_add_del_table (cm, mask, nbuckets, memory_size,
+                                      skip, match,  ~0 /* next_table_index */,
                                       ~0 /* miss_next_index */, &table_index,
                                       0 /* current_data_flag */, 0 /* current_data_offset */,
                                       1 /* is_add */, 0 /* del_chain */);
@@ -96,8 +99,8 @@ static int update_classify_table_and_sessions (bool is_ipv6, u32 count, vl_api_t
   }
 
   /* Make sure table AF is not being changed in the replace case */
-  if (sm->classify_table_index_is_v6[table_index] != is_ipv6) {
-    clib_error ("Table AF mismatch");
+  if (count > 0 && sm->classify_table_index_is_v6[table_index] != is_ipv6) {
+    clib_warning ("Table AF mismatch");
     return VNET_API_ERROR_INVALID_VALUE_2;
   }
 
