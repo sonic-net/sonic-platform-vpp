@@ -44,33 +44,6 @@ using namespace saivpp;
 
 int SwitchStateBase::currentMaxInstance = 0;
 
-/* Utility function for IP addr translation from VPP to SAI */
-static void vpp_to_sai_ip_addr(
-    _Out_  sai_ip_address_t* ip_addr,
-    _In_ vpp_ip_addr_t* vpp_ip_addr)
-{
-    if (NULL == vpp_ip_addr || NULL == ip_addr)
-    {
-        SWSS_LOG_ERROR(" Invalid argumets passed for memcpy NULL ptr!");
-        return;
-    }
-
-    if (vpp_ip_addr->sa_family == AF_INET)
-    {
-        ip_addr->addr_family = SAI_IP_ADDR_FAMILY_IPV4;
-        struct sockaddr_in* sin = &vpp_ip_addr->addr.ip4;
-        memcpy(&ip_addr->addr.ip4, &sin->sin_addr.s_addr,
-               sizeof(sin->sin_addr.s_addr));
-    }
-    else if (vpp_ip_addr->sa_family == AF_INET6)
-    {
-        ip_addr->addr_family = SAI_IP_ADDR_FAMILY_IPV6;
-        struct sockaddr_in6* sin6 = &vpp_ip_addr->addr.ip6;
-        memcpy(&ip_addr->addr.ip6, &sin6->sin6_addr.s6_addr,
-        sizeof(sin6->sin6_addr.s6_addr));
-    }
-}
-
 IpVrfInfo::IpVrfInfo(
     _In_ sai_object_id_t obj_id,
     _In_ uint32_t vrf_id,
@@ -445,8 +418,10 @@ sai_status_t SwitchStateBase::asyncBfdStateUpdate(vpp_bfd_state_notif_t *bfd_not
     }
 
     bfd_info.multihop = bfd_notif->multihop;
-    vpp_to_sai_ip_addr(&bfd_info.local_addr, &bfd_notif->local_addr);
-    vpp_to_sai_ip_addr(&bfd_info.peer_addr, &bfd_notif->peer_addr);
+    vpp_ip_addr_t_to_sai_ip_address_t(bfd_notif->local_addr, bfd_info.local_addr);
+    vpp_ip_addr_t_to_sai_ip_address_t(bfd_notif->peer_addr, bfd_info.peer_addr);
+
+    BFD_MUTEX;
 
     // Find the BFD session
     auto it = m_bfd_info_map.find(bfd_info);

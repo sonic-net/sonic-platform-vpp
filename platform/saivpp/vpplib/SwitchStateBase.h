@@ -37,6 +37,8 @@
 
 #include "SwitchStateBaseNexthop.h"
 
+#define BFD_MUTEX std::lock_guard<std::mutex> lock(bfdMapMutex);
+
 #define SAI_VPP_FDB_INFO "SAI_VPP_FDB_INFO"
 
 #define DEFAULT_VLAN_NUMBER 1
@@ -240,6 +242,7 @@ namespace saivpp
             };
 
             std::map<vpp_bfd_info_t, sai_object_id_t> m_bfd_info_map;
+            std::mutex bfdMapMutex;
 
             void send_bfd_state_change_notification(
                     _In_ sai_object_id_t bfd_oid,

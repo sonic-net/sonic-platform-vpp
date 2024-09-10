@@ -21,33 +21,9 @@
 #include <arpa/inet.h>
 #include "vppxlate/SaiVppXlate.h"
 #include "meta/NotificationBfdSessionStateChange.h"
+#include "SwitchStateBaseUtils.h"
 
 using namespace saivpp;
-
-/* Utility function to convert SAI IP address to VPP format */
-static void sai_to_vpp_ip_addr(
-    _Out_ vpp_ip_addr_t* vpp_ip_addr,
-    _In_  sai_ip_address_t* ip_addr)
-{
-    if (NULL == vpp_ip_addr || NULL == ip_addr)
-    {
-        SWSS_LOG_ERROR(" Invalid argumets passed for memcpy NULL ptr!");
-        return;
-    }
-
-    if( ip_addr->addr_family == SAI_IP_ADDR_FAMILY_IPV4)
-    {
-        vpp_ip_addr->sa_family = AF_INET;
-        struct sockaddr_in* sin = &vpp_ip_addr->addr.ip4;
-        memcpy(&sin->sin_addr.s_addr, &ip_addr->addr.ip4, sizeof(sin->sin_addr.s_addr));
-    }
-    else if (ip_addr->addr_family == SAI_IP_ADDR_FAMILY_IPV6)
-    {
-        vpp_ip_addr->sa_family = AF_INET6;
-        struct sockaddr_in6* sin6 = &vpp_ip_addr->addr.ip6;
-        memcpy(&sin6->sin6_addr.s6_addr, &ip_addr->addr.ip6, sizeof(sin6->sin6_addr.s6_addr));
-    }
-}
 
 sai_status_t SwitchStateBase::bfd_session_add(
     _In_ const std::string &serializedObjectId,
@@ -58,8 +34,8 @@ sai_status_t SwitchStateBase::bfd_session_add(
 
     SWSS_LOG_ENTER();
 
+    CHECK_STATUS(vpp_bfd_session_add(serializedObjectId, switch_id, attr_count, attr_list));
     CHECK_STATUS(create_internal(SAI_OBJECT_TYPE_BFD_SESSION, serializedObjectId, switch_id, attr_count, attr_list));
-    vpp_bfd_session_add(serializedObjectId, switch_id, attr_count, attr_list);
 
     return SAI_STATUS_SUCCESS;
 
@@ -77,49 +53,83 @@ sai_status_t SwitchStateBase::vpp_bfd_session_add(
     sai_object_id_t bfd_oid;
     sai_deserialize_object_id(serializedObjectId, bfd_oid);
 
-    sai_attribute_t attr;
     /* Attribute#1 */
-    attr.id = SAI_BFD_SESSION_ATTR_MIN_RX;
-    CHECK_STATUS(get(SAI_OBJECT_TYPE_BFD_SESSION, bfd_oid, 1, &attr));
-    uint32_t required_min_rx = attr.value.u32;
+    auto attr = sai_metadata_get_attr_by_id(SAI_BFD_SESSION_ATTR_MIN_RX, attr_count, attr_list);
+    if (!attr)
+    {
+        SWSS_LOG_ERROR("attr SAI_BFD_SESSION_ATTR_MIN_RX was not passed");
+        return SAI_STATUS_FAILURE;
+    }
+
+    uint32_t required_min_rx = attr->value.u32;
 
     /* Attribute#2 */
-    attr.id = SAI_BFD_SESSION_ATTR_MIN_TX;
-    CHECK_STATUS(get(SAI_OBJECT_TYPE_BFD_SESSION, bfd_oid, 1, &attr));
-    uint32_t required_min_tx = attr.value.u32;
+    attr = sai_metadata_get_attr_by_id(SAI_BFD_SESSION_ATTR_MIN_TX, attr_count, attr_list);
+    if (!attr)
+    {
+        SWSS_LOG_ERROR("attr SAI_BFD_SESSION_ATTR_MIN_TX was not passed");
+        return SAI_STATUS_FAILURE;
+    }
+
+    uint32_t required_min_tx = attr->value.u32;
 
     /* Attribute#3 */
-    attr.id = SAI_BFD_SESSION_ATTR_MULTIPLIER;
-    CHECK_STATUS(get(SAI_OBJECT_TYPE_BFD_SESSION, bfd_oid, 1, &attr));
-    uint8_t detect_mult = attr.value.u8;
+    attr = sai_metadata_get_attr_by_id(SAI_BFD_SESSION_ATTR_MULTIPLIER, attr_count, attr_list);
+    if (!attr)
+    {
+        SWSS_LOG_ERROR("attr SAI_BFD_SESSION_ATTR_MULTIPLIER was not passed");
+        return SAI_STATUS_FAILURE;
+    }
+
+    uint8_t detect_mult = attr->value.u8;
 
     /* Attribute#4 */
-    attr.id = SAI_BFD_SESSION_ATTR_SRC_IP_ADDRESS;
-    CHECK_STATUS(get(SAI_OBJECT_TYPE_BFD_SESSION, bfd_oid, 1, &attr));
-    sai_ip_address_t local_addr = attr.value.ipaddr;
-    vpp_ip_addr_t vpp_local_addr;
+    attr = sai_metadata_get_attr_by_id(SAI_BFD_SESSION_ATTR_SRC_IP_ADDRESS, attr_count, attr_list);
+    if (!attr)
+    {
+        SWSS_LOG_ERROR("attr SAI_BFD_SESSION_ATTR_SRC_IP_ADDRESS was not passed");
+        return SAI_STATUS_FAILURE;
+    }
+
     /*local addr */
-    sai_to_vpp_ip_addr(&vpp_local_addr, &local_addr);
+    sai_ip_address_t local_addr = attr->value.ipaddr;
+    vpp_ip_addr_t vpp_local_addr;
+    sai_ip_address_t_to_vpp_ip_addr_t(local_addr, vpp_local_addr);
 
     /* Attribute#5 */
-    attr.id = SAI_BFD_SESSION_ATTR_DST_IP_ADDRESS;
-    CHECK_STATUS(get(SAI_OBJECT_TYPE_BFD_SESSION, bfd_oid, 1, &attr));
-    sai_ip_address_t peer_addr = attr.value.ipaddr;
-    vpp_ip_addr_t vpp_peer_addr;
+    attr = sai_metadata_get_attr_by_id(SAI_BFD_SESSION_ATTR_DST_IP_ADDRESS, attr_count, attr_list);
+    if (!attr)
+    {
+        SWSS_LOG_ERROR("attr SAI_BFD_SESSION_ATTR_DST_IP_ADDRESS was not passed");
+        return SAI_STATUS_FAILURE;
+    }
+
     /* Peer Addr*/
-    sai_to_vpp_ip_addr(&vpp_peer_addr, &peer_addr);
+    sai_ip_address_t peer_addr = attr->value.ipaddr;
+    vpp_ip_addr_t vpp_peer_addr;
+    sai_ip_address_t_to_vpp_ip_addr_t(peer_addr, vpp_peer_addr);
 
     /* Attribute#6 */
-    attr.id = SAI_BFD_SESSION_ATTR_MULTIHOP;
-    CHECK_STATUS(get(SAI_OBJECT_TYPE_BFD_SESSION, bfd_oid, 1, &attr));
-    bool multihop = attr.value.booldata;
+    attr = sai_metadata_get_attr_by_id(SAI_BFD_SESSION_ATTR_MULTIHOP, attr_count, attr_list);
+    if (!attr)
+    {
+        SWSS_LOG_ERROR("attr SAI_BFD_SESSION_ATTR_MULTIHOP was not passed");
+        return SAI_STATUS_FAILURE;
+    }
+
+    bool multihop = attr->value.booldata;
     
     const char *hwif_name = NULL;
     if (!multihop) {
         /* Attribute#7 */
-        attr.id = SAI_BFD_SESSION_ATTR_PORT;
-        CHECK_STATUS(get(SAI_OBJECT_TYPE_BFD_SESSION, bfd_oid, 1, &attr));
-        sai_object_id_t port_id = attr.value.oid;
+        attr = sai_metadata_get_attr_by_id(SAI_BFD_SESSION_ATTR_PORT, attr_count, attr_list);
+        if (!attr)
+        {
+            SWSS_LOG_ERROR("attr SAI_BFD_SESSION_ATTR_PORT was not passed");
+            return SAI_STATUS_FAILURE;
+        }
+
+        sai_object_id_t port_id = attr->value.oid;
         sai_object_type_t obj_type = objectTypeQuery(port_id);
         if (obj_type != SAI_OBJECT_TYPE_PORT)
         {
@@ -147,6 +157,8 @@ sai_status_t SwitchStateBase::vpp_bfd_session_add(
         ret = bfd_udp_add(multihop, hwif_name, &vpp_local_addr, &vpp_peer_addr, detect_mult, required_min_tx, required_min_rx);
         if (ret >= 0)
         {
+            BFD_MUTEX;
+
             // store bfd attributes to sai oid mapping
             vpp_bfd_info_t bfd_info;
             bfd_info.multihop = multihop;
@@ -187,7 +199,7 @@ sai_status_t SwitchStateBase::vpp_bfd_session_del(
     sai_ip_address_t local_addr = attr.value.ipaddr;
     vpp_ip_addr_t vpp_local_addr;
     /*local addr */
-    sai_to_vpp_ip_addr(&vpp_local_addr, &local_addr);
+    sai_ip_address_t_to_vpp_ip_addr_t(local_addr, vpp_local_addr);
 
     /* Attribute#2 */
     attr.id = SAI_BFD_SESSION_ATTR_DST_IP_ADDRESS;
@@ -195,7 +207,7 @@ sai_status_t SwitchStateBase::vpp_bfd_session_del(
     sai_ip_address_t peer_addr = attr.value.ipaddr;
     vpp_ip_addr_t vpp_peer_addr;
     /* Peer Addr*/
-    sai_to_vpp_ip_addr(&vpp_peer_addr, &peer_addr);
+    sai_ip_address_t_to_vpp_ip_addr_t(peer_addr, vpp_peer_addr);
 
     /* Attribute#3 */
     attr.id = SAI_BFD_SESSION_ATTR_MULTIHOP;
@@ -236,6 +248,8 @@ sai_status_t SwitchStateBase::vpp_bfd_session_del(
         ret = bfd_udp_del(multihop, hwif_name, &vpp_local_addr, &vpp_peer_addr);
         if (ret >= 0)
         {
+            BFD_MUTEX;
+
             // remove bfd attributes to sai oid mapping
             vpp_bfd_info_t bfd_info;
             bfd_info.multihop = multihop;
@@ -269,9 +283,9 @@ void SwitchStateBase::update_bfd_session_state(
 
     if (status != SAI_STATUS_SUCCESS)
     {
-        SWSS_LOG_ERROR("failed to update bfd state %s: %d",
+        SWSS_LOG_ERROR("failed to update bfd state %s: %s",
                 sai_serialize_object_id(bfd_oid).c_str(),
-                state);
+                sai_serialize_bfd_session_state(data.state).c_str());
     }
 }
 
@@ -298,7 +312,7 @@ void SwitchStateBase::send_bfd_state_change_notification(
 
     if (objectType != SAI_OBJECT_TYPE_BFD_SESSION)
     {
-        SWSS_LOG_ERROR("object type %s not supported for BFD OID %s",
+        SWSS_LOG_ERROR("object type %s not supported for %s",
                 sai_serialize_object_type(objectType).c_str(),
                 sai_serialize_object_id(bfd_oid).c_str());
         return;
@@ -316,10 +330,9 @@ void SwitchStateBase::send_bfd_state_change_notification(
     {
         if (force)
         {
-            SWSS_LOG_NOTICE("explicitly send SAI_SWITCH_ATTR_BFD_SESSION_STATE_CHANGE_NOTIFY for bfd session %s: %d",
+            SWSS_LOG_NOTICE("explicitly send SAI_SWITCH_ATTR_BFD_SESSION_STATE_CHANGE_NOTIFY for bfd session %s: %s",
                     sai_serialize_object_id(data.bfd_session_id).c_str(),
-                    data.session_state);
-                    //sai_serialize_bfd_session_state(data.state).c_str());
+                    sai_serialize_bfd_session_state(data.state).c_str());
 
         }
         else if ((sai_bfd_session_state_t)attr.value.s32 == data.session_state)
@@ -348,14 +361,11 @@ void SwitchStateBase::send_bfd_state_change_notification(
 
     sn.on_bfd_session_state_change = (sai_bfd_session_state_change_notification_fn)attr.value.ptr;
 
-    attr.id = SAI_BFD_SESSION_ATTR_STATE;
-
     update_bfd_session_state(bfd_oid, data.session_state);
 
-    SWSS_LOG_NOTICE("send event SAI_SWITCH_ATTR_BFD_SESSION_STATE_CHANGE_NOTIFY for bfd session %s: %d",
+    SWSS_LOG_NOTICE("send event SAI_SWITCH_ATTR_BFD_SESSION_STATE_CHANGE_NOTIFY for bfd session %s: %s",
             sai_serialize_object_id(bfd_oid).c_str(),
-            state);
-            //sai_serialize_bfd_session_state(data.state).c_str());
+            sai_serialize_bfd_session_state(data.state).c_str());
 
     auto str = sai_serialize_bfd_session_state_ntf(1, &data);
 

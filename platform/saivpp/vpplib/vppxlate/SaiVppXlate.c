@@ -818,7 +818,7 @@ vl_api_l2fib_flush_bd_reply_t_handler (vl_api_l2fib_flush_bd_reply_t *msg)
 }
 
 static void
-vl_api_bfd_udp_add_reply_t_handler (vl_api_bfd_udp_add_reply_t *msg)
+vl_api_bfd_udp_add_v2_reply_t_handler (vl_api_bfd_udp_add_v2_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
 
@@ -827,7 +827,7 @@ vl_api_bfd_udp_add_reply_t_handler (vl_api_bfd_udp_add_reply_t *msg)
 }
 
 static void
-vl_api_bfd_udp_del_reply_t_handler (vl_api_bfd_udp_del_reply_t *msg)
+vl_api_bfd_udp_del_v2_reply_t_handler (vl_api_bfd_udp_del_v2_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
 
@@ -836,7 +836,7 @@ vl_api_bfd_udp_del_reply_t_handler (vl_api_bfd_udp_del_reply_t *msg)
 }
 
 static void
-vl_api_want_bfd_events_reply_t_handler (vl_api_want_bfd_events_reply_t *msg)
+vl_api_want_bfd_events_v2_reply_t_handler (vl_api_want_bfd_events_v2_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
 
@@ -844,7 +844,7 @@ vl_api_want_bfd_events_reply_t_handler (vl_api_want_bfd_events_reply_t *msg)
 }
 
 static void
-vl_api_bfd_udp_session_event_t_handler (vl_api_bfd_udp_session_event_t *msg)
+vl_api_bfd_udp_session_event_v2_t_handler (vl_api_bfd_udp_session_event_v2_t *msg)
 {
 
     SAIVPP_WARN("Sending bfd state change event, multihop: %d, sw_if_index: %d, "
@@ -982,10 +982,10 @@ static void vpp_base_vpe_init(void)
     _(L2_MSG_ID(L2FIB_FLUSH_ALL_REPLY), l2fib_flush_all_reply) \
     _(L2_MSG_ID(L2FIB_FLUSH_INT_REPLY), l2fib_flush_int_reply) \
     _(L2_MSG_ID(L2FIB_FLUSH_BD_REPLY), l2fib_flush_bd_reply) \
-    _(BFD_MSG_ID(BFD_UDP_ADD_REPLY), bfd_udp_add_reply) \
-    _(BFD_MSG_ID(BFD_UDP_DEL_REPLY), bfd_udp_del_reply) \
-    _(BFD_MSG_ID(BFD_UDP_SESSION_EVENT), bfd_udp_session_event) \
-    _(BFD_MSG_ID(WANT_BFD_EVENTS), want_bfd_events_reply) \
+    _(BFD_MSG_ID(BFD_UDP_ADD_V2_REPLY), bfd_udp_add_v2_reply) \
+    _(BFD_MSG_ID(BFD_UDP_DEL_V2_REPLY), bfd_udp_del_v2_reply) \
+    _(BFD_MSG_ID(BFD_UDP_SESSION_EVENT_V2), bfd_udp_session_event_v2) \
+    _(BFD_MSG_ID(WANT_BFD_EVENTS_V2), want_bfd_events_v2_reply) \
 
 
 static u16 interface_msg_id_base, ip_msg_id_base, ip_nbr_msg_id_base, lcp_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
@@ -2762,7 +2762,7 @@ int l2fib_flush_int(const char *hwif_name)
             return -EINVAL;
         }
     }
-    else if (!multihop)
+    else
     {
         VPP_UNLOCK();
         return -EINVAL;
@@ -2813,7 +2813,7 @@ int bfd_udp_add(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
                 uint32_t desired_min_tx, uint32_t required_min_rx)
 {
     vat_main_t *vam = &vat_main;
-    vl_api_bfd_udp_add_t* mp;
+    vl_api_bfd_udp_add_v2_t* mp;
 
     int ret;
 
@@ -2821,7 +2821,7 @@ int bfd_udp_add(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
 
     __plugin_msg_base = bfd_msg_id_base;
 
-    M (BFD_UDP_ADD, mp);
+    M (BFD_UDP_ADD_V2, mp);
 
     if (hwif_name)
     {
@@ -2867,7 +2867,7 @@ int bfd_udp_add(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -2878,7 +2878,7 @@ int bfd_udp_del(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
                 vpp_ip_addr_t *peer_addr)
 {
     vat_main_t *vam = &vat_main;
-    vl_api_bfd_udp_del_t* mp;
+    vl_api_bfd_udp_del_v2_t* mp;
 
     int ret;
 
@@ -2886,7 +2886,7 @@ int bfd_udp_del(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
 
     __plugin_msg_base = bfd_msg_id_base;
 
-    M (BFD_UDP_DEL, mp);
+    M (BFD_UDP_DEL_V2, mp);
 
     if (hwif_name)
     {
@@ -2904,7 +2904,7 @@ int bfd_udp_del(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
             return -EINVAL;
         }
     }
-    else
+    else if (!multihop)
     {
         VPP_UNLOCK();
         return -EINVAL;
@@ -2928,7 +2928,7 @@ int bfd_udp_del(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -2938,14 +2938,14 @@ int bfd_udp_del(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
 static int vpp_bfd_events_enable_disable (bool enable)
 {
     vat_main_t *vam = &vat_main;
-    vl_api_want_bfd_events_t *mp;
+    vl_api_want_bfd_events_v2_t *mp;
     int ret;
 
     VPP_LOCK();
 
     __plugin_msg_base = bfd_msg_id_base;
 
-    M (WANT_BFD_EVENTS, mp);
+    M (WANT_BFD_EVENTS_V2, mp);
     mp->enable_disable = enable;
     mp->pid = htonl(getpid());
 
