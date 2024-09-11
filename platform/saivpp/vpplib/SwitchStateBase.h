@@ -52,7 +52,9 @@
         snprintf(buffer, 512, msg, ##__VA_ARGS__); \
         SWSS_LOG_ERROR("%s: status %d", buffer, status); \
         return _status; } }
-
+#define CHECK_STATUS_QUIET(status) {                                  \
+    sai_status_t _status = (status);                            \
+    if (_status != SAI_STATUS_SUCCESS) { return _status; } }
 typedef struct vpp_ace_cntr_info_ {
     sai_object_id_t tbl_oid;
     sai_object_id_t ace_oid;
@@ -390,7 +392,7 @@ namespace saivpp
                               _In_ sai_attr_id_t attr_id,
                              _Inout_ sai_s32_list_t *enum_values_capability);
 
-            std::shared_ptr<SaiObject> get_sai_object(
+            std::shared_ptr<SaiDBObject> get_sai_object(
                     _In_ sai_object_type_t object_type,
                     _In_ const std::string &serialized_object_id);
         protected:
@@ -782,21 +784,12 @@ namespace saivpp
 	    std::unordered_map<std::string, std::string> lpbIpToHostIfMap;
 	    std::unordered_map<std::string, std::string> lpbIpToIfMap;
             std::unordered_map<std::string, std::string> lpbHostIfToVppIfMap;
-
-            std::map<sai_object_id_t, std::list<sai_object_id_t>> m_nxthop_grp_mbr_map;
-
         protected:
-            sai_status_t NexthopGrpRemove(
-                _In_ const std::string &serializedObjectId);
-
-            sai_status_t NexthopGrpMemberRemove(
-                _In_ const std::string &serializedObjectId);
-
-            sai_status_t NexthopGrpMemberAdd(
-                _In_ const std::string &serializedObjectId,
-                _In_ sai_object_id_t switch_id,
-                _In_ uint32_t attr_count,
-                _In_ const sai_attribute_t *attr_list);
+            sai_status_t fillNHGrpMember(
+                nexthop_grp_member_t *nxt_grp_member, 
+                sai_object_id_t next_hop_oid, 
+                uint32_t next_hop_weight, 
+                uint32_t next_hop_sequence);
 
             sai_status_t IpRouteNexthopGroupEntry(
                 _In_ sai_object_id_t next_hop_grp_oid,
