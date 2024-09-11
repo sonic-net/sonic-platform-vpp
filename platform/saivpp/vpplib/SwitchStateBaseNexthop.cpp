@@ -51,7 +51,7 @@ sai_status_t SwitchStateBase::IpRouteNexthopGroupEntry(
         return SAI_STATUS_FAILURE;        
     }
     
-    CHECK_STATUS_QUIET(nhg_obj->get_manditory_attr(attr));
+    CHECK_STATUS_QUIET(nhg_obj->get_mandatory_attr(attr));
     if (attr.value.s32 != SAI_NEXT_HOP_GROUP_TYPE_DYNAMIC_UNORDERED_ECMP &&
         attr.value.s32 != SAI_NEXT_HOP_GROUP_TYPE_DYNAMIC_ORDERED_ECMP) {
         SWSS_LOG_ERROR("Unsupported type (%d) in nexthop group %s", attr.value.s32, nhg_soid.c_str());
@@ -75,7 +75,7 @@ sai_status_t SwitchStateBase::IpRouteNexthopGroupEntry(
         nexthop_grp_member_t mbr;
         
         attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_ID;
-        CHECK_STATUS_QUIET(member_obj->get_manditory_attr(attr));
+        CHECK_STATUS_QUIET(member_obj->get_mandatory_attr(attr));
         next_hop_oid = attr.value.oid;
 
         attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_WEIGHT;
@@ -87,7 +87,7 @@ sai_status_t SwitchStateBase::IpRouteNexthopGroupEntry(
 
         if (group_type == SAI_NEXT_HOP_GROUP_TYPE_DYNAMIC_ORDERED_ECMP) {
             attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_SEQUENCE_ID;
-            CHECK_STATUS_QUIET(member_obj->get_manditory_attr(attr));
+            CHECK_STATUS_QUIET(member_obj->get_mandatory_attr(attr));
             next_hop_sequence = attr.value.u32;
         }
         else {
@@ -186,7 +186,7 @@ SwitchStateBase::fillNHGrpMember(nexthop_grp_member_t *nxt_grp_member, sai_objec
     }
     
     attr.id = SAI_NEXT_HOP_ATTR_TYPE;
-    CHECK_STATUS_QUIET(nh_obj->get_manditory_attr(attr));
+    CHECK_STATUS_QUIET(nh_obj->get_mandatory_attr(attr));
     int32_t next_hop_type = attr.value.s32;
     if (next_hop_type != SAI_NEXT_HOP_TYPE_IP && next_hop_type != SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP) {
         return SAI_STATUS_NOT_IMPLEMENTED;
@@ -194,7 +194,7 @@ SwitchStateBase::fillNHGrpMember(nexthop_grp_member_t *nxt_grp_member, sai_objec
 
     attr.id = SAI_NEXT_HOP_ATTR_IP;
     sai_ip_address_t ip_address;
-    CHECK_STATUS_QUIET(nh_obj->get_manditory_attr(attr));
+    CHECK_STATUS_QUIET(nh_obj->get_mandatory_attr(attr));
     ip_address = attr.value.ipaddr;
 
     nxt_grp_member->addr = ip_address;

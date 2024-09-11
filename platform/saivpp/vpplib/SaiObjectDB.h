@@ -46,7 +46,7 @@ namespace saivpp
         virtual sai_status_t get_attr(_Out_ sai_attribute_t &attr) const = 0;
 
         // Get the manditory attribute of the object. If not found, log an error and return SAI_STATUS_FAILURE
-        virtual sai_status_t get_manditory_attr(_Out_ sai_attribute_t &attr) const = 0;
+        virtual sai_status_t get_mandatory_attr(_Out_ sai_attribute_t &attr) const = 0;
 
         const std::string& get_id() const { return m_id; }
 
@@ -104,7 +104,7 @@ namespace saivpp
          * @param attr [out] A reference to the sai_attribute_t structure to store the attribute value.
          * @return sai_status_t The status of the attribute retrieval operation.
          */
-        sai_status_t get_manditory_attr(_Out_ sai_attribute_t &attr) const override;
+        sai_status_t get_mandatory_attr(_Out_ sai_attribute_t &attr) const override;
 
     private:
         /**< The number of attributes associated with the SAI object. */
@@ -152,7 +152,7 @@ namespace saivpp
          * @param attr [out] A reference to the sai_attribute_t structure to store the attribute value.
          * @return sai_status_t The status of the attribute retrieval operation.
          */
-        sai_status_t get_manditory_attr(_Out_ sai_attribute_t &attr) const override;
+        sai_status_t get_mandatory_attr(_Out_ sai_attribute_t &attr) const override;
 
         /**
          * @brief Retrieves the child objects of the specified type.

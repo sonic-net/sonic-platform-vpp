@@ -305,7 +305,7 @@ SaiCachedObject::get_attr(sai_attribute_t &attr) const
 }
 
 sai_status_t 
-SaiCachedObject::get_manditory_attr(sai_attribute_t &attr) const 
+SaiCachedObject::get_mandatory_attr(sai_attribute_t &attr) const 
 {
     for (uint32_t ii = 0; ii < m_attr_count; ii++) {
         if (m_attr_list[ii].id == attr.id) {
@@ -324,7 +324,7 @@ SaiDBObject::get_attr(sai_attribute_t &attr) const
 }
 
 sai_status_t
-SaiDBObject::get_manditory_attr(sai_attribute_t &attr) const 
+SaiDBObject::get_mandatory_attr(sai_attribute_t &attr) const 
 {
     /* we could make a copy of all the attributes and cache in this object*/
     auto status = m_switch_db->get(m_type, m_id, 1, &attr);
