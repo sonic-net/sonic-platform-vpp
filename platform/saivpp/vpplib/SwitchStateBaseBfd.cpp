@@ -109,15 +109,13 @@ sai_status_t SwitchStateBase::vpp_bfd_session_add(
     vpp_ip_addr_t vpp_peer_addr;
     sai_ip_address_t_to_vpp_ip_addr_t(peer_addr, vpp_peer_addr);
 
-    /* Attribute#6 */
+    /* Attribute#6 - multihop is optional */
+    bool multihop = false;
     attr = sai_metadata_get_attr_by_id(SAI_BFD_SESSION_ATTR_MULTIHOP, attr_count, attr_list);
-    if (!attr)
+    if (attr)
     {
-        SWSS_LOG_ERROR("attr SAI_BFD_SESSION_ATTR_MULTIHOP was not passed");
-        return SAI_STATUS_FAILURE;
+        multihop = attr->value.booldata;
     }
-
-    bool multihop = attr->value.booldata;
     
     const char *hwif_name = NULL;
     if (!multihop) {
@@ -209,10 +207,13 @@ sai_status_t SwitchStateBase::vpp_bfd_session_del(
     /* Peer Addr*/
     sai_ip_address_t_to_vpp_ip_addr_t(peer_addr, vpp_peer_addr);
 
-    /* Attribute#3 */
+    /* Attribute#3 - multihop is optional */
+    bool multihop = false;
     attr.id = SAI_BFD_SESSION_ATTR_MULTIHOP;
-    CHECK_STATUS(get(SAI_OBJECT_TYPE_BFD_SESSION, bfd_oid, 1, &attr));
-    bool multihop = attr.value.booldata;
+    if(get(SAI_OBJECT_TYPE_BFD_SESSION, bfd_oid, 1, &attr) == SAI_STATUS_SUCCESS)
+    {
+        multihop = attr.value.booldata;
+    }
     
     const char *hwif_name = NULL;
     if (!multihop) {
@@ -283,9 +284,9 @@ void SwitchStateBase::update_bfd_session_state(
 
     if (status != SAI_STATUS_SUCCESS)
     {
-        SWSS_LOG_ERROR("failed to update bfd state %s: %s",
+        SWSS_LOG_ERROR("failed to update bfd state %s: %d",
                 sai_serialize_object_id(bfd_oid).c_str(),
-                sai_serialize_bfd_session_state(data.state).c_str());
+                state);
     }
 }
 
@@ -296,10 +297,13 @@ void SwitchStateBase::send_bfd_state_change_notification(
 {
     SWSS_LOG_ENTER();
 
-   sai_bfd_session_state_notification_t data;
+    char state_buf[64] = {0};
+    sai_bfd_session_state_notification_t data;
 
     data.bfd_session_id = bfd_oid;
     data.session_state = state;
+
+    sai_serialize_bfd_session_state(state_buf, state);
 
     auto meta = getMeta();
 
@@ -332,7 +336,7 @@ void SwitchStateBase::send_bfd_state_change_notification(
         {
             SWSS_LOG_NOTICE("explicitly send SAI_SWITCH_ATTR_BFD_SESSION_STATE_CHANGE_NOTIFY for bfd session %s: %s",
                     sai_serialize_object_id(data.bfd_session_id).c_str(),
-                    sai_serialize_bfd_session_state(data.state).c_str());
+                    state_buf);
 
         }
         else if ((sai_bfd_session_state_t)attr.value.s32 == data.session_state)
@@ -365,7 +369,7 @@ void SwitchStateBase::send_bfd_state_change_notification(
 
     SWSS_LOG_NOTICE("send event SAI_SWITCH_ATTR_BFD_SESSION_STATE_CHANGE_NOTIFY for bfd session %s: %s",
             sai_serialize_object_id(bfd_oid).c_str(),
-            sai_serialize_bfd_session_state(data.state).c_str());
+            state_buf);
 
     auto str = sai_serialize_bfd_session_state_ntf(1, &data);
 
