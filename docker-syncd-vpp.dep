@@ -27,7 +27,7 @@
 
 #DPKG FRK
 DPATH       := $($(DOCKER_SYNCD_BASE)_PATH)
-DEP_FILES   := $(SONIC_COMMON_FILES_LIST) platform/vs/docker-syncd-vs.mk platform/vs/docker-syncd-vs.dep   
+DEP_FILES   := $(SONIC_COMMON_FILES_LIST) platform/vpp/docker-syncd-vpp.mk platform/vpp/docker-syncd-vpp.dep   
 DEP_FILES   += $(SONIC_COMMON_BASE_FILES_LIST)
 DEP_FILES   += $(shell git ls-files $(DPATH))
 

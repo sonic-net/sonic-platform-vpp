@@ -1,0 +1,5 @@
+[submodule "saivpp/SAI"]
+	path = saivpp/SAI
+	url = https://github.com/opencomputeproject/SAI.git
+	branch = v1.3
+        ignore = dirty

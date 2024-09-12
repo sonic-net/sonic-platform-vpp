@@ -11,8 +11,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-SPATH       := $(VPPINFRA)_SRC_PATH/$(VPP_REPO_DIR)
-DEP_FILES   := $(SONIC_COMMON_FILES_LIST) platform/vpp/vpp.mk platform/vpp/vpp.dep $(VPPINFRA)_SRC_PATH/Makefile
+SPATH       := $($(LIBSAIVPP)_SRC_PATH)
+DEP_FILES   := $(SONIC_COMMON_FILES_LIST) platform/vpp/saivpp.mk platform/vpp/saivpp.dep
 DEP_FILES   += $(SONIC_COMMON_BASE_FILES_LIST)
 DEP_FILES   += $(shell git ls-files $(SPATH))
 
