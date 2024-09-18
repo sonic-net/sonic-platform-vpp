@@ -9,30 +9,10 @@ Package: libsaivpp
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Pre-Depends}
 Section: libs
-Build-Profiles: <!stub>
-Conflicts: libsaivppstub
-Replaces: libsaivppstub
 Description: This package contains VPP SAI implementation for SONiC project.
 
 Package: libsaivpp-dev
 Architecture: any
 Depends: libsaivpp (= ${binary:Version})
 Section: libdevel
-Build-Profiles: <!stub>
-Conflicts: libsaivppstub-dev
-Replaces: libsaivppstub-dev
 Description: This package contains development files for SAI-VPP.
-
-Package: libsaivppstub
-Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Pre-Depends}
-Section: libs
-Build-Profiles: <stub>
-Description: This package contains VPP SAI stub implementation for SONiC project.
-
-Package: libsaivppstub-dev
-Architecture: any
-Depends: libsaivppstub (= ${binary:Version})
-Build-Profiles: <stub>
-Section: libdevel
-Description: This package contains development files for SAI-VPP stub.

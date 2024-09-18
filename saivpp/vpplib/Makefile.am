@@ -1,6 +1,6 @@
 SUBDIRS = vppxlate
 
-AM_CXXFLAGS = $(SAIINC) -I$(top_srcdir)/lib
+AM_CXXFLAGS = $(SAIINC) -I$(top_srcdir)/lib -I/usr/include/sai
 
 lib_LTLIBRARIES = libsaivpp.la
 
@@ -71,8 +71,11 @@ libSaiVPP_a_SOURCES = \
 
 BUILT_SOURCES = sai_vpp.cpp
 
-sai_vpp.cpp: $(SRC_PATH)/sonic-sairedis/stub.pl $(top_srcdir)/SAI/meta/saimetadata.c
-	$(SRC_PATH)/sonic-sairedis/stub.pl -d ../SAI/ -c Sai -n saivpp -f sai_vpp.cpp -s stub
+sai_vpp.cpp: /sonic/src/sonic-sairedis/stub.pl $(top_srcdir)/SAI/meta/saimetadata.c
+	/sonic/src/sonic-sairedis/stub.pl -d ../SAI/ -c Sai -n saivpp -f sai_vpp.cpp -s stub
+
+$(top_srcdir)/SAI/meta/saimetadata.c $(top_srcdir)/SAI/meta/saimetadata.h: 
+	$(MAKE) -C $(top_srcdir)/SAI/meta saimetadata.c
 
 clean-local:
 	rm -f sai_vpp.cpp

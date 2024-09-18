@@ -1,3 +1,3 @@
-SUBDIRS = vpplib vpplibstub
+SUBDIRS = vpplib
 
 ACLOCAL_AMFLAGS = -I m4

@@ -11,18 +11,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# libvpp package
+# libsaivpp package
 LIBSAIVPP_VERSION = 1.0.0
-LIBSAIVPP_NAME = libsaivpp
+LIBSAIVPP_NAME = libsai
 LIBSAIVPP = $(LIBSAIVPP_NAME)_$(LIBSAIVPP_VERSION)_$(CONFIGURED_ARCH).deb
 $(LIBSAIVPP)_SRC_PATH = platform/vpp/saivpp
 $(LIBSAIVPP)_VERSION = $(LIBSAIVPP_VERSION)
-$(LIBSAIVPP)_DEPENDS += $(LIBSWSSCOMMON_DEV) $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK) \
+# It seems libsairedis is built without libsai in the dependencies. Can we still use meta from sairedis?
+$(LIBSAIVPP)_DEPENDS += $(LIBSWSSCOMMON_DEV) $(LIBSAIMETADATA_DEV) $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK) \
 	$(VPP_PLUGIN_DEV) $(VPP_DEV) $(VPPINFRA_DEV) $(VPPDBG)
-$(LIBSAIVPP)_RDEPENDS += $(LIBSWSSCOMMON)
+$(LIBSAIVPP)_RDEPENDS += $(LIBSWSSCOMMON) $(LIBSAIMETADATA) $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK) \
+	$(VPP_PLUGIN_DEV) $(VPP_DEV) $(VPPINFRA_DEV) $(VPPDBG)
 $(LIBSAIVPP)_DEB_BUILD_OPTIONS = nocheck
 SONIC_DPKG_DEBS += $(LIBSAIVPP)
-$(LIBSAIREDIS)_DEPENDS += $(LIBSAIVPP)
 
 LIBSAIVPP_DEV = $(LIBSAIVPP_NAME)-dev_$(LIBSAIVPP_VERSION)_$(CONFIGURED_ARCH).deb
 $(eval $(call add_derived_package,$(LIBSAIVPP),$(LIBSAIVPP_DEV)))

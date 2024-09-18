@@ -14,7 +14,7 @@ AX_ADD_AM_MACRO_STATIC([])
 LDFLAGS="-Wl,--no-undefined $LDFLAGS"
 AC_SUBST([LDFLAGS])
 
-AC_SUBST(SAIINC, "-I\$(top_srcdir)/SAI/inc -I\$(top_srcdir)/SAI/meta")
+AC_SUBST(SAIINC, "-I\$(top_srcdir)/SAI/inc -I\$(top_srcdir)/SAI/experimental -I\$(top_srcdir)/SAI/meta")
 
 AC_ARG_ENABLE(debug,
 [  --enable-debug       Compile with debugging flags],
@@ -74,7 +74,6 @@ AC_SUBST(CFLAGS_COMMON)
 AC_CONFIG_FILES([
     Makefile
     vpplib/Makefile
-	vpplibstub/Makefile
 ])
 
 AC_OUTPUT

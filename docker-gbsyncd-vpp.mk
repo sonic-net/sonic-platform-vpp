@@ -17,7 +17,8 @@
 DOCKER_GBSYNCD_PLATFORM_CODE = vpp
 include $(PLATFORM_PATH)/../template/docker-gbsyncd-bookworm.mk
 
-$(DOCKER_GBSYNCD_BASE)_DEPENDS += $(SYNCD_VPP)
+$(DOCKER_GBSYNCD_BASE)_DEPENDS += $(LIBSAIVPP) \
+                                $(SYNCD)
 
 $(DOCKER_GBSYNCD_BASE)_DBG_DEPENDS += $(SYNCD_VPP_DBG) \
                                 $(LIBSWSSCOMMON_DBG) \

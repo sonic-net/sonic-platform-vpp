@@ -13,9 +13,9 @@
 # limitations under the License.
 include $(PLATFORM_PATH)/vpp.mk
 include $(PLATFORM_PATH)/saivpp.mk
-include $(PLATFORM_PATH)/syncd-vpp.mk
+#include $(PLATFORM_PATH)/syncd-vpp.mk
 include $(PLATFORM_PATH)/sonic-version.mk
-include $(PLATFORM_PATH)/docker-sonic-vpp.mk
+#include $(PLATFORM_PATH)/docker-sonic-vpp.mk
 include $(PLATFORM_PATH)/docker-syncd-vpp.mk
 include $(PLATFORM_PATH)/docker-gbsyncd-vpp.mk
 include $(PLATFORM_PATH)/docker-ptf.mk
