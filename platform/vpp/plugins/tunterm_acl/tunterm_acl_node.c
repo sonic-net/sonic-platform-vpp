@@ -19,7 +19,6 @@
 #include <vppinfra/error.h>
 #include <tunterm_acl/tunterm_acl_api.h>
 #include <vxlan/vxlan_packet.h>
-
 typedef struct
 {
   u32 sw_if_index;
@@ -119,7 +118,8 @@ VLIB_NODE_FN(tunterm_acl_node) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib
             u16 ethertype = (etype[0] << 8) | etype[1];
 
             if (ethertype == 0x86DD) {
-                next0 = TUNTERM_ACL_NEXT_VXLAN4_INPUT; // Note we send to vxlan4-input not vxlan6-input as outer vxlan is v4
+                // Note we send to vxlan4-input not vxlan6-input as outer vxlan is v4
+                next0 = TUNTERM_ACL_NEXT_VXLAN4_INPUT;
                 next_rewrite = TUNTERM_ACL_NEXT_IP6_REWRITE;
                 table_index = tunterm_acl_main.classify_table_index_by_sw_if_index_v6[sw_if_index0];
             } else if (ethertype == 0x0800) {
@@ -184,7 +184,6 @@ exit:
     return frame->n_vectors;
 }
 
-/* *INDENT-OFF* */
 VLIB_REGISTER_NODE (tunterm_acl_node) =
 {
   .name = "tunterm-acl",
@@ -205,7 +204,6 @@ VLIB_REGISTER_NODE (tunterm_acl_node) =
     [TUNTERM_ACL_NEXT_IP6_REWRITE] = "ip6-rewrite",
   },
 };
-/* *INDENT-ON* */
 
 /*
  * fd.io coding-style-patch-verification: ON

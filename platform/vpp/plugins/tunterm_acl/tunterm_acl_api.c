@@ -30,15 +30,6 @@
 #define REPLY_MSG_ID_BASE sm->msg_id_base
 #include <vlibapi/api_helper_macros.h>
 
-/* *INDENT-OFF* */
-VLIB_PLUGIN_REGISTER () = {
-    .version = TUNTERM_ACL_PLUGIN_BUILD_VER,
-    .description = "Tunnel Terminated ACL Plugin",
-};
-/* *INDENT-ON* */
-
-tunterm_acl_main_t tunterm_acl_main;
-
 #include <vnet/classify/vnet_classify.h>
 #include <vnet/ip/ip4_packet.h>
 #include <vppinfra/string.h>
@@ -48,6 +39,13 @@ tunterm_acl_main_t tunterm_acl_main;
 #include <vnet/ip/ip_types_api.h>
 
 #include "tunterm_acl_redirect.h"
+
+VLIB_PLUGIN_REGISTER () = {
+    .version = TUNTERM_ACL_PLUGIN_BUILD_VER,
+    .description = "Tunnel Terminated ACL Plugin",
+};
+
+tunterm_acl_main_t tunterm_acl_main;
 
 static int update_classify_table_and_sessions (bool is_ipv6, u32 count, vl_api_tunterm_acl_rule_t rules[], u32 * tunterm_acl_index)
 {
@@ -187,9 +185,6 @@ verify_message_len (void *mp, u64 expected_len, char  *where)
   }
 }
 
-/**
- * @brief Plugin API message handler.
- */
 static void
 vl_api_tunterm_acl_add_replace_t_handler (vl_api_tunterm_acl_add_replace_t * mp)
 {
@@ -277,7 +272,7 @@ vl_api_tunterm_acl_interface_add_del_t_handler (vl_api_tunterm_acl_interface_add
     goto exit;
   }
 
-  /* make sure both are init as you can get v6 packets while only v4 acl installed. node will do a lookup in v6 table and crash otherwise */
+  /* make sure both are init as you can get v6 packets while only v4 acl installed */
   vec_validate_init_empty (sm->classify_table_index_by_sw_if_index_v6, sw_if_index, ~0);
   vec_validate_init_empty (sm->classify_table_index_by_sw_if_index_v4, sw_if_index, ~0);
 
@@ -331,16 +326,12 @@ exit:
 /* API definitions */
 #include <tunterm_acl/tunterm_acl.api.c>
 
-/**
- * @brief Initialize the tunterm plugin.
- */
 static clib_error_t * tunterm_acl_init (vlib_main_t * vm)
 {
   tunterm_acl_main_t * sm = &tunterm_acl_main;
 
   sm->vnet_main =  vnet_get_main ();
 
-  /* Add our API messages to the global name_crc hash table */
   sm->msg_id_base = setup_message_id_table ();
 
   return tunterm_acl_redirect_init(vm);

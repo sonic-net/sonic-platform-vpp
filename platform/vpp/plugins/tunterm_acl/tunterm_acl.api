@@ -45,7 +45,7 @@ define tunterm_acl_add_replace
 
 /** \brief Reply to add/replace tunterm acl
     @param context - returned sender context, to match reply w/ request
-    @param tunterm_acl_index - index of the updated or newly created tunterm acl 
+    @param tunterm_acl_index - index of the updated or newly created tunterm acl
     @param retval 0 - no error
 */
 
