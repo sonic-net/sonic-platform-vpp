@@ -30,7 +30,8 @@ namespace saivpp
       move SaiObjectDB to SwitchState. When we need to read an object, such as get_linked_object, get it from m_objectHash in SwitchState
     */
     class SwitchStateBase;
-
+    class SaiDBObject;
+    
     /*
       SaiObject is the base class for all objects in the SaiObjectDB.
       It represents a generic SAI object with a type, serialized ID, and associated attributes.
@@ -44,17 +45,25 @@ namespace saivpp
 
         virtual sai_status_t get_attr(_Out_ sai_attribute_t &attr) const = 0;
 
+        // Get the manditory attribute of the object. If not found, log an error and return SAI_STATUS_FAILURE
+        virtual sai_status_t get_mandatory_attr(_Out_ sai_attribute_t &attr) const = 0;
+
         const std::string& get_id() const { return m_id; }
 
         sai_object_type_t get_type() const { return m_type; }
 
-        std::shared_ptr<SaiObject> get_linked_object(_In_ sai_object_type_t linked_object_type, _In_ sai_attr_id_t link_attr_id) const;
-        std::vector<std::shared_ptr<SaiObject>> get_linked_objects(_In_ sai_object_type_t linked_object_type, _In_ sai_attr_id_t link_attr_id) const;
+        std::shared_ptr<SaiDBObject> get_linked_object(_In_ sai_object_type_t linked_object_type, _In_ sai_attr_id_t link_attr_id) const;
+
+        std::vector<std::shared_ptr<SaiDBObject>> get_linked_objects(_In_ sai_object_type_t linked_object_type, _In_ sai_attr_id_t link_attr_id) const;
+
+        // Get the attribute name from the attribute ID
+        const char* get_attr_name(_In_ sai_attr_id_t attr_id) const;
     protected:
         SwitchStateBase* m_switch_db;
         sai_object_type_t m_type;    
         std::string m_id;
     };
+    
     /**
      * @brief The SaiCachedObject class represents a SAI object that has not been created in the SaiObjectDB. This is typically
      * used for objects that are being created through the SAI API.
@@ -87,6 +96,15 @@ namespace saivpp
          * @return sai_status_t The status of the attribute retrieval operation.
          */
         sai_status_t get_attr(_Out_ sai_attribute_t &attr) const override;
+
+        /**
+         * @brief Retrieves the value of a specific attribute of the SAI object. If the attribute is not found, log an error and 
+         *        return SAI_STATUS_FAILURE.
+         * 
+         * @param attr [out] A reference to the sai_attribute_t structure to store the attribute value.
+         * @return sai_status_t The status of the attribute retrieval operation.
+         */
+        sai_status_t get_mandatory_attr(_Out_ sai_attribute_t &attr) const override;
 
     private:
         /**< The number of attributes associated with the SAI object. */
@@ -126,6 +144,15 @@ namespace saivpp
          * @return The status of the operation.
          */
         sai_status_t get_attr(_Out_ sai_attribute_t &attr) const override;
+        
+        /**
+         * @brief Retrieves the value of a specific attribute of the SAI object. If the attribute is not found, log an error and 
+         *        return SAI_STATUS_FAILURE.
+         * 
+         * @param attr [out] A reference to the sai_attribute_t structure to store the attribute value.
+         * @return sai_status_t The status of the attribute retrieval operation.
+         */
+        sai_status_t get_mandatory_attr(_Out_ sai_attribute_t &attr) const override;
 
         /**
          * @brief Retrieves the child objects of the specified type.
@@ -240,7 +267,7 @@ namespace saivpp
          * @param id The ID of the SAI object.
          * @return A shared pointer to the SAI object, or nullptr if the object is not found.
          */
-        std::shared_ptr<SaiObject> get(
+        std::shared_ptr<SaiDBObject> get(
                     _In_ sai_object_type_t object_type,
                     _In_ const std::string& id);
 
