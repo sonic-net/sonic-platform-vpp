@@ -22,7 +22,7 @@ extern "C" {
 #include "SaiAttrWrap.h"
 #include "SwitchConfig.h"
 
-#include "meta/Meta.h"
+#include "Meta.h"
 
 #include "swss/selectableevent.h"
 

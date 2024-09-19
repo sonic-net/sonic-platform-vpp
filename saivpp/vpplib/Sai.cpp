@@ -24,7 +24,7 @@
 #include "ResourceLimiterParser.h"
 #include "CorePortIndexMapFileParser.h"
 #include "ContextConfigContainer.h"
-
+#include "saiversion.h"
 #include "swss/logger.h"
 
 #include "swss/notificationconsumer.h"
@@ -879,13 +879,8 @@ sai_status_t Sai::queryApiVersion(
     MUTEX();
     SWSS_LOG_ENTER();
 
-    if (!m_apiInitialized)
-    {
-        SWSS_LOG_ERROR("%s: SAI API not initialized", __PRETTY_FUNCTION__);
-
-        return SAI_NULL_OBJECT_ID;
-    }
-
-    return m_meta->queryApiVersion(version);
+    *version = SAI_API_VERSION;
+    
+    return SAI_STATUS_SUCCESS;
 }
 

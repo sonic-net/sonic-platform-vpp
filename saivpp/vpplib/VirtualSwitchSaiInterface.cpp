@@ -20,17 +20,16 @@
 #include "swss/exec.h"
 #include "swss/converter.h"
 
-#include "meta/sai_serialize.h"
-#include "meta/SaiAttributeList.h"
-#include "meta/PerformanceIntervalTimer.h"
-#include "meta/Globals.h"
+#include "sai_serialize.h"
+#include "SaiAttributeList.h"
+#include "Globals.h"
 
 #include "SwitchStateBase.h"
 #include "SwitchBCM81724.h"
 #include "SwitchBCM56850.h"
 #include "SwitchBCM56971B0.h"
 #include "SwitchMLNX2700.h"
-
+#include "saiversion.h"
 #include <inttypes.h>
 #include "vppxlate/SaiIntfStats.h"
 
@@ -43,7 +42,6 @@
 
 using namespace saivpp;
 using namespace saimeta;
-using namespace sairediscommon;
 
 
 bool VirtualSwitchSaiInterface::port_to_hostif_list(sai_object_id_t port_id, std::string& if_name)
@@ -512,17 +510,12 @@ sai_status_t VirtualSwitchSaiInterface::create(                 \
         _In_ const sai_attribute_t *attr_list)                  \
 {                                                               \
     SWSS_LOG_ENTER();                                           \
-    static PerformanceIntervalTimer                             \
-    timer("VirtualSwitchSaiInterface::create(" #ot ")");        \
-    timer.start();                                              \
     auto status =  create(                                      \
             entry->switch_id,                                   \
             (sai_object_type_t)SAI_OBJECT_TYPE_ ## OT,          \
             sai_serialize_ ## ot(*entry),                       \
             attr_count,                                         \
             attr_list);                                         \
-    timer.stop();                                               \
-    timer.inc();                                                \
     return status;                                              \
 }
 
@@ -1345,7 +1338,6 @@ sai_status_t VirtualSwitchSaiInterface::queryApiVersion(
     if (version)
     {
         *version = SAI_API_VERSION;
-
         return SAI_STATUS_SUCCESS;
     }
 

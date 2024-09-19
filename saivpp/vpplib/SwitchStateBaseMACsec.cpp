@@ -15,7 +15,7 @@
  */
 #include "MACsecAttr.h"
 #include "SwitchStateBase.h"
-#include "meta/sai_serialize.h"
+#include "sai_serialize.h"
 
 #include "swss/exec.h"
 #include "swss/logger.h"

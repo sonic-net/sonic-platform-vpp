@@ -22,7 +22,7 @@
 
 #include "swss/logger.h"
 
-#include "meta/sai_serialize.h"
+#include "sai_serialize.h"
 
 #include <netlink/route/link.h>
 #include <netlink/route/addr.h>

@@ -19,8 +19,8 @@
 #include "swss/exec.h"
 #include "swss/converter.h"
 
-#include "meta/sai_serialize.h"
-#include "meta/NotificationPortStateChange.h"
+#include "sai_serialize.h"
+#include "NotificationPortStateChange.h"
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>

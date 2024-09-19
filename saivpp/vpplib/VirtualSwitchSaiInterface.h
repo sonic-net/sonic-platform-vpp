@@ -24,9 +24,9 @@
 #include "EventPayloadNetLinkMsg.h"
 #include "ContextConfig.h"
 
-#include "meta/SaiInterface.h"
+#include "SaiInterface.h"
 
-#include "meta/Meta.h"
+#include "Meta.h"
 
 #include <string>
 #include <vector>

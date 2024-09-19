@@ -21,7 +21,7 @@ extern "C"{
 
 #include "EventPayload.h"
 
-#include "meta/Notification.h"
+#include "Notification.h"
 
 namespace saivpp
 {

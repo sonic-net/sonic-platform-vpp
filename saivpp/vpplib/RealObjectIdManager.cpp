@@ -15,7 +15,7 @@
  */
 #include "RealObjectIdManager.h"
 
-#include "meta/sai_serialize.h"
+#include "sai_serialize.h"
 #include "swss/logger.h"
 
 extern "C" {

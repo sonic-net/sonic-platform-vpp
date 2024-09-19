@@ -21,7 +21,7 @@
 #include "swss/logger.h"
 #include "swss/select.h"
 
-#include "meta/sai_serialize.h"
+#include "sai_serialize.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>

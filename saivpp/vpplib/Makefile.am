@@ -1,8 +1,8 @@
 SUBDIRS = vppxlate
 
-AM_CXXFLAGS = $(SAIINC) -I$(top_srcdir)/lib -I/usr/include/sai
+AM_CXXFLAGS = $(SAIINC) -I/usr/include/sai -I/usr/include/libnl3
 
-lib_LTLIBRARIES = libsaivpp.la
+lib_LTLIBRARIES = libsai.la
 
 noinst_LIBRARIES = libSaiVPP.a
 
@@ -60,6 +60,7 @@ libSaiVPP_a_SOURCES = \
 					  SwitchStateBaseNexthop.cpp \
 					  SwitchStateBaseAcl.cpp \
 					  SwitchStateBaseMACsec.cpp \
+					  SwitchStateBaseBfd.cpp \
 					  SwitchState.cpp \
 					  TrafficFilterPipes.cpp \
 					  TrafficForwarder.cpp \
@@ -73,6 +74,8 @@ BUILT_SOURCES = sai_vpp.cpp
 
 sai_vpp.cpp: /sonic/src/sonic-sairedis/stub.pl $(top_srcdir)/SAI/meta/saimetadata.c
 	/sonic/src/sonic-sairedis/stub.pl -d ../SAI/ -c Sai -n saivpp -f sai_vpp.cpp -s stub
+	sed -i 's|#include "meta/SaiInterface.h"|#include "SaiInterface.h"|' sai_vpp.cpp
+
 
 $(top_srcdir)/SAI/meta/saimetadata.c $(top_srcdir)/SAI/meta/saimetadata.h: 
 	$(MAKE) -C $(top_srcdir)/SAI/meta saimetadata.c
@@ -80,9 +83,10 @@ $(top_srcdir)/SAI/meta/saimetadata.c $(top_srcdir)/SAI/meta/saimetadata.h:
 clean-local:
 	rm -f sai_vpp.cpp
 
-libsaivpp_la_SOURCES = sai_vpp.cpp
+libsai_la_SOURCES = sai_vpp.cpp
 
-VPP_LIBS        = -lvapiclient
+VPP_LIBS        = -lvlibapi
+VPP_LIBS        += -lvapiclient
 VPP_LIBS        += -lvppapiclient
 VPP_LIBS        += -lvlibmemoryclient
 VPP_LIBS        += -lsvm
@@ -93,14 +97,14 @@ VPP_LIBS        += -lvatplugin
 libSaiVPP_a_CPPFLAGS = $(CODE_COVERAGE_CPPFLAGS)
 libSaiVPP_a_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) $(CODE_COVERAGE_CXXFLAGS)
 
-libsaivpp_la_CPPFLAGS = $(CODE_COVERAGE_CPPFLAGS)
-libsaivpp_la_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) $(CODE_COVERAGE_CXXFLAGS)
-libsaivpp_la_LIBADD = -lhiredis -lswsscommon libSaiVPP.a $(CODE_COVERAGE_LIBS) ./vppxlate/libvppxlate.a $(VPP_LIBS)
+libsai_la_CPPFLAGS = $(CODE_COVERAGE_CPPFLAGS)
+libsai_la_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) $(CODE_COVERßAGE_CXXFLAGS)
+libsai_la_LIBADD = -lhiredis -lswsscommon libSaiVPP.a $(CODE_COVERAGE_LIBS) -lnl-route-3 -lsaimetadata -lsaimeta ./vppxlate/libvppxlate.a $(VPP_LIBS)
 
 bin_PROGRAMS = tests
 
 tests_SOURCES = tests.cpp
 tests_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON)
-tests_LDADD = -lhiredis -lswsscommon -lpthread libsaivpp.la -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta -lzmq
+tests_LDADD = -lhiredis -lswsscommon -lpthread libsai.la -lsaimetadata -lsaimeta -lzmq
 
 TESTS = tests

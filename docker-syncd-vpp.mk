@@ -33,7 +33,7 @@ include $(PLATFORM_PATH)/../template/docker-syncd-bookworm.mk
 $(DOCKER_SYNCD_BASE)_DEPENDS += $(LIBSAIVPP) \
                                 $(SYNCD)
 
-$(SYNCD)_DEPENDS += $(LIBSAIVPP)
+$(SYNCD)_DEPENDS += $(LIBSAIVPP) $(LIBSAIVPP_DEV)
 
 $(DOCKER_SYNCD_BASE)_DBG_DEPENDS += $(SYNCD_DBG) \
                                 $(LIBSWSSCOMMON_DBG) \

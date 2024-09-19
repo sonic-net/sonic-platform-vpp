@@ -17,10 +17,10 @@
 #include "EventPayloadNotification.h"
 #include "swss/logger.h"
 #include "swss/select.h"
-#include "meta/sai_serialize.h"
+#include "sai_serialize.h"
 #include <arpa/inet.h>
 #include "vppxlate/SaiVppXlate.h"
-#include "meta/NotificationBfdSessionStateChange.h"
+#include "NotificationBfdSessionStateChange.h"
 #include "SwitchStateBaseUtils.h"
 
 using namespace saivpp;

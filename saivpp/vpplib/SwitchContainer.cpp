@@ -16,7 +16,7 @@
 #include "SwitchContainer.h"
 
 #include "swss/logger.h"
-#include "meta/sai_serialize.h"
+#include "sai_serialize.h"
 
 using namespace saivpp;
 

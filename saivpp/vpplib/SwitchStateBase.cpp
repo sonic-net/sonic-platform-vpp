@@ -17,7 +17,7 @@
 #include "SwitchStateBase.h"
 
 #include "swss/logger.h"
-#include "meta/sai_serialize.h"
+#include "sai_serialize.h"
 
 #include <net/if.h>
 #include <unistd.h>

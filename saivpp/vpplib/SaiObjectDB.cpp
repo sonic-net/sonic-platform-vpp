@@ -17,7 +17,7 @@
 #include <map>
 
 #include "swss/logger.h"
-#include "meta/sai_serialize.h"
+#include "sai_serialize.h"
 #include "SwitchStateBase.h"
 #include "SwitchStateBaseUtils.h"
 #include "SaiObjectDB.h"

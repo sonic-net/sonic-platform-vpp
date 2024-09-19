@@ -23,7 +23,7 @@
 #include "CorePortIndexMapContainer.h"
 #include "Context.h"
 
-#include "meta/Meta.h"
+#include "Meta.h"
 
 #include "swss/selectableevent.h"
 #include "swss/dbconnector.h"

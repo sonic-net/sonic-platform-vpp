@@ -17,8 +17,8 @@
 
 #include "swss/logger.h"
 
-#include "meta/sai_serialize.h"
-#include "meta/SaiAttributeList.h"
+#include "sai_serialize.h"
+#include "SaiAttributeList.h"
 
 #include <inttypes.h>
 

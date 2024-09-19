@@ -18,7 +18,7 @@
 #include "swss/logger.h"
 #include "swss/tokenize.h"
 
-#include "meta/sai_serialize.h"
+#include "sai_serialize.h"
 
 #include <fstream>
 

@@ -21,6 +21,9 @@
         "fast-shutdown": {
             "after": [],
             "before": []
+        },
+        "syslog": {
+            "support-rate-limit": true
         }
     },
     "container": {

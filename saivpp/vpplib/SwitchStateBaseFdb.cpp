@@ -19,8 +19,8 @@
 #include "swss/logger.h"
 #include "swss/select.h"
 
-#include "meta/sai_serialize.h"
-#include "meta/NotificationFdbEvent.h"
+#include "sai_serialize.h"
+#include "NotificationFdbEvent.h"
 
 #include <linux/if_ether.h>
 #include <arpa/inet.h>

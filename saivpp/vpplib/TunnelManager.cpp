@@ -14,7 +14,7 @@
  */
 
 #include "swss/logger.h"
-#include "meta/sai_serialize.h"
+#include "sai_serialize.h"
 #include "SwitchStateBase.h"
 #include "SaiObjectDB.h"
 #include "TunnelManager.h"

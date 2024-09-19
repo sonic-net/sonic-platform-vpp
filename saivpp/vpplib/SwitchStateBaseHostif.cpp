@@ -18,8 +18,8 @@
 #include "HostInterfaceInfo.h"
 #include "EventPayloadNotification.h"
 
-#include "meta/sai_serialize.h"
-#include "meta/NotificationPortStateChange.h"
+#include "sai_serialize.h"
+#include "NotificationPortStateChange.h"
 
 #include "swss/logger.h"
 
