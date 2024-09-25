@@ -66,8 +66,6 @@ typedef enum
 {
   TUNTERM_ACL_NEXT_DROP,
   TUNTERM_ACL_NEXT_VXLAN4_INPUT,
-  TUNTERM_ACL_NEXT_IP4_REWRITE,
-  TUNTERM_ACL_NEXT_IP6_REWRITE,
   TUNTERM_ACL_N_NEXT,
 } tunterm_acl_next_t;
 
@@ -101,7 +99,6 @@ VLIB_NODE_FN(tunterm_acl_node) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib
             u32 bi0;
             vlib_buffer_t *b0;
             u32 next0 = TUNTERM_ACL_NEXT_VXLAN4_INPUT; // Default next index
-            u32 next_rewrite = TUNTERM_ACL_NEXT_IP4_REWRITE;
             u32 sw_if_index0;
 
             bi0 = from[0];
@@ -118,13 +115,8 @@ VLIB_NODE_FN(tunterm_acl_node) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib
             u16 ethertype = (etype[0] << 8) | etype[1];
 
             if (ethertype == 0x86DD) {
-                // Note we send to vxlan4-input not vxlan6-input as outer vxlan is v4
-                next0 = TUNTERM_ACL_NEXT_VXLAN4_INPUT;
-                next_rewrite = TUNTERM_ACL_NEXT_IP6_REWRITE;
                 table_index = tunterm_acl_main.classify_table_index_by_sw_if_index_v6[sw_if_index0];
             } else if (ethertype == 0x0800) {
-                next0 = TUNTERM_ACL_NEXT_VXLAN4_INPUT;
-                next_rewrite = TUNTERM_ACL_NEXT_IP4_REWRITE;
                 table_index = tunterm_acl_main.classify_table_index_by_sw_if_index_v4[sw_if_index0];
             } else {
                 // This shouldn't happen. Something is wrong. Drop the packet to bring attention to this.
@@ -147,7 +139,7 @@ VLIB_NODE_FN(tunterm_acl_node) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib
                   if (e->action == CLASSIFY_ACTION_SET_METADATA) {
                         vlib_buffer_advance (b0, sizeof (vxlan_header_t));
                         vlib_buffer_advance (b0, sizeof (ethernet_header_t));
-                        next0 = next_rewrite;
+                        next0 = (e->next_index < node->n_next_nodes) ? e->next_index : next0;
                         vnet_buffer (b0)->ip.adj_index[VLIB_TX] = e->metadata;
                         pkts_redirected++;
                   } else {
@@ -200,8 +192,6 @@ VLIB_REGISTER_NODE (tunterm_acl_node) =
   .next_nodes = {
     [TUNTERM_ACL_NEXT_DROP] = "error-drop",
     [TUNTERM_ACL_NEXT_VXLAN4_INPUT] = "vxlan4-input",
-    [TUNTERM_ACL_NEXT_IP4_REWRITE] = "ip4-rewrite",
-    [TUNTERM_ACL_NEXT_IP6_REWRITE] = "ip6-rewrite",
   },
 };
 

@@ -48,9 +48,15 @@ show_tunterm_acl_interfaces_command_fn (vlib_main_t * vm,
 
     /* Check if the interface has "tunterm-ip4-vxlan-bypass" enabled */
     if (vnet_feature_is_enabled("ip4-unicast", "tunterm-ip4-vxlan-bypass", sw_if_index)) {
+      u32 tunterm_acl_index_v4 = ~0;
+      u32 tunterm_acl_index_v6 = ~0;
 
-      u32 tunterm_acl_index_v4 = sm->classify_table_index_by_sw_if_index_v4[sw_if_index];
-      u32 tunterm_acl_index_v6 = sm->classify_table_index_by_sw_if_index_v6[sw_if_index];
+      if (sw_if_index < vec_len(sm->classify_table_index_by_sw_if_index_v4)) {
+        tunterm_acl_index_v4 = sm->classify_table_index_by_sw_if_index_v4[sw_if_index];
+      }
+      if (sw_if_index < vec_len(sm->classify_table_index_by_sw_if_index_v6)) {
+        tunterm_acl_index_v6 = sm->classify_table_index_by_sw_if_index_v6[sw_if_index];
+      }
 
       vlib_cli_output (vm, "%U\t%u\t%u\t%u",
                        format_vnet_sw_if_index_name, vnm, sw_if_index,

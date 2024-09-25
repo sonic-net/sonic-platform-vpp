@@ -96,10 +96,8 @@ tunterm_acl_redirect_add (vlib_main_t *vm, u32 table_index, u32 opaque_index,
   switch (payload_type)
     {
     case FIB_FORW_CHAIN_TYPE_UNICAST_IP4:
-      pname =  "ip4-inacl";
-      break;
     case FIB_FORW_CHAIN_TYPE_UNICAST_IP6:
-      pname =  "ip6-inacl";
+      pname = "tunterm-acl";
       break;
     default:
       return VNET_API_ERROR_INVALID_ADDRESS_FAMILY;

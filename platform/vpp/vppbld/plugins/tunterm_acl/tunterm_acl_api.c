@@ -114,7 +114,7 @@ static int update_classify_table_and_sessions (bool is_ipv6, u32 count, vl_api_t
   for (int i = 0; i < count; i++) {
     /* (1) Process Route */
     fib_route_path_t *paths_ = 0;
-    u8 n_paths = 1; //rules[i].n_paths;
+    u8 n_paths = 1; //rules[i].n_paths; (TODO: support multiple paths)
     if (n_paths <= 0) {
       return VNET_API_ERROR_NO_PATHS_IN_ROUTE;
     }
@@ -132,8 +132,8 @@ static int update_classify_table_and_sessions (bool is_ipv6, u32 count, vl_api_t
 
     /* (2) Process DST IP */
     if (is_ipv6 != rules[i].dst.af) {
-      return VNET_API_ERROR_INVALID_VALUE_3;
       vec_free (paths_);
+      return VNET_API_ERROR_INVALID_VALUE_3;
     }
 
     ip46_address_t dst;

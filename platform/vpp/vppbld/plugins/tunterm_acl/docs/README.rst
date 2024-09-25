@@ -10,6 +10,16 @@ It is currently designed to support a single specific use-case:
 
 IPv4 VxLAN tunnel termination and classification based on inner DST IPv4/6 fields, followed by a redirect action using ip4/6-rewrite.
 
+Plugin API
+----------
+The Tunterm ACL plugin provides an API similar to the acl plugin API:
+
+1. `tunterm_acl_add_replace`: Create or replace an existing tunterm acl in-place.
+
+2. `tunterm_acl_del`: Delete a tunterm acl.
+
+3. `tunterm_acl_interface_add_del`: Add/remove a tunterm acl index to/from an interface.
+
 Plugin Structure
 ----------------
 The Tunterm ACL plugin consists of the following main parts:
@@ -41,18 +51,15 @@ The plugin introduces the following nodes and functionality:
 .. image:: tunterm_acl.png
 	:target: tunterm_acl.png
 
-Generalization Considerations
+Enhancements
 -----------------------------
-If there is a need to generalize the plugin, the following considerations and work-items should be addressed:
+Following are some enhancements that can be made to the plugin:
+1. Add multi-path redirect support
 
-1. Modify vxlan bypass to allow for tunterm-acl insertion before vxlan4-input, while ensuring minimal impact on bypass performance.
+2. Add multi-v4/v6 tunterm ACL support on a single interface
 
-2. Add support for additional tunnel types, as currently only v4-vxlan-bypass is supported.
+3. Add VPP performance optimizations to tunterm-acl node
 
-3. Augment the ip-session-redirect plugin directly to support the added functionality and use it directly, instead of creating a copy.
+4. Add v6 outer vxlan bypass support
 
-4. Enhance the ACL fields and actions to support additional fields, permit/deny actions, and explore the possibility of using the classifier API instead of a custom node.
-
-5. Implement performance considerations and enhancements to optimize the plugin's performance.
-
-Please note that the above considerations are suggestions and may require further analysis and implementation.
+5. Expose tunterm-acl stats via API
