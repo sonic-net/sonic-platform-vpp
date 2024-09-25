@@ -14,7 +14,7 @@ AX_ADD_AM_MACRO_STATIC([])
 LDFLAGS="-Wl,--no-undefined $LDFLAGS"
 AC_SUBST([LDFLAGS])
 
-AC_SUBST(SAIINC, "-I\$(top_srcdir)/SAI/inc -I\$(top_srcdir)/SAI/experimental -I\$(top_srcdir)/SAI/meta")
+AC_SUBST(SAIINC, "-I\$(SAI_PATH)/inc -I\$(SAI_PATH)/experimental -I\$(SAI_PATH)/meta")
 
 AC_ARG_ENABLE(debug,
 [  --enable-debug       Compile with debugging flags],

@@ -1,7 +1,7 @@
 SUBDIRS = vppxlate
 
+SAI_PATH = /sonic/src/sonic-sairedis/SAI
 AM_CXXFLAGS = $(SAIINC) -I/usr/include/sai -I/usr/include/libnl3
-
 lib_LTLIBRARIES = libsai.la
 
 noinst_LIBRARIES = libSaiVPP.a
@@ -72,13 +72,13 @@ libSaiVPP_a_SOURCES = \
 
 BUILT_SOURCES = sai_vpp.cpp
 
-sai_vpp.cpp: /sonic/src/sonic-sairedis/stub.pl $(top_srcdir)/SAI/meta/saimetadata.c
-	/sonic/src/sonic-sairedis/stub.pl -d ../SAI/ -c Sai -n saivpp -f sai_vpp.cpp -s stub
+sai_vpp.cpp: /sonic/src/sonic-sairedis/stub.pl $(SAI_PATH)/meta/saimetadata.c
+	/sonic/src/sonic-sairedis/stub.pl -d $(SAI_PATH) -c Sai -n saivpp -f sai_vpp.cpp -s stub
 	sed -i 's|#include "meta/SaiInterface.h"|#include "SaiInterface.h"|' sai_vpp.cpp
 
 
-$(top_srcdir)/SAI/meta/saimetadata.c $(top_srcdir)/SAI/meta/saimetadata.h: 
-	$(MAKE) -C $(top_srcdir)/SAI/meta saimetadata.c
+$(SAI_PATH)/meta/saimetadata.c $(SAI_PATH)/meta/saimetadata.h: 
+	$(MAKE) -C $(SAI_PATH)/meta saimetadata.c
 
 clean-local:
 	rm -f sai_vpp.cpp
