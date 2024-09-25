@@ -72,7 +72,7 @@ AC_SUBST(CXXFLAGS_COMMON)
 
 AC_CONFIG_FILES([
     Makefile
-    vpplib/Makefile
+    src/Makefile
 ])
 
 AC_OUTPUT

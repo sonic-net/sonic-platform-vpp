@@ -13,15 +13,13 @@
 # limitations under the License.
 
 #DPKG FRK
-SPATH       := $($(LIBSAITHRIFT_DEV)_SRC_PATH)
-DEP_FILES   := $(SONIC_COMMON_FILES_LIST) platform/broadcom/libsaithrift-dev.mk platform/broadcom/libsaithrift-dev.dep
+DPATH       := $($(DOCKER_GBSYNCD_BASE)_PATH)
+DEP_FILES   := $(SONIC_COMMON_FILES_LIST) $(PLATFORM_RULES)/docker-gbsyncd-vpp.mk $(PLATFORM_RULES)/docker-gbsyncd-vpp.dep
 DEP_FILES   += $(SONIC_COMMON_BASE_FILES_LIST)
-SMDEP_PATHS := $(SPATH)  $(SPATH)/test/ptf  $(SPATH)/test/saithrift/ctypesgen
-$(foreach path, $(SMDEP_PATHS), $(eval $(path) :=$(filter-out $(SMDEP_PATHS),$(addprefix $(path)/, $(shell cd $(path) &&  git ls-files | grep -Ev " " )))))
+DEP_FILES   += $(shell git ls-files $(DPATH))
 
-$(LIBSAITHRIFT_DEV)_CACHE_MODE  := GIT_CONTENT_SHA
-$(LIBSAITHRIFT_DEV)_DEP_FLAGS   := $(SONIC_COMMON_FLAGS_LIST)
-$(LIBSAITHRIFT_DEV)_DEP_FILES   := $(DEP_FILES)
-$(LIBSAITHRIFT_DEV)_SMDEP_FILES := $(foreach path, $(SMDEP_PATHS), $($(path)))
-$(LIBSAITHRIFT_DEV)_SMDEP_PATHS := $(SMDEP_PATHS)
+$(DOCKER_GBSYNCD_BASE)_CACHE_MODE  := GIT_CONTENT_SHA 
+$(DOCKER_GBSYNCD_BASE)_DEP_FLAGS   := $(SONIC_COMMON_FLAGS_LIST)
+$(DOCKER_GBSYNCD_BASE)_DEP_FILES   := $(DEP_FILES)
 
+$(eval $(call add_dbg_docker,$(DOCKER_GBSYNCD_BASE),$(DOCKER_GBSYNCD_BASE_DBG)))

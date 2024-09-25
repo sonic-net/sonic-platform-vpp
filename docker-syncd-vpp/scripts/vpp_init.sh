@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+VPP_ENV_FILE=/etc/sonic/vpp/syncd_vpp_env
+source $VPP_ENV_FILE
+
 function error()
 {
     echo "Error : $*" 1>&2

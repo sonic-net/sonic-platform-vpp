@@ -12,7 +12,7 @@
 # limitations under the License.
 
 SPATH       := $(VPPINFRA)_SRC_PATH/$(VPP_REPO_DIR)
-DEP_FILES   := $(SONIC_COMMON_FILES_LIST) platform/vpp/vpp.mk platform/vpp/vpp.dep $(VPPINFRA)_SRC_PATH/Makefile
+DEP_FILES   := $(SONIC_COMMON_FILES_LIST) $(PLATFORM_RULES)/vpp.mk $(PLATFORM_RULES)/vpp.dep $(VPPINFRA)_SRC_PATH/Makefile
 DEP_FILES   += $(SONIC_COMMON_BASE_FILES_LIST)
 DEP_FILES   += $(shell git ls-files $(SPATH))
 

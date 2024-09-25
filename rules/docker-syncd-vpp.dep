@@ -26,12 +26,13 @@
 # limitations under the License.
 
 #DPKG FRK
-DPATH       := $($(DOCKER_SONIC_VPP)_PATH)
-DEP_FILES   := $(SONIC_COMMON_FILES_LIST) platform/vpp/docker-sonic-vpp.mk platform/vpp/docker-sonic-vpp.dep
+DPATH       := $($(DOCKER_SYNCD_BASE)_PATH)
+DEP_FILES   := $(SONIC_COMMON_FILES_LIST) $(PLATFORM_RULES)/docker-syncd-vpp.mk $(PLATFORM_RULES)/docker-syncd-vpp.dep   
 DEP_FILES   += $(SONIC_COMMON_BASE_FILES_LIST)
 DEP_FILES   += $(shell git ls-files $(DPATH))
 
-$(DOCKER_SONIC_VPP)_CACHE_MODE  := GIT_CONTENT_SHA 
-$(DOCKER_SONIC_VPP)_DEP_FLAGS   := $(SONIC_COMMON_FLAGS_LIST)
-$(DOCKER_SONIC_VPP)_DEP_FILES   := $(DEP_FILES)
+$(DOCKER_SYNCD_BASE)_CACHE_MODE  := GIT_CONTENT_SHA 
+$(DOCKER_SYNCD_BASE)_DEP_FLAGS   := $(SONIC_COMMON_FLAGS_LIST)
+$(DOCKER_SYNCD_BASE)_DEP_FILES   := $(DEP_FILES)
 
+$(eval $(call add_dbg_docker,$(DOCKER_SYNCD_BASE),$(DOCKER_SYNCD_BASE_DBG)))

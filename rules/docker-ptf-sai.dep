@@ -13,7 +13,7 @@
 # limitations under the License.
 
 DPATH       := $($(DOCKER_PTF_SAI)_PATH)
-DEP_FILES   := $(SONIC_COMMON_FILES_LIST) platform/vpp/docker-ptf-sai.mk platform/vpp/docker-ptf-sai.dep
+DEP_FILES   := $(SONIC_COMMON_FILES_LIST) $(PLATFORM_RULES)/docker-ptf-sai.mk $(PLATFORM_RULES)/docker-ptf-sai.dep
 DEP_FILES   += $(SONIC_COMMON_BASE_FILES_LIST)
 DEP_FILES   += $(shell git ls-files $(DPATH))
 

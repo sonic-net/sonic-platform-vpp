@@ -12,7 +12,7 @@
 # limitations under the License.
 
 SPATH       := $($(LIBSAIVPP)_SRC_PATH)
-DEP_FILES   := $(SONIC_COMMON_FILES_LIST) platform/vpp/saivpp.mk platform/vpp/saivpp.dep
+DEP_FILES   := $(SONIC_COMMON_FILES_LIST) $(PLATFORM_RULES)/saivpp.mk $(PLATFORM_RULES)/saivpp.dep
 DEP_FILES   += $(SONIC_COMMON_BASE_FILES_LIST)
 DEP_FILES   += $(shell git ls-files $(SPATH))
 
