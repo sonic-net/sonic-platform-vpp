@@ -67,7 +67,7 @@ tunterm_acl_redirect_stack (tunterm_acl_redirect_t *ipr)
 
 static tunterm_acl_redirect_t *
 tunterm_acl_redirect_find (tunterm_acl_redirect_main_t *im, u32 table_index,
-			  const u8 *match)
+			   const u8 *match)
 {
   /* we are adding the table index at the end of the match string so we
    * can disambiguiate identical matches in different tables in
@@ -84,8 +84,8 @@ tunterm_acl_redirect_find (tunterm_acl_redirect_main_t *im, u32 table_index,
 
 __clib_export int
 tunterm_acl_redirect_add (vlib_main_t *vm, u32 table_index, u32 opaque_index,
-			 dpo_proto_t proto, const u8 *match,
-			 const fib_route_path_t *rpaths)
+			  dpo_proto_t proto, const u8 *match,
+			  const fib_route_path_t *rpaths)
 {
   tunterm_acl_redirect_main_t *im = &tunterm_acl_redirect_main;
   fib_forward_chain_type_t payload_type;
@@ -137,7 +137,8 @@ tunterm_acl_redirect_add (vlib_main_t *vm, u32 table_index, u32 opaque_index,
   return tunterm_acl_redirect_stack (ipr);
 }
 int
-tunterm_acl_redirect_del_ipr (tunterm_acl_redirect_main_t *im, tunterm_acl_redirect_t *ipr)
+tunterm_acl_redirect_del_ipr (tunterm_acl_redirect_main_t *im,
+			      tunterm_acl_redirect_t *ipr)
 {
   vnet_classify_main_t *cm = &vnet_classify_main;
   int rv;
@@ -174,29 +175,36 @@ tunterm_acl_redirect_del (vlib_main_t *vm, u32 table_index, const u8 *match)
   return rv;
 }
 
-int tunterm_acl_redirect_clear (vlib_main_t *vm, u32 table_index) {
+int
+tunterm_acl_redirect_clear (vlib_main_t *vm, u32 table_index)
+{
   tunterm_acl_redirect_main_t *im = &tunterm_acl_redirect_main;
   tunterm_acl_redirect_t *ipr;
   tunterm_acl_redirect_t **to_be_deleted = NULL;
   int rv = 0;
 
-  // Iterate through the pool to find all entries with the specified table_index
-  pool_foreach(ipr, im->pool) {
-      if (ipr->table_index == table_index) {
-          vec_add1(to_be_deleted, ipr);
-      }
-  }
+  // Iterate through the pool to find all entries with the specified
+  // table_index
+  pool_foreach (ipr, im->pool)
+    {
+      if (ipr->table_index == table_index)
+	{
+	  vec_add1 (to_be_deleted, ipr);
+	}
+    }
 
   tunterm_acl_redirect_t **ipr_ptr;
-  vec_foreach(ipr_ptr, to_be_deleted) {
-    rv = tunterm_acl_redirect_del_ipr(im, *ipr_ptr);
-    if (rv) {
-      vec_free(to_be_deleted);
-      return rv;
+  vec_foreach (ipr_ptr, to_be_deleted)
+    {
+      rv = tunterm_acl_redirect_del_ipr (im, *ipr_ptr);
+      if (rv)
+	{
+	  vec_free (to_be_deleted);
+	  return rv;
+	}
     }
-  }
 
-  vec_free(to_be_deleted);
+  vec_free (to_be_deleted);
   return 0;
 }
 
@@ -211,9 +219,9 @@ tunterm_acl_redirect_get_node (fib_node_index_t index)
 static tunterm_acl_redirect_t *
 tunterm_acl_redirect_get_from_node (fib_node_t *node)
 {
-  return (
-    tunterm_acl_redirect_t *) (((char *) node) -
-			      STRUCT_OFFSET_OF (tunterm_acl_redirect_t, node));
+  return (tunterm_acl_redirect_t *) (((char *) node) -
+				     STRUCT_OFFSET_OF (tunterm_acl_redirect_t,
+						       node));
 }
 
 static void
@@ -226,7 +234,7 @@ tunterm_acl_redirect_last_lock_gone (fib_node_t *node)
 /* A back walk has reached this entry */
 static fib_node_back_walk_rc_t
 tunterm_acl_redirect_back_walk_notify (fib_node_t *node,
-				      fib_node_back_walk_ctx_t *ctx)
+				       fib_node_back_walk_ctx_t *ctx)
 {
   int rv;
   tunterm_acl_redirect_t *ipr = tunterm_acl_redirect_get_from_node (node);
@@ -249,7 +257,7 @@ tunterm_acl_redirect_init (vlib_main_t *vm)
   tunterm_acl_redirect_main_t *im = &tunterm_acl_redirect_main;
   im->session_by_match_and_table_index =
     hash_create_vec (0, sizeof (u8), sizeof (u32));
-  im->fib_node_type = fib_node_register_new_type ("tunterm-redirect",
-						  &tunterm_acl_redirect_vft);
+  im->fib_node_type =
+    fib_node_register_new_type ("tunterm-redirect", &tunterm_acl_redirect_vft);
   return 0;
 }

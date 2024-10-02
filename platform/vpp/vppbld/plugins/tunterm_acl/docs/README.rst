@@ -8,7 +8,7 @@ The Tunterm ACL plugin is a self-contained plugin that applies ACL after Tunnel 
 
 It is currently designed to support a single specific use-case:
 
-IPv4 VxLAN tunnel termination and classification based on inner DST IPv4/6 fields, followed by a redirect action using ip4/6-rewrite.
+IPv4 VxLAN tunnel termination and classification based on inner DST IPv4/6 fields, followed by a redirect action via a VPP FIB path.
 
 Plugin API
 ----------

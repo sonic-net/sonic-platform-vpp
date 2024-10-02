@@ -21,7 +21,7 @@
 
 #include <vnet/plugin/plugin.h>
 
-vxlan_main_t* tunterm_acl_vxlan_main;
+vxlan_main_t *tunterm_acl_vxlan_main;
 
 typedef enum
 {
@@ -31,7 +31,6 @@ typedef enum
   IP_VXLAN_BYPASS_N_NEXT,
 } tunterm_acl_ip_vxlan_bypass_next_t;
 
-
 typedef vxlan4_tunnel_key_t last_tunnel_cache4;
 
 static const vxlan_decap_info_t decap_not_found = {
@@ -40,16 +39,16 @@ static const vxlan_decap_info_t decap_not_found = {
   .error = VXLAN_ERROR_NO_SUCH_TUNNEL
 };
 
-static const vxlan_decap_info_t decap_bad_flags = {
-  .sw_if_index = ~0,
-  .next_index = VXLAN_INPUT_NEXT_DROP,
-  .error = VXLAN_ERROR_BAD_FLAGS
-};
+static const vxlan_decap_info_t decap_bad_flags = { .sw_if_index = ~0,
+						    .next_index =
+						      VXLAN_INPUT_NEXT_DROP,
+						    .error =
+						      VXLAN_ERROR_BAD_FLAGS };
 
 vxlan_decap_info_t
-tunterm_acl_vxlan4_find_tunnel (vxlan_main_t * vxm, last_tunnel_cache4 * cache,
-		    u32 fib_index, ip4_header_t * ip4_0,
-		    vxlan_header_t * vxlan0, u32 * stats_sw_if_index)
+tunterm_acl_vxlan4_find_tunnel (vxlan_main_t *vxm, last_tunnel_cache4 *cache,
+				u32 fib_index, ip4_header_t *ip4_0,
+				vxlan_header_t *vxlan0, u32 *stats_sw_if_index)
 {
   if (PREDICT_FALSE (vxlan0->flags != VXLAN_FLAGS_I))
     return decap_bad_flags;
@@ -65,11 +64,11 @@ tunterm_acl_vxlan4_find_tunnel (vxlan_main_t * vxm, last_tunnel_cache4 * cache,
 	      vxlan0->vni_reserved,
   };
 
-  if (PREDICT_TRUE
-      (key4.key[0] == cache->key[0] && key4.key[1] == cache->key[1]))
+  if (PREDICT_TRUE (key4.key[0] == cache->key[0] &&
+		    key4.key[1] == cache->key[1]))
     {
       /* cache hit */
-      vxlan_decap_info_t di = {.as_u64 = cache->value };
+      vxlan_decap_info_t di = { .as_u64 = cache->value };
       *stats_sw_if_index = di.sw_if_index;
       return di;
     }
@@ -78,7 +77,7 @@ tunterm_acl_vxlan4_find_tunnel (vxlan_main_t * vxm, last_tunnel_cache4 * cache,
   if (PREDICT_TRUE (rv == 0))
     {
       *cache = key4;
-      vxlan_decap_info_t di = {.as_u64 = key4.value };
+      vxlan_decap_info_t di = { .as_u64 = key4.value };
       *stats_sw_if_index = di.sw_if_index;
       return di;
     }
@@ -94,7 +93,7 @@ tunterm_acl_vxlan4_find_tunnel (vxlan_main_t * vxm, last_tunnel_cache4 * cache,
     return decap_not_found;
 
   /* search for unicast tunnel using the mcast tunnel local(src) ip */
-  vxlan_decap_info_t mdi = {.as_u64 = key4.value };
+  vxlan_decap_info_t mdi = { .as_u64 = key4.value };
   key4.key[0] = ((u64) mdi.local_ip.as_u32 << 32) | src;
   rv = clib_bihash_search_inline_16_8 (&vxm->vxlan4_tunnel_by_key, &key4);
   if (PREDICT_FALSE (rv != 0))
@@ -102,16 +101,16 @@ tunterm_acl_vxlan4_find_tunnel (vxlan_main_t * vxm, last_tunnel_cache4 * cache,
 
   /* mcast traffic does not update the cache */
   *stats_sw_if_index = mdi.sw_if_index;
-  vxlan_decap_info_t di = {.as_u64 = key4.value };
+  vxlan_decap_info_t di = { .as_u64 = key4.value };
   return di;
 }
 
 typedef vxlan6_tunnel_key_t last_tunnel_cache6;
 
 always_inline vxlan_decap_info_t
-tunterm_acl_vxlan6_find_tunnel (vxlan_main_t * vxm, last_tunnel_cache6 * cache,
-		    u32 fib_index, ip6_header_t * ip6_0,
-		    vxlan_header_t * vxlan0, u32 * stats_sw_if_index)
+tunterm_acl_vxlan6_find_tunnel (vxlan_main_t *vxm, last_tunnel_cache6 *cache,
+				u32 fib_index, ip6_header_t *ip6_0,
+				vxlan_header_t *vxlan0, u32 *stats_sw_if_index)
 {
   if (PREDICT_FALSE (vxlan0->flags != VXLAN_FLAGS_I))
     return decap_bad_flags;
@@ -126,8 +125,7 @@ tunterm_acl_vxlan6_find_tunnel (vxlan_main_t * vxm, last_tunnel_cache6 * cache,
 	      vxlan0->vni_reserved,
   };
 
-  if (PREDICT_FALSE
-      (clib_bihash_key_compare_24_8 (key6.key, cache->key) == 0))
+  if (PREDICT_FALSE (clib_bihash_key_compare_24_8 (key6.key, cache->key) == 0))
     {
       int rv =
 	clib_bihash_search_inline_24_8 (&vxm->vxlan6_tunnel_by_key, &key6);
@@ -167,19 +165,18 @@ tunterm_acl_vxlan6_find_tunnel (vxlan_main_t * vxm, last_tunnel_cache6 * cache,
 }
 
 always_inline uword
-tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
-			vlib_node_runtime_t * node,
-			vlib_frame_t * frame, u32 is_ip4)
+tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
+				    vlib_frame_t *frame, u32 is_ip4)
 {
   vxlan_main_t *vxm = tunterm_acl_vxlan_main;
 
   u32 *from, *to_next, n_left_from, n_left_to_next, next_index;
   vlib_node_runtime_t *error_node =
     vlib_node_get_runtime (vm, ip4_input_node.index);
-  vtep4_key_t last_vtep4;	/* last IPv4 address / fib index
-				   matching a local VTEP address */
-  vtep6_key_t last_vtep6;	/* last IPv6 address / fib index
-				   matching a local VTEP address */
+  vtep4_key_t last_vtep4; /* last IPv4 address / fib index
+			     matching a local VTEP address */
+  vtep6_key_t last_vtep6; /* last IPv6 address / fib index
+			     matching a local VTEP address */
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b = bufs;
 
   last_tunnel_cache4 last4;
@@ -260,7 +257,7 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 	  if (is_ip4)
 	    {
 	      /* Treat IP frag packets as "experimental" protocol for now
-	         until support of IP frag reassembly is implemented */
+		 until support of IP frag reassembly is implemented */
 	      proto0 = ip4_is_fragment (ip40) ? 0xfe : ip40->protocol;
 	      proto1 = ip4_is_fragment (ip41) ? 0xfe : ip41->protocol;
 	    }
@@ -272,7 +269,7 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 
 	  /* Process packet 0 */
 	  if (proto0 != IP_PROTOCOL_UDP)
-	    goto exit0;		/* not UDP packet */
+	    goto exit0; /* not UDP packet */
 
 	  if (is_ip4)
 	    udp0 = ip4_next_header (ip40);
@@ -284,9 +281,10 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 		   sizeof (ip4_header_t);
 
 	  vxlan_decap_info_t di0 =
-	    is_ip4 ?
-	      tunterm_acl_vxlan4_find_tunnel (vxm, &last4, fi0, ip40, vxlan0, &stats_if0) :
-	      tunterm_acl_vxlan6_find_tunnel (vxm, &last6, fi0, ip60, vxlan0, &stats_if0);
+	    is_ip4 ? tunterm_acl_vxlan4_find_tunnel (vxm, &last4, fi0, ip40,
+						     vxlan0, &stats_if0) :
+			   tunterm_acl_vxlan6_find_tunnel (vxm, &last6, fi0, ip60,
+						     vxlan0, &stats_if0);
 
 	  if (PREDICT_FALSE (di0.sw_if_index == ~0))
 	    goto exit0; /* unknown interface */
@@ -300,18 +298,19 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 #else
 	      if (!vtep4_check (&vxm->vtep_table, b0, ip40, &last_vtep4))
 #endif
-		goto exit0;	/* no local VTEP for VXLAN packet */
+		goto exit0; /* no local VTEP for VXLAN packet */
 	    }
 	  else
 	    {
 	      if (!vtep6_check (&vxm->vtep_table, b0, ip60, &last_vtep6))
-		goto exit0;	/* no local VTEP for VXLAN packet */
+		goto exit0; /* no local VTEP for VXLAN packet */
 	    }
 
 	  flags0 = b0->flags;
 	  good_udp0 = (flags0 & VNET_BUFFER_F_L4_CHECKSUM_CORRECT) != 0;
 
-	  /* Don't verify UDP checksum for packets with explicit zero checksum. */
+	  /* Don't verify UDP checksum for packets with explicit zero checksum.
+	   */
 	  good_udp0 |= udp0->checksum == 0;
 
 	  /* Verify UDP length */
@@ -343,24 +342,22 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 	      error0 = (len_diff0 >= 0) ? error0 : IP6_ERROR_UDP_LENGTH;
 	    }
 
-	  next0 = error0 ?
-	    IP_VXLAN_BYPASS_NEXT_DROP : IP_VXLAN_BYPASS_NEXT_TUNTERM;
+	  next0 =
+	    error0 ? IP_VXLAN_BYPASS_NEXT_DROP : IP_VXLAN_BYPASS_NEXT_TUNTERM;
 	  b0->error = error0 ? error_node->errors[error0] : 0;
 
 	  /* vxlan-input node expect current at VXLAN header */
 	  if (is_ip4)
-	    vlib_buffer_advance (b0,
-				 sizeof (ip4_header_t) +
-				 sizeof (udp_header_t));
+	    vlib_buffer_advance (b0, sizeof (ip4_header_t) +
+				       sizeof (udp_header_t));
 	  else
-	    vlib_buffer_advance (b0,
-				 sizeof (ip6_header_t) +
-				 sizeof (udp_header_t));
+	    vlib_buffer_advance (b0, sizeof (ip6_header_t) +
+				       sizeof (udp_header_t));
 
 	exit0:
 	  /* Process packet 1 */
 	  if (proto1 != IP_PROTOCOL_UDP)
-	    goto exit1;		/* not UDP packet */
+	    goto exit1; /* not UDP packet */
 
 	  if (is_ip4)
 	    udp1 = ip4_next_header (ip41);
@@ -372,9 +369,10 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 		   sizeof (ip4_header_t);
 
 	  vxlan_decap_info_t di1 =
-	    is_ip4 ?
-	      tunterm_acl_vxlan4_find_tunnel (vxm, &last4, fi1, ip41, vxlan1, &stats_if1) :
-	      tunterm_acl_vxlan6_find_tunnel (vxm, &last6, fi1, ip61, vxlan1, &stats_if1);
+	    is_ip4 ? tunterm_acl_vxlan4_find_tunnel (vxm, &last4, fi1, ip41,
+						     vxlan1, &stats_if1) :
+			   tunterm_acl_vxlan6_find_tunnel (vxm, &last6, fi1, ip61,
+						     vxlan1, &stats_if1);
 
 	  if (PREDICT_FALSE (di1.sw_if_index == ~0))
 	    goto exit1; /* unknown interface */
@@ -388,18 +386,19 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 #else
 	      if (!vtep4_check (&vxm->vtep_table, b1, ip41, &last_vtep4))
 #endif
-		goto exit1;	/* no local VTEP for VXLAN packet */
+		goto exit1; /* no local VTEP for VXLAN packet */
 	    }
 	  else
 	    {
 	      if (!vtep6_check (&vxm->vtep_table, b1, ip61, &last_vtep6))
-		goto exit1;	/* no local VTEP for VXLAN packet */
+		goto exit1; /* no local VTEP for VXLAN packet */
 	    }
 
 	  flags1 = b1->flags;
 	  good_udp1 = (flags1 & VNET_BUFFER_F_L4_CHECKSUM_CORRECT) != 0;
 
-	  /* Don't verify UDP checksum for packets with explicit zero checksum. */
+	  /* Don't verify UDP checksum for packets with explicit zero checksum.
+	   */
 	  good_udp1 |= udp1->checksum == 0;
 
 	  /* Verify UDP length */
@@ -431,24 +430,22 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 	      error1 = (len_diff1 >= 0) ? error1 : IP6_ERROR_UDP_LENGTH;
 	    }
 
-	  next1 = error1 ?
-	    IP_VXLAN_BYPASS_NEXT_DROP : IP_VXLAN_BYPASS_NEXT_TUNTERM;
+	  next1 =
+	    error1 ? IP_VXLAN_BYPASS_NEXT_DROP : IP_VXLAN_BYPASS_NEXT_TUNTERM;
 	  b1->error = error1 ? error_node->errors[error1] : 0;
 
 	  /* vxlan-input node expect current at VXLAN header */
 	  if (is_ip4)
-	    vlib_buffer_advance (b1,
-				 sizeof (ip4_header_t) +
-				 sizeof (udp_header_t));
+	    vlib_buffer_advance (b1, sizeof (ip4_header_t) +
+				       sizeof (udp_header_t));
 	  else
-	    vlib_buffer_advance (b1,
-				 sizeof (ip6_header_t) +
-				 sizeof (udp_header_t));
+	    vlib_buffer_advance (b1, sizeof (ip6_header_t) +
+				       sizeof (udp_header_t));
 
 	exit1:
-	  vlib_validate_buffer_enqueue_x2 (vm, node, next_index,
-					   to_next, n_left_to_next,
-					   bi0, bi1, next0, next1);
+	  vlib_validate_buffer_enqueue_x2 (vm, node, next_index, to_next,
+					   n_left_to_next, bi0, bi1, next0,
+					   next1);
 	}
 
       while (n_left_from > 0 && n_left_to_next > 0)
@@ -487,7 +484,7 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 	    proto0 = ip60->protocol;
 
 	  if (proto0 != IP_PROTOCOL_UDP)
-	    goto exit;		/* not UDP packet */
+	    goto exit; /* not UDP packet */
 
 	  if (is_ip4)
 	    udp0 = ip4_next_header (ip40);
@@ -499,9 +496,10 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 		   sizeof (ip4_header_t);
 
 	  vxlan_decap_info_t di0 =
-	    is_ip4 ?
-	      tunterm_acl_vxlan4_find_tunnel (vxm, &last4, fi0, ip40, vxlan0, &stats_if0) :
-	      tunterm_acl_vxlan6_find_tunnel (vxm, &last6, fi0, ip60, vxlan0, &stats_if0);
+	    is_ip4 ? tunterm_acl_vxlan4_find_tunnel (vxm, &last4, fi0, ip40,
+						     vxlan0, &stats_if0) :
+			   tunterm_acl_vxlan6_find_tunnel (vxm, &last6, fi0, ip60,
+						     vxlan0, &stats_if0);
 
 	  if (PREDICT_FALSE (di0.sw_if_index == ~0))
 	    goto exit; /* unknown interface */
@@ -515,18 +513,19 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 #else
 	      if (!vtep4_check (&vxm->vtep_table, b0, ip40, &last_vtep4))
 #endif
-		goto exit;	/* no local VTEP for VXLAN packet */
+		goto exit; /* no local VTEP for VXLAN packet */
 	    }
 	  else
 	    {
 	      if (!vtep6_check (&vxm->vtep_table, b0, ip60, &last_vtep6))
-		goto exit;	/* no local VTEP for VXLAN packet */
+		goto exit; /* no local VTEP for VXLAN packet */
 	    }
 
 	  flags0 = b0->flags;
 	  good_udp0 = (flags0 & VNET_BUFFER_F_L4_CHECKSUM_CORRECT) != 0;
 
-	  /* Don't verify UDP checksum for packets with explicit zero checksum. */
+	  /* Don't verify UDP checksum for packets with explicit zero checksum.
+	   */
 	  good_udp0 |= udp0->checksum == 0;
 
 	  /* Verify UDP length */
@@ -558,24 +557,21 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
 	      error0 = (len_diff0 >= 0) ? error0 : IP6_ERROR_UDP_LENGTH;
 	    }
 
-	  next0 = error0 ?
-	    IP_VXLAN_BYPASS_NEXT_DROP : IP_VXLAN_BYPASS_NEXT_TUNTERM;
+	  next0 =
+	    error0 ? IP_VXLAN_BYPASS_NEXT_DROP : IP_VXLAN_BYPASS_NEXT_TUNTERM;
 	  b0->error = error0 ? error_node->errors[error0] : 0;
 
 	  /* vxlan-input node expect current at VXLAN header */
 	  if (is_ip4)
-	    vlib_buffer_advance (b0,
-				 sizeof (ip4_header_t) +
-				 sizeof (udp_header_t));
+	    vlib_buffer_advance (b0, sizeof (ip4_header_t) +
+				       sizeof (udp_header_t));
 	  else
-	    vlib_buffer_advance (b0,
-				 sizeof (ip6_header_t) +
-				 sizeof (udp_header_t));
+	    vlib_buffer_advance (b0, sizeof (ip6_header_t) +
+				       sizeof (udp_header_t));
 
 	exit:
-	  vlib_validate_buffer_enqueue_x1 (vm, node, next_index,
-					   to_next, n_left_to_next,
-					   bi0, next0);
+	  vlib_validate_buffer_enqueue_x1 (vm, node, next_index, to_next,
+					   n_left_to_next, bi0, next0);
 	}
 
       vlib_put_next_frame (vm, node, next_index, n_left_to_next);
@@ -584,9 +580,8 @@ tunterm_acl_ip_vxlan_bypass_inline (vlib_main_t * vm,
   return frame->n_vectors;
 }
 
-VLIB_NODE_FN (tunterm_acl_ip4_vxlan_bypass_node) (vlib_main_t * vm,
-				      vlib_node_runtime_t * node,
-				      vlib_frame_t * frame)
+VLIB_NODE_FN (tunterm_acl_ip4_vxlan_bypass_node)
+(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
   return tunterm_acl_ip_vxlan_bypass_inline (vm, node, frame, /* is_ip4 */ 1);
 }
@@ -606,10 +601,11 @@ VLIB_REGISTER_NODE (tunterm_acl_ip4_vxlan_bypass_node) =
 };
 
 static clib_error_t *
-tunterm_acl_ip4_vxlan_bypass_init (vlib_main_t * vm)
+tunterm_acl_ip4_vxlan_bypass_init (vlib_main_t *vm)
 {
 
-  tunterm_acl_vxlan_main = vlib_get_plugin_symbol ("vxlan_plugin.so", "vxlan_main");
+  tunterm_acl_vxlan_main =
+    vlib_get_plugin_symbol ("vxlan_plugin.so", "vxlan_main");
 
   if (tunterm_acl_vxlan_main == 0)
     return clib_error_return (0, "cannot get vxlan_main symbol");
@@ -619,8 +615,7 @@ tunterm_acl_ip4_vxlan_bypass_init (vlib_main_t * vm)
 
 VLIB_INIT_FUNCTION (tunterm_acl_ip4_vxlan_bypass_init);
 
-VNET_FEATURE_INIT (tunterm_acl_ip4_vxlan_bypass, static) =
-{
+VNET_FEATURE_INIT (tunterm_acl_ip4_vxlan_bypass, static) = {
   .arc_name = "ip4-unicast",
   .node_name = "tunterm-ip4-vxlan-bypass",
   .runs_before = VNET_FEATURES ("ip4-lookup"),

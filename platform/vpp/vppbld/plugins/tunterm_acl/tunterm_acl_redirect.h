@@ -16,14 +16,14 @@
 
 #include <vnet/fib/fib_node.h>
 
-clib_error_t * tunterm_acl_redirect_init (vlib_main_t *vm);
+clib_error_t *tunterm_acl_redirect_init (vlib_main_t *vm);
 
 int tunterm_acl_redirect_add (vlib_main_t *vm, u32 table_index,
-			     u32 opaque_index, dpo_proto_t proto,
-			     const u8 *match, const fib_route_path_t *rpaths);
+			      u32 opaque_index, dpo_proto_t proto,
+			      const u8 *match, const fib_route_path_t *rpaths);
 
 int tunterm_acl_redirect_del (vlib_main_t *vm, u32 table_index,
-			     const u8 *match);
+			      const u8 *match);
 
 int tunterm_acl_redirect_clear (vlib_main_t *vm, u32 table_index);
 

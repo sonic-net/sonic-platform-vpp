@@ -23,16 +23,17 @@
 #include <vppinfra/error.h>
 #include <vppinfra/elog.h>
 
-typedef struct {
-    /* API message ID base */
-    u16 msg_id_base;
+typedef struct
+{
+  /* API message ID base */
+  u16 msg_id_base;
 
-    /* convenience */
-    vnet_main_t * vnet_main;
+  /* convenience */
+  vnet_main_t *vnet_main;
 
-    u32 *classify_table_index_by_sw_if_index_v4;
-    u32 *classify_table_index_by_sw_if_index_v6;
-    bool *classify_table_index_is_v6;
+  u32 *classify_table_index_by_sw_if_index_v4;
+  u32 *classify_table_index_by_sw_if_index_v6;
+  bool *classify_table_index_is_v6;
 } tunterm_acl_main_t;
 
 extern tunterm_acl_main_t tunterm_acl_main;
@@ -42,4 +43,3 @@ extern vlib_node_registration_t tunterm_acl_node;
 #define TUNTERM_ACL_PLUGIN_BUILD_VER "1.0"
 
 #endif /* __included_tunterm_acl_api_h__ */
-
