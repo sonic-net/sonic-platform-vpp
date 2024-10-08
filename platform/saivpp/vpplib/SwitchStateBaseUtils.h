@@ -177,5 +177,24 @@ sai_ip_address_t_to_vpp_ip_addr_t(sai_ip_address_t& src, vpp_ip_addr_t& dst)
 	    memcpy(sin6->sin6_addr.s6_addr, src.addr.ip6, sizeof(sin6->sin6_addr.s6_addr));
     }
 }
+
+/* Utility function for IP addr translation from VPP to SAI */
+inline static void
+vpp_ip_addr_t_to_sai_ip_address_t(vpp_ip_addr_t& src, sai_ip_address_t& dst)
+{
+    if (src.sa_family == AF_INET)
+    {
+        dst.addr_family = SAI_IP_ADDR_FAMILY_IPV4;
+        struct sockaddr_in* sin = &src.addr.ip4;
+        memcpy(&dst.addr.ip4, &sin->sin_addr.s_addr,
+               sizeof(sin->sin_addr.s_addr));
+    }
+    else {
+        dst.addr_family = SAI_IP_ADDR_FAMILY_IPV6;
+        struct sockaddr_in6* sin6 = &src.addr.ip6;
+        memcpy(&dst.addr.ip6, sin6->sin6_addr.s6_addr,
+        sizeof(sin6->sin6_addr.s6_addr));
+    }
+}
 }
 
