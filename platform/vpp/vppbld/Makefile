@@ -23,6 +23,7 @@ UID = $(shell id -u)
 GUID = $(shell id -g)
 
 VPP_REPO_DIR = repo
+VPP_CUSTOM_PLUGINS_DIR = plugins
 MAIN_TARGET = $(VPPINFRA)
 DERIVED_TARGETS = $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK) \
 				  $(VPP_PLUGIN_DEV) $(VPP_DEV) $(VPPINFRA_DEV) $(VPPDBG)
@@ -68,11 +69,13 @@ build_vpp:
 repo_clone:
 	rm -rf $(VPP_REPO_DIR)
 	git clone $(VPP_URL) $(VPP_REPO_DIR)
+	cp -r $(VPP_CUSTOM_PLUGINS_DIR)/* $(VPP_REPO_DIR)/src/plugins/
 	pushd $(VPP_REPO_DIR)
 	@VPP_SHA=`git log --until "$(VPP_LAG) days ago" -1 --format="%h"`
 	git checkout $$VPP_SHA
 	# 1. use installed libnl from sonic. 
 	# 2. use libbpf pulled by vpp
+	# 3. export vxlan main
 	git apply ../vpp.patch
 	popd
 
