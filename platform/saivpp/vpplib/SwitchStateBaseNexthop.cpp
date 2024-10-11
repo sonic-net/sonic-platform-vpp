@@ -124,21 +124,11 @@ sai_status_t SwitchStateBase::IpRouteNexthopGroupEntry(
 }
 
 sai_status_t SwitchStateBase::IpRouteNexthopEntry(
-        _In_ uint32_t attr_count,
-        _In_ const sai_attribute_t *attr_list,
+        _In_ sai_object_id_t next_hop_oid,
         _Out_ nexthop_grp_config_t **nxthop_group_cfg)
 {
     sai_status_t                 status;
-    const sai_attribute_value_t  *next_hop;
-    sai_object_id_t              next_hop_oid;
-    uint32_t                     next_hop_index;
     nexthop_grp_config_t        *nxthop_group;
-    status = find_attrib_in_list(attr_count, attr_list, SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID,
-                                 &next_hop, &next_hop_index);
-    if (status != SAI_STATUS_SUCCESS) {
-	return status;
-    }
-    next_hop_oid = next_hop->oid;
 
     nxthop_group = (nexthop_grp_config_t *)
       calloc(1, sizeof(nexthop_grp_config_t) + (1 * sizeof(nexthop_grp_member_t)));
@@ -213,7 +203,7 @@ SwitchStateBase::fillNHGrpMember(nexthop_grp_member_t *nxt_grp_member, sai_objec
         u_int32_t sw_if_index;
         if (m_tunnel_mgr.get_tunnel_if(next_hop_oid, sw_if_index) == SAI_STATUS_SUCCESS) {
             nxt_grp_member->sw_if_index = sw_if_index;
-            SWSS_LOG_DEBUG("Got tunnel interface %d for nexthop %s", sw_if_index,
+            SWSS_LOG_INFO("Got tunnel interface %d for nexthop %s", sw_if_index,
                            sai_serialize_object_id(next_hop_oid).c_str());
         } else {
             SWSS_LOG_ERROR("Failed to get tunnel interface name for nexthop %s",
@@ -270,4 +260,87 @@ sai_status_t SwitchStateBase::removeNexthop(
     }
 
     return remove_internal(SAI_OBJECT_TYPE_NEXT_HOP, serializedObjectId);
+}
+
+sai_status_t 
+SwitchStateBase::createNexthopGroupMember(
+		_In_ const std::string& serializedObjectId,
+		_In_ sai_object_id_t switch_id,
+		_In_ uint32_t attr_count,
+		_In_ const sai_attribute_t *attr_list)
+{
+    sai_status_t        status;
+    sai_attribute_t     attr;
+    SWSS_LOG_ENTER();
+   
+    SaiCachedObject nhg_mbr_obj(this, SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, serializedObjectId, attr_count, attr_list);
+    attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID;
+    nhg_mbr_obj.get_mandatory_attr(attr);
+    SWSS_LOG_NOTICE("Creating NHG member %s in nhg %s", serializedObjectId.c_str(), sai_serialize_object_id(attr.value.oid).c_str());
+    auto nhg_obj = nhg_mbr_obj.get_linked_object(SAI_OBJECT_TYPE_NEXT_HOP_GROUP, SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID);
+    if (nhg_obj == nullptr) {
+        SWSS_LOG_ERROR("Failed to find SAI_OBJECT_TYPE_NEXT_HOP_GROUP from %s", serializedObjectId.c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    //call create_internal to update the mapping from NHG to NHG_MBRs, which is used to update the routes
+    status = create_internal(SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, serializedObjectId, switch_id, attr_count, attr_list);
+    if (status != SAI_STATUS_SUCCESS) {
+        return status;
+    }
+
+    auto routes = nhg_obj->get_child_objs(SAI_OBJECT_TYPE_ROUTE_ENTRY);
+    if (routes == nullptr) {
+        return SAI_STATUS_SUCCESS;
+    }
+
+    for (auto route : *routes) {
+        SWSS_LOG_NOTICE("NHG member changed. Updating route %s", route.first.c_str());
+        IpRouteAddRemove(route.second.get(), false);
+        IpRouteAddRemove(route.second.get(), true);
+    }
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t 
+SwitchStateBase::removeNexthopGroupMember(
+        _In_ const std::string &serializedObjectId)
+{
+    sai_status_t        status;
+    sai_attribute_t     attr;
+    SWSS_LOG_ENTER();
+
+    auto nhg_mbr_obj = get_sai_object(SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, serializedObjectId);
+    if (!nhg_mbr_obj) {
+        SWSS_LOG_ERROR("Failed to find SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER SaiObject: %s", serializedObjectId.c_str());
+        return SAI_STATUS_FAILURE;
+    }
+    attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID;
+    nhg_mbr_obj->get_mandatory_attr(attr);
+    SWSS_LOG_NOTICE("Deleting NHG member %s from nhg %s", serializedObjectId.c_str(), sai_serialize_object_id(attr.value.oid).c_str());
+    
+    auto nhg_obj = nhg_mbr_obj->get_linked_object(SAI_OBJECT_TYPE_NEXT_HOP_GROUP, SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID);
+    if (nhg_obj == nullptr) {
+        SWSS_LOG_ERROR("Failed to find SAI_OBJECT_TYPE_NEXT_HOP_GROUP from %s", serializedObjectId.c_str());
+        return SAI_STATUS_FAILURE;
+    }
+    
+    auto routes = nhg_obj->get_child_objs(SAI_OBJECT_TYPE_ROUTE_ENTRY);
+
+    //call remove_internal to update the mapping from NHG to NHG_MBRs
+    status = remove_internal(SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, serializedObjectId);
+    if (status != SAI_STATUS_SUCCESS) {
+        return status;
+    }
+
+    if (routes == nullptr) {
+        return SAI_STATUS_SUCCESS;
+    }    
+    
+    for (auto route : *routes) {
+        SWSS_LOG_NOTICE("NHG member changed. Updating route %s", route.first.c_str());
+        IpRouteAddRemove(route.second.get(), false);
+        IpRouteAddRemove(route.second.get(), true);
+    }
+    return SAI_STATUS_SUCCESS;
 }
