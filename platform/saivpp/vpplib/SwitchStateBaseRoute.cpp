@@ -104,24 +104,20 @@ void create_vpp_nexthop_entry (
 }
 
 sai_status_t SwitchStateBase::IpRouteAddRemove(
-        _In_ const std::string &serializedObjectId,
-        _In_ uint32_t attr_count,
-        _In_ const sai_attribute_t *attr_list,
-	_In_ bool is_add)
+        _In_ const SaiObject* route_obj,
+	    _In_ bool is_add)
 {
     SWSS_LOG_ENTER();
 
     int ret = SAI_STATUS_SUCCESS;
     sai_status_t                 status;
-    const sai_attribute_value_t  *next_hop;
     sai_object_id_t              next_hop_oid;
-    uint32_t                     next_hop_index;
-
-    status = find_attrib_in_list(attr_count, attr_list, SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID, &next_hop, &next_hop_index);
-    if (status != SAI_STATUS_SUCCESS) {
-	return status;
-    }
-    next_hop_oid = next_hop->oid;
+    sai_attribute_t              attr;
+    std::string                  serializedObjectId = route_obj->get_id();
+    
+    attr.id = SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID;
+    CHECK_STATUS_QUIET(route_obj->get_mandatory_attr(attr));
+    next_hop_oid = attr.value.oid;
 
     sai_route_entry_t route_entry;
     const char *hwif_name = NULL;
@@ -138,47 +134,47 @@ sai_status_t SwitchStateBase::IpRouteAddRemove(
     }
     else if (SAI_OBJECT_TYPE_PORT == sai_object_type_query(next_hop_oid))
     {
-	status = find_attrib_in_list(attr_count, attr_list, SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION,
-                                     &next_hop, &next_hop_index);
-	if (status == SAI_STATUS_SUCCESS && SAI_PACKET_ACTION_FORWARD == next_hop->s32) {
-	    vpp_add_del_intf_ip_addr_norif(serializedObjectId, route_entry, is_add);    
-	}
+        attr.id = SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION;
+        status = route_obj->get_attr(attr);
+
+        if (status == SAI_STATUS_SUCCESS && SAI_PACKET_ACTION_FORWARD == attr.value.s32) {
+            vpp_add_del_intf_ip_addr_norif(serializedObjectId, route_entry, is_add);    
+        }
     }
     else if (SAI_OBJECT_TYPE_NEXT_HOP == sai_object_type_query(next_hop_oid))
     {
-
-	if (IpRouteNexthopEntry(attr_count, attr_list, &nxthop_group) == SAI_STATUS_SUCCESS)
+        if (IpRouteNexthopEntry(next_hop_oid, &nxthop_group) == SAI_STATUS_SUCCESS)
         {
-	    config_ip_route = true;
-	}
+            config_ip_route = true;
+        }
     }
     else if (SAI_OBJECT_TYPE_NEXT_HOP_GROUP == sai_object_type_query(next_hop_oid))
     {
-	if (IpRouteNexthopGroupEntry(next_hop_oid, &nxthop_group) == SAI_STATUS_SUCCESS)
+        if (IpRouteNexthopGroupEntry(next_hop_oid, &nxthop_group) == SAI_STATUS_SUCCESS)
         {
-	    config_ip_route = true;
-	}
+            config_ip_route = true;
+        }
     }
 
     if (config_ip_route == true)
     {
-	std::shared_ptr<IpVrfInfo> vrf;
-	uint32_t vrf_id;
+        std::shared_ptr<IpVrfInfo> vrf;
+        uint32_t vrf_id;
 
-	vrf = vpp_get_ip_vrf(route_entry.vr_id);
-	if (vrf == nullptr) {
-	    vrf_id = 0;
-	} else {
-	    vrf_id = vrf->m_vrf_id;
-	}
-	vpp_ip_route_t *ip_route = (vpp_ip_route_t *)
+        vrf = vpp_get_ip_vrf(route_entry.vr_id);
+        if (vrf == nullptr) {
+            vrf_id = 0;
+        } else {
+            vrf_id = vrf->m_vrf_id;
+        }
+        vpp_ip_route_t *ip_route = (vpp_ip_route_t *)
             calloc(1, sizeof(vpp_ip_route_t) + (nxthop_group->nmembers * sizeof(vpp_ip_nexthop_t)));
-	if (!ip_route) {
-	    return SAI_STATUS_FAILURE;
-	}
-	create_route_prefix_entry(&route_entry, ip_route);
-	ip_route->vrf_id = vrf_id;
-	ip_route->is_multipath = (nxthop_group->nmembers > 1) ? true : false;
+        if (!ip_route) {
+            return SAI_STATUS_FAILURE;
+        }
+        create_route_prefix_entry(&route_entry, ip_route);
+        ip_route->vrf_id = vrf_id;
+        ip_route->is_multipath = (nxthop_group->nmembers > 1) ? true : false;
 
         nexthop_grp_member_t *nxt_grp_member;
 
@@ -191,19 +187,19 @@ sai_status_t SwitchStateBase::IpRouteAddRemove(
         }
         ip_route->nexthop_cnt = nxthop_group->nmembers;
 
-	ret = ip_route_add_del(ip_route, is_add);
+        ret = ip_route_add_del(ip_route, is_add);
 
-	SWSS_LOG_NOTICE("%s ip route in VPP %s status %d table %u", (is_add ? "Add" : "Remove"),
-			serializedObjectId.c_str(), ret, vrf_id);
-	SWSS_LOG_NOTICE("%s route nexthop type %s count %u", (is_add ? "Add" : "Remove"),
-			sai_serialize_object_type(sai_object_type_query(next_hop_oid)).c_str(),
-			nxthop_group->nmembers);
+        SWSS_LOG_NOTICE("%s ip route in VPP %s status %d table %u", (is_add ? "Add" : "Remove"),
+                        serializedObjectId.c_str(), ret, vrf_id);
+        SWSS_LOG_NOTICE("%s route nexthop type %s count %u", (is_add ? "Add" : "Remove"),
+                        sai_serialize_object_type(sai_object_type_query(next_hop_oid)).c_str(),
+                        nxthop_group->nmembers);
 
-	free(ip_route);
+        free(ip_route);
         free(nxthop_group);
 
     } else {
-	SWSS_LOG_NOTICE("Ignoring VPP ip route %s", serializedObjectId.c_str());
+        SWSS_LOG_NOTICE("Ignoring VPP ip route %s", serializedObjectId.c_str());
     }
 
     return ret;
@@ -229,12 +225,12 @@ sai_status_t SwitchStateBase::addIpRoute(
     }
     
     if (isTunnelNh) {
-        IpRouteAddRemove(serializedObjectId, attr_count, attr_list, true);
+        IpRouteAddRemove(&ip_route_obj, true);
     } else {
         process_interface_loopback(serializedObjectId, isLoopback, true);
         if (isLoopback == false && is_ip_nbr_active() == true)
         {
-            IpRouteAddRemove(serializedObjectId, attr_count, attr_list, true);
+            IpRouteAddRemove(&ip_route_obj, true);
         }
     }
     
@@ -251,24 +247,17 @@ sai_status_t SwitchStateBase::updateIpRoute(
 
     if (is_ip_nbr_active() == true) {
         SWSS_LOG_NOTICE("ip route entry update %s", serializedObjectId.c_str());
-
-        sai_attribute_t attr_list[2];
-
-	attr_list[0].id = SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID;
-
-	if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr_list[0]) == SAI_STATUS_SUCCESS) {
-	    uint32_t attr_count = 1;
-
-	    attr_list[1].id = SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION;
-	    if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr_list[1]) == SAI_STATUS_SUCCESS)
-	    {
-		attr_count++;
-	    }
-
-	    IpRouteAddRemove(serializedObjectId, attr_count, attr_list, false);
-	}
-
-	IpRouteAddRemove(serializedObjectId, 1, attr, true);
+        SaiModDBObject route_mod_obj(this, SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, attr);
+        
+        auto route_db_obj = route_mod_obj.get_db_obj();
+        if (!route_db_obj) {
+            SWSS_LOG_ERROR("Failed to find SAI_OBJECT_TYPE_ROUTE_ENTRY SaiObject: %s", serializedObjectId.c_str());
+            return SAI_STATUS_FAILURE;
+        } else {
+            IpRouteAddRemove(route_db_obj.get(), false);
+        }
+        
+	    IpRouteAddRemove(&route_mod_obj, true);
     }
 
     set_internal(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, attr);
@@ -285,20 +274,10 @@ sai_status_t SwitchStateBase::removeIpRoute(
 
     if (isLoopback == false && is_ip_nbr_active() == true)
     {
-        sai_attribute_t attr[2];
-
-	    attr[0].id = SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID;
-
-	    if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr[0]) == SAI_STATUS_SUCCESS) {
-	        uint32_t attr_count = 1;
-
-	        attr[1].id = SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION;
-	        if (get(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId, 1, &attr[1]) == SAI_STATUS_SUCCESS)
-	        {
-		        attr_count++;
-	        }
-
-	        IpRouteAddRemove(serializedObjectId, attr_count, attr, false);
+        auto route_obj = get_sai_object(SAI_OBJECT_TYPE_ROUTE_ENTRY, serializedObjectId);
+        
+	    if (route_obj) {
+	        IpRouteAddRemove(route_obj.get(), false);
 	    }
     }
 
