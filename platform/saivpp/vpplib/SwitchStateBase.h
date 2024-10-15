@@ -949,7 +949,9 @@ namespace saivpp
 
         private:
             std::map<sai_object_id_t, std::list<sai_object_id_t>> m_acl_tbl_rules_map;
+            std::map<sai_object_id_t, std::list<std::string>> m_acl_tbl_hw_ports_map;
 	    std::map<sai_object_id_t, uint32_t> m_acl_swindex_map;
+            std::map<sai_object_id_t, uint32_t> m_tunterm_acl_swindex_map;
             std::map<sai_object_id_t, std::list<sai_object_id_t>> m_acl_tbl_grp_mbr_map;
             std::map<sai_object_id_t, std::list<sai_object_id_t>> m_acl_tbl_grp_ports_map;
 	    std::map<sai_object_id_t, vpp_ace_cntr_info_t> m_ace_cntr_info_map;
@@ -973,6 +975,12 @@ namespace saivpp
 		_In_ sai_object_id_t tbl_oid,
 		_In_ bool is_add);
 
+            sai_status_t tbl_hw_ports_map_delete(
+                _In_ sai_object_id_t tbl_oid);
+        
+            sai_status_t tunterm_acl_delete(
+                _In_ sai_object_id_t tbl_oid);
+
 	    sai_status_t getAclTableId(
 		_In_ sai_object_id_t entry_id, sai_object_id_t *tbl_oid);
 
@@ -987,6 +995,20 @@ namespace saivpp
 
             sai_status_t aclTableRemove(
 		_In_ const std::string &serializedObjectId);
+        
+            sai_status_t tunterm_acl_add_replace(
+                _In_ vpp_tunerm_acl_t *acl,
+                _In_ sai_object_id_t tbl_oid);
+
+            sai_status_t tunterm_set_action_redirect(
+                _In_ sai_acl_entry_attr_t          attr_id,
+                _In_ const sai_attribute_value_t  *value,
+                _Out_ tunterm_acl_rule_t      *rule);
+           
+           sai_status_t tunterm_acl_rule_field_update(
+                _In_ sai_acl_entry_attr_t          attr_id,
+                _In_ const sai_attribute_value_t  *value,
+                _Out_ tunterm_acl_rule_t      *rule);
 
 	    sai_status_t aclTableCreate(
 		_In_ sai_object_id_t object_id,
@@ -1048,6 +1070,11 @@ namespace saivpp
 	       _In_ sai_object_id_t tbl_grp_oid,
 	       _In_ sai_object_id_t tbl_oid,
 	       _In_ bool is_bind);
+
+           sai_status_t tunterm_acl_bindunbind(
+               _In_ sai_object_id_t tbl_oid,
+               _In_ bool is_add,
+               _In_ std::string hwif_name);
 
 	   sai_status_t getAclEntryStats(
 	       _In_ sai_object_id_t ace_cntr_oid,
