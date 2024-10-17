@@ -135,13 +135,8 @@ TunnelManager::tunnel_encap_nexthop_action(
         if (attr.value.s32 != SAI_TUNNEL_MAP_TYPE_VIRTUAL_ROUTER_ID_TO_VNI) {
             continue;
         }
-        auto mapper_table = std::dynamic_pointer_cast<SaiDBObject>(tunnel_encap_mapper);
-        if (!mapper_table) {
-            SWSS_LOG_ERROR("Failed to cast tunnel_encap_mapper to SaiDBObject. OID %s", 
-                tunnel_encap_mapper->get_id().c_str());
-            return SAI_STATUS_FAILURE;
-        }
-        auto tunnel_encap_mapper_entries = mapper_table->get_child_objs(SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY);
+
+        auto tunnel_encap_mapper_entries = tunnel_encap_mapper->get_child_objs(SAI_OBJECT_TYPE_TUNNEL_MAP_ENTRY);
         if (tunnel_encap_mapper_entries == nullptr) {
             SWSS_LOG_DEBUG("Empty tunnel_encap_mapper table. OID %s", 
                 tunnel_encap_mapper->get_id().c_str());

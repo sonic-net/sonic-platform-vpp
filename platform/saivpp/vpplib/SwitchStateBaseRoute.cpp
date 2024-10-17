@@ -100,7 +100,7 @@ void create_vpp_nexthop_entry (
     vpp_nexthop->hwif_name = hwif_name;
     vpp_nexthop->sw_if_index = nxt_grp_member->sw_if_index;
     vpp_nexthop->weight = (uint8_t) nxt_grp_member->weight;
-    vpp_nexthop->preference = (uint8_t) nxt_grp_member->seq_id;
+    vpp_nexthop->preference = 0;
 }
 
 sai_status_t SwitchStateBase::IpRouteAddRemove(
