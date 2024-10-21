@@ -1,0 +1,18 @@
+Source: sonic
+Maintainer: Yue Gao <yuega2@cisco.com>
+Section: net
+Priority: optional
+Build-Depends: debhelper (>= 10), autotools-dev
+Standards-Version: 1.0.0
+
+Package: libsaivpp
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Pre-Depends}
+Section: libs
+Description: This package contains VPP SAI implementation for SONiC project.
+
+Package: libsaivpp-dev
+Architecture: any
+Depends: libsaivpp (= ${binary:Version})
+Section: libdevel
+Description: This package contains development files for SAI-VPP.

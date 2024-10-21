@@ -1,0 +1,27 @@
+# Copyright 2016 Microsoft, Inc.
+# Modifications copyright (c) 2023 Cisco and/or its affiliates.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#DPKG FRK
+SPATH       := $($(LIBSAITHRIFT_DEV)_SRC_PATH)
+DEP_FILES   := $(SONIC_COMMON_FILES_LIST) $(PLATFORM_RULES)/libsaithrift-dev.mk $(PLATFORM_RULES)/libsaithrift-dev.dep
+DEP_FILES   += $(SONIC_COMMON_BASE_FILES_LIST)
+SMDEP_PATHS := $(SPATH)  $(SPATH)/test/ptf  $(SPATH)/test/saithrift/ctypesgen
+$(foreach path, $(SMDEP_PATHS), $(eval $(path) :=$(filter-out $(SMDEP_PATHS),$(addprefix $(path)/, $(shell cd $(path) &&  git ls-files | grep -Ev " " )))))
+
+$(LIBSAITHRIFT_DEV)_CACHE_MODE  := GIT_CONTENT_SHA
+$(LIBSAITHRIFT_DEV)_DEP_FLAGS   := $(SONIC_COMMON_FLAGS_LIST)
+$(LIBSAITHRIFT_DEV)_DEP_FILES   := $(DEP_FILES)
+$(LIBSAITHRIFT_DEV)_SMDEP_FILES := $(foreach path, $(SMDEP_PATHS), $($(path)))
+$(LIBSAITHRIFT_DEV)_SMDEP_PATHS := $(SMDEP_PATHS)
+

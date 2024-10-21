@@ -1,0 +1,16 @@
+#!/usr/bin/make -f
+# This file is a makefile used by debhelper to build the package
+DESTDIR := debian/platform-modules-vpp
+INSTALL_SERVICE_DIR := /lib/systemd/system
+# Use the minimal debhelper version
+%:
+	dh $@
+
+# Override the install step to copy the custom file
+override_dh_install:
+	dh_install
+	dh_installdirs $(INSTALL_SERVICE_DIR)
+	cp files/service/*.service $(DESTDIR)$(INSTALL_SERVICE_DIR)/.
+	install -D -m 755 files/etc/config-setup/factory-default-hooks.d/10-01-vpp-cfg-init $(DESTDIR)/etc/config-setup/factory-default-hooks.d/10-01-vpp-cfg-init
+	install -D -m 755 files/usr/bin/vpp_ports_setup.sh $(DESTDIR)/usr/bin/vpp_ports_setup.sh
+	install -D -m 755 files/usr/bin/vppcfg_load.py $(DESTDIR)/usr/bin/vppcfg_load.py
