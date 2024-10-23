@@ -417,6 +417,7 @@ sai_status_t SwitchStateBase::tunterm_set_action_redirect(
     sai_ip_address_t             ip_address;
     uint32_t                     next_hop_type;
     uint16_t                     vlan_id = 0;
+    char                         nh_ip_str[INET6_ADDRSTRLEN];
 
     next_hop_oid = value->aclaction.parameter.oid;
 
@@ -425,12 +426,12 @@ sai_status_t SwitchStateBase::tunterm_set_action_redirect(
     CHECK_STATUS(get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr));
     next_hop_type = attr.value.s32;
     if (next_hop_type!= SAI_NEXT_HOP_TYPE_IP) {
-	    return SAI_STATUS_SUCCESS;
+        return SAI_STATUS_SUCCESS;
     }
     attr.id = SAI_NEXT_HOP_ATTR_IP;
     if (get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS)
     {
-	    ip_address = attr.value.ipaddr;
+        ip_address = attr.value.ipaddr;
     } else {
         SWSS_LOG_ERROR("IP address missing in nexthop %s", sai_serialize_object_id(next_hop_oid).c_str());
         return SAI_STATUS_SUCCESS;
@@ -461,30 +462,22 @@ sai_status_t SwitchStateBase::tunterm_set_action_redirect(
     }
 
     std::string hwif_name;
-	if (!vpp_get_hwif_name(port_oid, vlan_id, hwif_name)) {
-	    SWSS_LOG_WARN("VPP hwif name not found for port %s", sai_serialize_object_id(port_oid).c_str());
+    if (!vpp_get_hwif_name(port_oid, vlan_id, hwif_name)) {
+        SWSS_LOG_WARN("VPP hwif name not found for port %s", sai_serialize_object_id(port_oid).c_str());
         return SAI_STATUS_SUCCESS;
-	}
+    }
 
     switch (ip_address.addr_family) {
         case SAI_IP_ADDR_FAMILY_IPV4:
         {
-            vpp_ip_addr_t *ip_addr;
+            sai_ip_address_t_to_vpp_ip_addr_t(ip_address, rule->next_hop_ip);
             rule->ip_protocol = 1; // IP46_TYPE_IP4=1, IP46_TYPE_IP6=2
-            ip_addr = &rule->next_hop_ip;
-            struct sockaddr_in *sin =  &ip_addr->addr.ip4;
-            ip_addr->sa_family = AF_INET;
-            sin->sin_addr.s_addr = ip_address.addr.ip4;
             break;
         }
         case SAI_IP_ADDR_FAMILY_IPV6:
         {
-            vpp_ip_addr_t *ip_addr;
-            rule->ip_protocol = 2; // IP46_TYPE_IP4=1, IP46_TYPE_IP6=2            
-            ip_addr = &rule->next_hop_ip;
-            struct sockaddr_in6 *sin6 =  &ip_addr->addr.ip6;
-            ip_addr->sa_family = AF_INET6;
-            memcpy(sin6->sin6_addr.s6_addr, &ip_address.addr.ip6, sizeof(sin6->sin6_addr.s6_addr));
+            sai_ip_address_t_to_vpp_ip_addr_t(ip_address, rule->next_hop_ip);
+            rule->ip_protocol = 2; // IP46_TYPE_IP4=1, IP46_TYPE_IP6=2 
             break;
         }
         default:
@@ -495,20 +488,11 @@ sai_status_t SwitchStateBase::tunterm_set_action_redirect(
 
     SWSS_LOG_NOTICE("Tunterm rule received: IP Protocol %d, rif_oid %d, next-hop hwif_name %s", rule->ip_protocol,
                     rif_oid, rule->hwif_name);
-    
-    if(rule->ip_protocol == 1) {
-        SWSS_LOG_NOTICE("Tunterm acl rule has next-hop IP %x", rule->next_hop_ip.addr.ip4.sin_addr.s_addr);
-    } else if (rule->ip_protocol == 2) {
-        for (int i=0; i<16; i++) {
-            SWSS_LOG_NOTICE("Tunterm acl rule has next-hop IP6 %u", rule->next_hop_ip.addr.ip6.sin6_addr.s6_addr[i]);
-        }
-        
-    }
-    
+
+    vpp_ip_addr_t_to_string(&rule->next_hop_ip, nh_ip_str, INET6_ADDRSTRLEN);        
+    SWSS_LOG_NOTICE("Tunterm acl rule has next-hop IP %s", nh_ip_str);    
 
     return status;
-
-
 }
 
 sai_status_t SwitchStateBase::tunterm_acl_rule_field_update(
@@ -517,61 +501,45 @@ sai_status_t SwitchStateBase::tunterm_acl_rule_field_update(
     _Out_ tunterm_acl_rule_t      *rule)
 {
     sai_status_t status;
+    char         dst_ip_str[INET6_ADDRSTRLEN];
 
     assert(NULL != value);
     status = SAI_STATUS_SUCCESS;
 
     switch (attr_id) {
-    case SAI_ACL_ENTRY_ATTR_FIELD_SRC_IP:
-    case SAI_ACL_ENTRY_ATTR_FIELD_INNER_SRC_IP:
-        break;
     case SAI_ACL_ENTRY_ATTR_FIELD_DST_IP:
     case SAI_ACL_ENTRY_ATTR_FIELD_INNER_DST_IP:
     {
         vpp_ip_addr_t *ip_addr, *ip_mask;
         ip_addr = &rule->dst_prefix;
-	    ip_mask = &rule->dst_prefix_mask;
+        ip_mask = &rule->dst_prefix_mask;
         struct sockaddr_in *sin =  &ip_addr->addr.ip4;
         ip_addr->sa_family = AF_INET;
         sin->sin_addr.s_addr = value->aclfield.data.ip4;
-        SWSS_LOG_NOTICE("Tunterm acl rule has dst IP: %x", sin->sin_addr.s_addr);
         sin =  &ip_mask->addr.ip4;
         sin->sin_addr.s_addr = value->aclfield.mask.ip4;
+        vpp_ip_addr_t_to_string(ip_addr, dst_ip_str, INET6_ADDRSTRLEN);
+        SWSS_LOG_NOTICE("Tunterm acl rule has dst IP: %s", dst_ip_str);
         break;
     }
-    case SAI_ACL_ENTRY_ATTR_FIELD_SRC_IPV6:
-    case SAI_ACL_ENTRY_ATTR_FIELD_INNER_SRC_IPV6:
-        break;
     case SAI_ACL_ENTRY_ATTR_FIELD_DST_IPV6:
     case SAI_ACL_ENTRY_ATTR_FIELD_INNER_DST_IPV6:
     {
         vpp_ip_addr_t *ip_addr, *ip_mask;
         ip_addr = &rule->dst_prefix;
-	    ip_mask = &rule->dst_prefix_mask;
+        ip_mask = &rule->dst_prefix_mask;
         struct sockaddr_in6 *sin6 =  &ip_addr->addr.ip6;
         ip_addr->sa_family = AF_INET6;
         memcpy(sin6->sin6_addr.s6_addr, value->aclfield.data.ip6, sizeof(sin6->sin6_addr.s6_addr));
-        for (int i=0; i<16; i++) {
-            SWSS_LOG_NOTICE("Tunterm acl rule has dst IP6:  %u", sin6->sin6_addr.s6_addr[i]);
-        }
-	    sin6 =  &ip_mask->addr.ip6;
+        sin6 =  &ip_mask->addr.ip6;
         memcpy(sin6->sin6_addr.s6_addr, &value->aclfield.mask.ip6, sizeof(value->aclfield.mask.ip6));
-        
+        vpp_ip_addr_t_to_string(ip_addr, dst_ip_str, INET6_ADDRSTRLEN);
+        SWSS_LOG_NOTICE("Tunterm acl rule has dst IP: %s", dst_ip_str);        
         break;
     }
-    case SAI_ACL_ENTRY_ATTR_FIELD_ACL_IP_TYPE:
-    case SAI_ACL_ENTRY_ATTR_FIELD_ICMP_CODE:
-    case SAI_ACL_ENTRY_ATTR_FIELD_ICMP_TYPE:
-    case SAI_ACL_ENTRY_ATTR_FIELD_ICMPV6_CODE:
-    case SAI_ACL_ENTRY_ATTR_FIELD_ICMPV6_TYPE:
-    case SAI_ACL_ENTRY_ATTR_FIELD_L4_SRC_PORT:
-    case SAI_ACL_ENTRY_ATTR_FIELD_L4_DST_PORT:
-    case SAI_ACL_ENTRY_ATTR_FIELD_IP_PROTOCOL:
-    case SAI_ACL_ENTRY_ATTR_ACTION_PACKET_ACTION:
-        break;
     case SAI_ACL_ENTRY_ATTR_ACTION_REDIRECT:
         status = tunterm_set_action_redirect(attr_id, value, rule);
-	    break;
+        break;
     default:
         break;
     }
@@ -673,7 +641,7 @@ sai_status_t SwitchStateBase::tunterm_acl_bindunbind(sai_object_id_t tbl_oid, bo
     return SAI_STATUS_SUCCESS;
 }
 
-sai_status_t SwitchStateBase::tunterm_acl_add_replace(vpp_tunerm_acl_t *acl, sai_object_id_t tbl_oid)
+sai_status_t SwitchStateBase::tunterm_acl_add_replace(vpp_tunterm_acl_t *acl, sai_object_id_t tbl_oid)
 {
     sai_status_t status = SAI_STATUS_SUCCESS;
     uint32_t tunterm_acl_swindex = 0;
@@ -701,7 +669,7 @@ sai_status_t SwitchStateBase::tunterm_acl_add_replace(vpp_tunerm_acl_t *acl, sai
         return SAI_STATUS_FAILURE;
     }
 
-    if(do_port_bind) {
+    if (do_port_bind) {
         auto it_hw_ports = m_acl_tbl_hw_ports_map.find(tbl_oid);
         if (it_hw_ports == m_acl_tbl_hw_ports_map.end()) {
             auto sid = sai_serialize_object_id(tbl_oid);
@@ -742,11 +710,11 @@ sai_status_t SwitchStateBase::tunterm_acl_delete(sai_object_id_t tbl_oid)
     status = vpp_tunterm_acl_del(tunterm_acl_swindex);
 
     if (status == SAI_STATUS_SUCCESS) {
-	    m_tunterm_acl_swindex_map.erase(tunterm_idx_it);
+        m_tunterm_acl_swindex_map.erase(tunterm_idx_it);
         tbl_hw_ports_map_delete(tbl_oid);
     }
     SWSS_LOG_NOTICE("Tunterm acl table %s, remove tunterm_acl index %u, status %d",
-		    sai_serialize_object_id(tbl_oid).c_str(), tunterm_acl_swindex, status);
+            sai_serialize_object_id(tbl_oid).c_str(), tunterm_acl_swindex, status);
 
     return status;
 }
@@ -833,14 +801,14 @@ sai_status_t SwitchStateBase::AclTblConfig(
         bool ttf_flag_set = false;
         for (uint32_t i = 0; i < p_ace->attrs_count; i++) {
             attr = &p_ace->attrs[i];
-            if(attr->id == SAI_ACL_ENTRY_ATTR_FIELD_TUNNEL_TERMINATED) {
-                if(attr->value.aclfield.data.booldata == true) {
+            if (attr->id == SAI_ACL_ENTRY_ATTR_FIELD_TUNNEL_TERMINATED) {
+                if (attr->value.aclfield.data.booldata == true) {
                     ttf_flag_set=true;
                 }
                 break;
             }
         }
-        if(ttf_flag_set) { 
+        if (ttf_flag_set) { 
             n_tunterm_entries++;
         } else {
             n_entries++;
@@ -867,8 +835,8 @@ sai_status_t SwitchStateBase::AclTblConfig(
     vpp_acl_rule_t *rule = &acl->rules[0];
 
     /* Tunterm ACL setup */
-    vpp_tunerm_acl_t *tunterm_acl;
-    tunterm_acl = (vpp_tunerm_acl_t *) calloc(1, sizeof(vpp_tunerm_acl_t) + (n_tunterm_entries * sizeof(tunterm_acl_rule_t)));
+    vpp_tunterm_acl_t *tunterm_acl;
+    tunterm_acl = (vpp_tunterm_acl_t *) calloc(1, sizeof(vpp_tunterm_acl_t) + (n_tunterm_entries * sizeof(tunterm_acl_rule_t)));
     if (!tunterm_acl) {
         free(aces);
         free(acl);
@@ -887,7 +855,7 @@ sai_status_t SwitchStateBase::AclTblConfig(
 
 	p_ace = &aces[ace.index];
 	const sai_attribute_t *attr;
-    bool update_tunterm_rule = false;
+	bool update_tunterm_rule = false;
 	for (uint32_t i = 0; i < p_ace->attrs_count; i++) {
 	    attr = &p_ace->attrs[i];
 	    auto meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_ACL_ENTRY, attr->id);
@@ -898,11 +866,10 @@ sai_status_t SwitchStateBase::AclTblConfig(
 				meta->attridname);
 	    }
 	    
-        if(attr->id == SAI_ACL_ENTRY_ATTR_FIELD_TUNNEL_TERMINATED) {
-            if(attr->value.aclfield.data.booldata == true) {
-                update_tunterm_rule = true;
-            }
-        }
+	    if ((attr->id == SAI_ACL_ENTRY_ATTR_FIELD_TUNNEL_TERMINATED) &&
+	        (attr->value.aclfield.data.booldata == true)) {
+	        update_tunterm_rule = true;
+	    }
 
 	    if (attr->id == SAI_ACL_ENTRY_ATTR_FIELD_ACL_RANGE_TYPE && acl->count>0  && (rule<(&acl->rules[0]+n_entries))) {
 		for (uint32_t jdx = 0; jdx < p_ace->range_count; jdx++) {
@@ -910,32 +877,32 @@ sai_status_t SwitchStateBase::AclTblConfig(
 							     &p_ace->range_limit[jdx], rule);
 		}
 	    } else {
-            if(acl->count>0 && (rule<(&acl->rules[0]+n_entries))) {
-		        status = acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, rule);
-            }
-            if(tunterm_acl->count>0 && (tunterm_rule<(&tunterm_acl->rules[0]+n_tunterm_entries))) {
-                status = tunterm_acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, tunterm_rule);
+	        if (acl->count>0 && (rule<(&acl->rules[0]+n_entries))) {
+	            status = acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, rule);
 	        }
-        }
+	        if (tunterm_acl->count>0 && (tunterm_rule<(&tunterm_acl->rules[0]+n_tunterm_entries))) {
+	            status = tunterm_acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, tunterm_rule);
+	        }
+	    }
 	}
     
-    if(update_tunterm_rule) {
-        if(acl->count>0 && (rule<(&acl->rules[0]+n_entries))) {
-            memset(rule, 0, sizeof(*rule)); // clear any fields that were added to regular rule
-        }
-        tunterm_rule++;
-    } else {
-        if(tunterm_acl->count>0 && (tunterm_rule<(&tunterm_acl->rules[0]+n_tunterm_entries))) {
-            memset(tunterm_rule, 0, sizeof(*tunterm_rule)); // clear any fields that were added to tunterm_rule
+	if (update_tunterm_rule) {
+	    if (acl->count>0 && (rule<(&acl->rules[0]+n_entries))) {
+	        memset(rule, 0, sizeof(*rule)); // clear any fields that were added to regular rule
 	    }
-        rule++;
-    } 
+	    tunterm_rule++;
+	} else {
+	    if (tunterm_acl->count>0 && (tunterm_rule<(&tunterm_acl->rules[0]+n_tunterm_entries))) {
+	        memset(tunterm_rule, 0, sizeof(*tunterm_rule)); // clear any fields that were added to tunterm_rule
+	    }
+	    rule++;
+	} 
     }
 
     bool acl_replace;
     uint32_t acl_swindex;
     auto vpp_idx_it = m_acl_swindex_map.find(tbl_oid);
-    if(acl->count > 0) {
+    if (acl->count > 0) {
         if (vpp_idx_it == m_acl_swindex_map.end()) {
         acl_swindex = 0;
         acl_replace = false;
@@ -979,7 +946,7 @@ sai_status_t SwitchStateBase::AclTblConfig(
     SWSS_LOG_NOTICE("ACL table %s %s status %d", tbl_sid.c_str(),
 		    acl_replace ? "replace" : "add", status);
     
-    if(status == SAI_STATUS_SUCCESS) {
+    if (status == SAI_STATUS_SUCCESS) {
         status = tunterm_acl_add_replace(tunterm_acl, tbl_oid);
         SWSS_LOG_NOTICE("Tunterm ACL table %s %s status %d", tbl_sid.c_str(),
 		    acl_replace ? "replace" : "add", status);
@@ -1602,7 +1569,6 @@ sai_status_t SwitchStateBase::aclBindUnbindPorts(
     auto acl_swindex = vpp_idx_it->second;
 
     std::list<sai_object_id_t>& member_list = it->second;
-    std::list<std::string> hwif_list;
     std::string hwif_name;
     int ret;
 
@@ -1613,21 +1579,20 @@ sai_status_t SwitchStateBase::aclBindUnbindPorts(
 	    continue;
 	}
 
-
 	if (is_bind) {
 	    ret = vpp_acl_interface_bind(hwif_name.c_str(), acl_swindex, is_input);
-        if(ret == 0) {
-            hwif_list.push_back(hwif_name);
-            tunterm_acl_bindunbind(tbl_oid, true, hwif_name);
-        }
-    }
+	    if (ret == 0) {
+	        tunterm_acl_bindunbind(tbl_oid, true, hwif_name);
+	        m_acl_tbl_hw_ports_map[tbl_oid].push_back(hwif_name);
+	    }
+	}
 	else {
 	    ret = vpp_acl_interface_unbind(hwif_name.c_str(), acl_swindex, is_input);
-        if(ret == 0) {
-            hwif_list.remove(hwif_name);
-            tunterm_acl_bindunbind(tbl_oid, false, hwif_name);
-        }
-    }
+	    if (ret == 0) {
+	        tunterm_acl_bindunbind(tbl_oid, false, hwif_name);
+	        m_acl_tbl_hw_ports_map[tbl_oid].remove(hwif_name);
+	    }
+	}
 	if (ret != 0) {
 	    auto sid = sai_serialize_object_id(tbl_oid);
 	    SWSS_LOG_ERROR("VPP Acl tbl %s (swindex %u) %s failed status %d",
@@ -1638,12 +1603,6 @@ sai_status_t SwitchStateBase::aclBindUnbindPorts(
 	SWSS_LOG_NOTICE("ACL table %s %s port %s", sai_serialize_object_id(tbl_oid).c_str(),
 			is_bind ? "bound to": "unbound from", hwif_name.c_str());
     }
-
-    for(auto hwif: hwif_list) {
-        m_acl_tbl_hw_ports_map[tbl_oid].push_back(hwif);
-    }
-    
-
     return SAI_STATUS_SUCCESS;
 }
 

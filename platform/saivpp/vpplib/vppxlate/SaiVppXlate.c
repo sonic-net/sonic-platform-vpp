@@ -2002,7 +2002,6 @@ int vpp_tunterm_acl_interface_add_del (uint32_t tunterm_index, bool is_bind, con
 
     if (hwif_name) {
         u32 idx;
-
         idx = get_swif_idx(vam, hwif_name);
         if (idx != (u32) -1) {
             mp->sw_if_index = htonl(idx);
@@ -2048,7 +2047,7 @@ int vpp_tunterm_acl_del (uint32_t tunterm_index)
     return ret;
 }
 
-int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tunerm_acl_t *in_acl)
+int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tunterm_acl_t *in_acl)
 {
     u32 idx;
     vat_main_t *vam = &vat_main;
@@ -2077,19 +2076,16 @@ int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tu
         addr = &in_rule->dst_prefix;
         api_addr = &vpp_rule->dst;
 
-        if (addr->sa_family == AF_INET) {
-            struct sockaddr_in *ip4 = &addr->addr.ip4;
-            api_addr->af = ADDRESS_IP4;
-            memcpy(api_addr->un.ip4, &ip4->sin_addr.s_addr, sizeof(api_addr->un.ip4));
-            mp->is_ipv6 = false;
-        } else if (addr->sa_family == AF_INET6) {
-            struct sockaddr_in6 *ip6 =  &addr->addr.ip6;
-            api_addr->af = ADDRESS_IP6;
-            memcpy(api_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(api_addr->un.ip6));
+        if (!vpp_to_vl_api_ip_addr(api_addr, addr)) {
+            SAIVPP_WARN("Unknown protocol in tunterm acl destination prefix");
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+
+        if (addr->sa_family == AF_INET6) {
             mp->is_ipv6 = true;
         } else {
-            SAIVPP_WARN("Unknown protocol in destination prefix");
-            // return -EINVAL;
+            mp->is_ipv6 = false;
         }
 
         if (in_rule->hwif_name) {
@@ -2108,7 +2104,7 @@ int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tu
             return -EINVAL;
         }
 
-        if(in_rule->ip_protocol == 1) {
+        if (in_rule->ip_protocol == 1) {
             vpp_rule->path.proto = htonl(FIB_API_PATH_NH_PROTO_IP4);
             memcpy(vpp_rule->path.nh.address.ip4, &in_rule->next_hop_ip.addr.ip4.sin_addr.s_addr, sizeof(vpp_rule->path.nh.address.ip4)); 
         } else if (in_rule->ip_protocol == 2) {
@@ -2116,7 +2112,8 @@ int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tu
             memcpy(vpp_rule->path.nh.address.ip6, &in_rule->next_hop_ip.addr.ip6.sin6_addr.s6_addr, sizeof(vpp_rule->path.nh.address.ip6));
         } else {
             SAIVPP_WARN("Unknown protocol in next hop prefix");
-            // return -EINVAL;
+            VPP_UNLOCK();
+            return -EINVAL;
         }
     }
     mp->context = store_ptr(tunterm_index);
@@ -2129,7 +2126,6 @@ int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tu
 
     return ret;
 }
-
 
 static int vpp_acl_counters_enable_disable (bool enable)
 {

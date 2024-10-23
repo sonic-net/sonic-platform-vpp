@@ -93,7 +93,7 @@ extern "C" {
         char *acl_name;
         uint32_t count;
         tunterm_acl_rule_t rules[0];
-    } vpp_tunerm_acl_t;
+    } vpp_tunterm_acl_t;
 
 
     typedef enum {
@@ -234,7 +234,7 @@ typedef enum {
     extern int vpp_tunterm_acl_interface_add_del (uint32_t tunterm_index,
                                            bool is_bind, const char *hwif_name);
     extern int vpp_tunterm_acl_del (uint32_t tunterm_index);
-    extern int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tunerm_acl_t *acl);
+    extern int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tunterm_acl_t *acl);
     extern int vpp_acl_interface_bind(const char *hwif_name, uint32_t acl_index,
 				      bool is_input);
     extern int vpp_acl_interface_unbind(const char *hwif_name, uint32_t acl_index,

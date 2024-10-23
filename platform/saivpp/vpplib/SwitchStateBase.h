@@ -1040,7 +1040,7 @@ namespace saivpp
 		_In_ const std::string &serializedObjectId);
         
             sai_status_t tunterm_acl_add_replace(
-                _In_ vpp_tunerm_acl_t *acl,
+                _In_ vpp_tunterm_acl_t *acl,
                 _In_ sai_object_id_t tbl_oid);
 
             sai_status_t tunterm_set_action_redirect(
