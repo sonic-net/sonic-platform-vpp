@@ -92,17 +92,34 @@ extern "C" {
         VPP_IP_API_FLOW_HASH_FLOW_LABEL = 128,
     } vpp_ip_flow_hash_mask_e;
 
+    typedef enum {
+        VPP_API_BFD_STATE_ADMIN_DOWN = 0,
+        VPP_API_BFD_STATE_DOWN = 1,
+        VPP_API_BFD_STATE_INIT = 2,
+        VPP_API_BFD_STATE_UP = 3,
+    } vpp_api_bfd_state_e;
+
     typedef struct vpp_intf_status_ {
 	char hwif_name[64];
 	bool link_up;
     } vpp_intf_status_t;
 
+    typedef struct vpp_bfd_state_notif_ {
+        bool                multihop;
+        uint32_t            sw_if_index;
+        vpp_ip_addr_t       local_addr;
+        vpp_ip_addr_t       peer_addr;
+        vpp_api_bfd_state_e state;
+    } vpp_bfd_state_notif_t;
+
     typedef enum {
 	VPP_INTF_LINK_STATUS = 1,
+        VPP_BFD_STATE_CHANGE,
     } vpp_event_type_e;
 
     typedef union vpp_event_data_ {
-	vpp_intf_status_t intf_status;
+       vpp_intf_status_t     intf_status;
+       vpp_bfd_state_notif_t bfd_notif;
     } vpp_event_data_t;
 
     typedef struct vpp_event_info_ {
@@ -217,9 +234,11 @@ typedef enum {
     extern int l2fib_flush_all();
     extern int l2fib_flush_int(const char *hwif_name);
     extern int l2fib_flush_bd(uint32_t bd_id);
-    extern int bfd_udp_add(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr, uint8_t detect_mult,\
+    extern int bfd_udp_add(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
+                           vpp_ip_addr_t *peer_addr, uint8_t detect_mult,
                            uint32_t desired_min_tx, uint32_t required_min_rx);
-    extern int bfd_udp_del(const char *hwif_name, vpp_ip_addr_t *local_addr, vpp_ip_addr_t *peer_addr);
+    extern int bfd_udp_del(bool multihop, const char *hwif_name, vpp_ip_addr_t *local_addr,
+                           vpp_ip_addr_t *peer_addr);
 
     extern int vpp_vxlan_tunnel_add_del(vpp_vxlan_tunnel_t *tunnel, bool is_add,  uint32_t *sw_if_index);
     extern int vpp_ip_addr_t_to_string(vpp_ip_addr_t *ip_addr, char *buffer, size_t maxlen);
