@@ -93,7 +93,12 @@ docker_build:  vppbld-docker/Dockerfile-$(BLDENV)
 	rm -rf debs
 	popd
 
-$(addprefix $(DEST)/, $(MAIN_TARGET)): $(DEST)/% : docker_build repo_clone
+$(addprefix $(DEST)/, $(MAIN_TARGET)): $(DEST)/% :  repo_clone
+
+	pushd $(VPP_REPO_DIR)
+	make UNATTENDED=y PLATFORM=vpp install-dep 
+	make UNATTENDED=y PLATFORM=vpp -j4 build pkg-deb||echo ret:$?
+	popd
 	$(VPP_DOCKER_RUN) /run_build.sh
 	pushd $(VPP_REPO_DIR)/build-root
 	@for target in *_$(CONFIGURED_ARCH).deb; do \
