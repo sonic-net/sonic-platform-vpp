@@ -839,8 +839,7 @@ namespace saivpp
                 _Out_ nexthop_grp_config_t **nxthop_group);
 
             sai_status_t IpRouteNexthopEntry(
-                    _In_ uint32_t attr_count,
-                    _In_ const sai_attribute_t *attr_list,
+                    _In_ sai_object_id_t next_hop_oid,
 		    _Out_ nexthop_grp_config_t **nxthop_group_cfg);
 
 	    sai_status_t createNexthop(
@@ -851,7 +850,16 @@ namespace saivpp
 
             sai_status_t removeNexthop(
                 _In_ const std::string &serializedObjectId);
-                
+	    
+            sai_status_t createNexthopGroupMember(
+		_In_ const std::string& serializedObjectId,
+		_In_ sai_object_id_t switch_id,
+		_In_ uint32_t attr_count,
+		_In_ const sai_attribute_t *attr_list);
+
+            sai_status_t removeNexthopGroupMember(
+		_In_ const std::string& serializedObjectId);
+
         protected:
 	    sai_status_t createRouterif(
 		    _In_ sai_object_id_t object_id,
@@ -976,9 +984,7 @@ namespace saivpp
                     _In_ const std::string &ipAddress);
 
             sai_status_t IpRouteAddRemove(
-                    _In_ const std::string &serializedObjectId,
-                    _In_ uint32_t attr_count,
-                    _In_ const sai_attribute_t *attr_list,
+                    _In_ const SaiObject* route_obj,
                     _In_ bool is_add);
             sai_status_t updateIpRoute(
                     _In_ const std::string &serializedObjectId,

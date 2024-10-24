@@ -196,7 +196,12 @@ sai_status_t SwitchStateBase::create(
     {       
         return createNexthop(serializedObjectId, switch_id, attr_count, attr_list);
     }
-
+    
+    if (object_type == SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER)
+    {
+        return createNexthopGroupMember(serializedObjectId, switch_id, attr_count, attr_list);
+    }
+    
     if (object_type == SAI_OBJECT_TYPE_NEIGHBOR_ENTRY)
     {
         return addIpNbr(serializedObjectId, switch_id, attr_count, attr_list);
@@ -329,7 +334,7 @@ sai_status_t SwitchStateBase::create_internal(
 
         objectHash[serializedObjectId][a->getAttrMetadata()->attridname] = a;
     }
-    m_object_db.add(object_type, serializedObjectId, switch_id, attr_count, attr_list);
+    m_object_db.create_or_update(object_type, serializedObjectId, attr_count, attr_list, true/*is_create*/);
     return SAI_STATUS_SUCCESS;
 }
 
@@ -483,6 +488,11 @@ sai_status_t SwitchStateBase::remove(
     if (object_type == SAI_OBJECT_TYPE_NEXT_HOP)
     {
         return removeNexthop(serializedObjectId);
+    }
+
+    if (object_type == SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER)
+    {
+        return removeNexthopGroupMember(serializedObjectId);
     }
 
     if (object_type == SAI_OBJECT_TYPE_NEIGHBOR_ENTRY)
@@ -706,6 +716,9 @@ sai_status_t SwitchStateBase::set_internal(
         _In_ const sai_attribute_t* attr)
 {
     SWSS_LOG_ENTER();
+    
+    //Update child-parent relationship before updating the attribute
+    m_object_db.create_or_update(objectType, serializedObjectId, 1, attr, false/*is_create*/);
 
     auto it = m_objectHash.at(objectType).find(serializedObjectId);
 
