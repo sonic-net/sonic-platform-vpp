@@ -275,8 +275,8 @@ SwitchStateBase::createNexthopGroupMember(
    
     SaiCachedObject nhg_mbr_obj(this, SAI_OBJECT_TYPE_NEXT_HOP_GROUP_MEMBER, serializedObjectId, attr_count, attr_list);
     attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID;
-    nhg_mbr_obj.get_mandatory_attr(attr);
-    SWSS_LOG_NOTICE("Creating NHG member %s in nhg %s", serializedObjectId.c_str(), sai_serialize_object_id(attr.value.oid).c_str());
+    CHECK_STATUS_QUIET(nhg_mbr_obj.get_mandatory_attr(attr));
+    SWSS_LOG_INFO("Creating NHG member %s in nhg %s", serializedObjectId.c_str(), sai_serialize_object_id(attr.value.oid).c_str());
     auto nhg_obj = nhg_mbr_obj.get_linked_object(SAI_OBJECT_TYPE_NEXT_HOP_GROUP, SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID);
     if (nhg_obj == nullptr) {
         SWSS_LOG_ERROR("Failed to find SAI_OBJECT_TYPE_NEXT_HOP_GROUP from %s", serializedObjectId.c_str());
@@ -295,7 +295,7 @@ SwitchStateBase::createNexthopGroupMember(
     }
 
     for (auto route : *routes) {
-        SWSS_LOG_NOTICE("NHG member changed. Updating route %s", route.first.c_str());
+        SWSS_LOG_INFO("NHG member changed. Updating route %s", route.first.c_str());
         IpRouteAddRemove(route.second.get(), false);
         IpRouteAddRemove(route.second.get(), true);
     }
@@ -316,8 +316,8 @@ SwitchStateBase::removeNexthopGroupMember(
         return SAI_STATUS_FAILURE;
     }
     attr.id = SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID;
-    nhg_mbr_obj->get_mandatory_attr(attr);
-    SWSS_LOG_NOTICE("Deleting NHG member %s from nhg %s", serializedObjectId.c_str(), sai_serialize_object_id(attr.value.oid).c_str());
+    CHECK_STATUS_QUIET(nhg_mbr_obj->get_mandatory_attr(attr));
+    SWSS_LOG_INFO("Deleting NHG member %s from nhg %s", serializedObjectId.c_str(), sai_serialize_object_id(attr.value.oid).c_str());
     
     auto nhg_obj = nhg_mbr_obj->get_linked_object(SAI_OBJECT_TYPE_NEXT_HOP_GROUP, SAI_NEXT_HOP_GROUP_MEMBER_ATTR_NEXT_HOP_GROUP_ID);
     if (nhg_obj == nullptr) {
@@ -338,7 +338,7 @@ SwitchStateBase::removeNexthopGroupMember(
     }    
     
     for (auto route : *routes) {
-        SWSS_LOG_NOTICE("NHG member changed. Updating route %s", route.first.c_str());
+        SWSS_LOG_INFO("NHG member changed. Updating route %s", route.first.c_str());
         IpRouteAddRemove(route.second.get(), false);
         IpRouteAddRemove(route.second.get(), true);
     }

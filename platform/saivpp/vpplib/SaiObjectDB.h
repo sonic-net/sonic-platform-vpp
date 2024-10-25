@@ -51,7 +51,7 @@ namespace saivpp
 
         virtual ~SaiObject() = default;
 
-        virtual sai_status_t get_attr(_Out_ sai_attribute_t &attr) const = 0;
+        virtual sai_status_t get_attr(_Inout_ sai_attribute_t &attr) const = 0;
 
         /**
          * @brief Retrieves the value of a specific attribute of the SAI object. If the attribute is not found, log an error and 
@@ -60,7 +60,7 @@ namespace saivpp
          * @param attr [out] A reference to the sai_attribute_t structure to store the attribute value.
          * @return sai_status_t The status of the attribute retrieval operation.
          */
-        sai_status_t get_mandatory_attr(_Out_ sai_attribute_t &attr) const;
+        sai_status_t get_mandatory_attr(_Inout_ sai_attribute_t &attr) const;
 
         const std::string& get_id() const { return m_id; }
 
@@ -109,7 +109,7 @@ namespace saivpp
          * @param attr [out] A reference to the sai_attribute_t structure to store the attribute value.
          * @return sai_status_t The status of the attribute retrieval operation.
          */
-        sai_status_t get_attr(_Out_ sai_attribute_t &attr) const override;
+        sai_status_t get_attr(_Inout_ sai_attribute_t &attr) const override;
 
     private:
         /**< The number of attributes associated with the SAI object. */
@@ -148,7 +148,7 @@ namespace saivpp
          * @param attr The attribute to be retrieved.
          * @return The status of the operation.
          */
-        sai_status_t get_attr(_Out_ sai_attribute_t &attr) const override;
+        sai_status_t get_attr(_Inout_ sai_attribute_t &attr) const override;
 
         /**
          * @brief Retrieves the child objects of the specified type.
@@ -206,6 +206,11 @@ namespace saivpp
         std::unordered_map<sai_object_type_t, std::unordered_map<std::string, std::shared_ptr<SaiObject>>> m_child_map;
     };
     
+    /**
+     * SaiModDBObject is used to represent a SAI object that has been modified. It has the list of modified attributes of 
+     * the SAI object passed in through set request and backed by original SAI object in DB. get_attribute will first read
+     * from the modified attribute list and if not found, it will read the object in database.
+     */
     class SaiModDBObject : public SaiObject {
     public:
         SaiModDBObject(SwitchStateBase* switch_db, sai_object_type_t type, const std::string& id, 
@@ -213,7 +218,7 @@ namespace saivpp
 
         ~SaiModDBObject() = default;
 
-        sai_status_t get_attr(_Out_ sai_attribute_t &attr) const override;
+        sai_status_t get_attr(_Inout_ sai_attribute_t &attr) const override;
 
         std::shared_ptr<SaiDBObject> get_db_obj() const { 
             return m_sai_db_obj; 

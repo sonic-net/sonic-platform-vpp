@@ -32,7 +32,7 @@ using namespace saivpp;
  * Child objects defined in this map will be added to the parent object when the child object is created. From parent object, we
  * can get the child object by calling get_child_objs() method with the child object type.
  * 
- * Technically, this definition is not needed. Through SAI meta, we can get find which attribute is type of object_id or object_list.
+ * Technically, this definition is not needed. Through SAI meta, we can find which attributes are of type object_id or object_list.
  * From the attribute value and RealObjectIdManager::objectTypeQuery, we can find the parent object type. So we can create a complete
  * graph of all SAI objects. 
  */
@@ -161,14 +161,16 @@ SaiObjectDB::create_or_update(
                 sai_parent = parent_it->second;
             }
             m_sai_parent_objs[child_def.parent_type] = sai_parents;
-            // multiple copies of child objects can exist as leaf of different parent objects. There can even
-            // be a copy as parent object if it is created as child first then another object is added as its child. 
-            // Today SaiDBObject is just a wrapper to the underlaying object in switch_db 
-            // until it becomes a parent object, where parent-child relationship is maintained. When the object is 
-            // deleted, it will be removed from the child list of parent objects and from the SaiObjectDB if it is 
-            // also a parent object. Since SaiDBObject is a simple wrapper if it is a child object, it is ok to have
-            // multiple copies. If we are going to extend it to keep other information, we need to make sure that
-            // a single copy exists in the SaiObjectDB.
+            /**
+             * multiple copies of child objects can exist as leaf of different parent objects. There can even
+             * be a copy as parent object if it is created as child first then another object is added as its child. 
+             * Today SaiDBObject is just a wrapper to the underlaying object in switch_db 
+             * until it becomes a parent object, where parent-child relationship is maintained. When the object is 
+             * deleted, it will be removed from the child list of parent objects and from the SaiObjectDB if it is 
+             * also a parent object. Since SaiDBObject is a simple wrapper if it is a child object, it is ok to have
+             * multiple copies. If we are going to extend it to keep other information, we need to make sure that
+             * a single copy exists in the SaiObjectDB.
+             */
             auto sai_child = std::make_shared<SaiDBObject>(m_switch_db, object_type, id);
             sai_parent->add_child(sai_child);
             SWSS_LOG_INFO("Add child %s:%s to parent %s:%s", 
@@ -187,7 +189,7 @@ SaiObjectDB::create_or_update(
  * and the child-parent relationship definition as input parameters.
  * The function retrieves the parent object IDs using the get_parent_oids() function and iterates over each parent ID.
  * For each parent ID, it checks if the parent object exists in the SaiObjectDB. If the parent object is not found, a warning 
- * message is logged and the function returns SAI_STATUS_SUCCESS.
+ * message is logged.
  * If the parent object is found, the function removes the child object from the parent object using the remove_child() 
  * function and logs a debug message.
  *
