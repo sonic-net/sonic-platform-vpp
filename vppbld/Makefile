@@ -15,10 +15,9 @@
 SHELL = /bin/bash
 .SHELLFLAGS += -e
 
-VPP_URL = https://github.com/abdbaig/vpp.git
-VPP_BRANCH = 21_days_old
+VPP_URL = https://gerrit.fd.io/r/vpp
 VPP_SHA =
-VPP_LAG = 21
+VPP_LAG = 10
 USER = $(shell id -un)
 UID = $(shell id -u)
 GUID = $(shell id -g)
@@ -69,7 +68,7 @@ build_vpp:
 .PHONY: repo_clone
 repo_clone:
 	rm -rf $(VPP_REPO_DIR)
-	git clone -b $(VPP_BRANCH) $(VPP_URL) $(VPP_REPO_DIR)
+        git clone $(VPP_URL) $(VPP_REPO_DIR)
 	cp -r $(VPP_CUSTOM_PLUGINS_DIR)/* $(VPP_REPO_DIR)/src/plugins/
 	pushd $(VPP_REPO_DIR)
 	@VPP_SHA=`git log --until "$(VPP_LAG) days ago" -1 --format="%h"`
