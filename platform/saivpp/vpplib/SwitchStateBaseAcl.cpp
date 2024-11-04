@@ -28,6 +28,7 @@
 #include <net/if.h>
 #include <netinet/in.h>
 
+#include "SwitchStateBaseAcl.h"
 #include "SwitchStateBaseUtils.h"
 #include "vppxlate/SaiVppXlate.h"
 #include "vppxlate/SaiAclStats.h"
@@ -54,7 +55,7 @@ static sai_status_t acl_ip_field_to_vpp_acl(
            (SAI_ACL_ENTRY_ATTR_FIELD_INNER_DST_IPV6 == attr_id));
 
     if (!value->aclfield.enable) {
-        SWSS_LOG_NOTICE("aclfield not enabled for ip prefix");
+        SWSS_LOG_INFO("aclfield not enabled for ip prefix");
         return SAI_STATUS_SUCCESS;
     }
 
@@ -102,7 +103,7 @@ static sai_status_t acl_ip_field_to_vpp_acl(
 
 	sin =  &ip_mask->addr.ip4;
 	sin->sin_addr.s_addr = value->aclfield.mask.ip4;
-	SWSS_LOG_NOTICE("Setting ipv4 subnet %x %x", value->aclfield.data.ip4,
+	SWSS_LOG_INFO("Setting ipv4 subnet %x %x", value->aclfield.data.ip4,
 			value->aclfield.mask.ip4);
     } else {
 	struct sockaddr_in6 *sin6 =  &ip_addr->addr.ip6;
@@ -178,7 +179,7 @@ static sai_status_t acl_ip_type_field_to_vpp_acl_rule(
         break;
 
     default:
-        SWSS_LOG_NOTICE("Unsupported ip type (%d)\n", ip_type);
+        SWSS_LOG_INFO("Unsupported ip type (%d)\n", ip_type);
 	return SAI_STATUS_SUCCESS;
     }
     return SAI_STATUS_SUCCESS;
@@ -236,7 +237,7 @@ static sai_status_t acl_entry_port_to_vpp_acl_rule(
     _Out_ vpp_acl_rule_t      *rule)
 {
     if (!value->aclfield.enable) {
-	SWSS_LOG_NOTICE("aclfield disabled for port configuration");
+	SWSS_LOG_INFO("aclfield disabled for port configuration");
 	return SAI_STATUS_SUCCESS;
     }
 
@@ -268,17 +269,17 @@ static sai_status_t acl_rule_port_range_vpp_acl_set(
     case SAI_ACL_RANGE_TYPE_L4_SRC_PORT_RANGE:
 	rule->srcport_or_icmptype_first = (uint16_t) range->min;
 	rule->srcport_or_icmptype_last = (uint16_t) range->max;
-	SWSS_LOG_NOTICE("SRC port range %u-%u", range->min, range->max);
+	SWSS_LOG_INFO("SRC port range %u-%u", range->min, range->max);
         break;
 
     case SAI_ACL_RANGE_TYPE_L4_DST_PORT_RANGE:
 	rule->dstport_or_icmpcode_first = (uint16_t) range->min;
 	rule->dstport_or_icmpcode_last = (uint16_t) range->max;
-	SWSS_LOG_NOTICE("DST port range %u-%u", range->min, range->max);
+	SWSS_LOG_INFO("DST port range %u-%u", range->min, range->max);
         break;
 
     default:
-        SWSS_LOG_NOTICE("Range type %d is not supported\n", type);
+        SWSS_LOG_INFO("Range type %d is not supported\n", type);
 	break;
     }
 
@@ -486,11 +487,11 @@ sai_status_t SwitchStateBase::tunterm_set_action_redirect(
 
     strncpy(rule->hwif_name, hwif_name.c_str(), sizeof(rule->hwif_name) -1);
 
-    SWSS_LOG_NOTICE("Tunterm rule received: IP Protocol %d, rif_oid %d, next-hop hwif_name %s", rule->ip_protocol,
+    SWSS_LOG_INFO("Tunterm rule received: IP Protocol %d, rif_oid %d, next-hop hwif_name %s", rule->ip_protocol,
                     rif_oid, rule->hwif_name);
 
     vpp_ip_addr_t_to_string(&rule->next_hop_ip, nh_ip_str, INET6_ADDRSTRLEN);        
-    SWSS_LOG_NOTICE("Tunterm acl rule has next-hop IP %s", nh_ip_str);    
+    SWSS_LOG_INFO("Tunterm acl rule has next-hop IP %s", nh_ip_str);    
 
     return status;
 }
@@ -519,7 +520,7 @@ sai_status_t SwitchStateBase::tunterm_acl_rule_field_update(
         sin =  &ip_mask->addr.ip4;
         sin->sin_addr.s_addr = value->aclfield.mask.ip4;
         vpp_ip_addr_t_to_string(ip_addr, dst_ip_str, INET6_ADDRSTRLEN);
-        SWSS_LOG_NOTICE("Tunterm acl rule has dst IP: %s", dst_ip_str);
+        SWSS_LOG_INFO("Tunterm acl rule has dst IP: %s", dst_ip_str);
         break;
     }
     case SAI_ACL_ENTRY_ATTR_FIELD_DST_IPV6:
@@ -534,7 +535,7 @@ sai_status_t SwitchStateBase::tunterm_acl_rule_field_update(
         sin6 =  &ip_mask->addr.ip6;
         memcpy(sin6->sin6_addr.s6_addr, &value->aclfield.mask.ip6, sizeof(value->aclfield.mask.ip6));
         vpp_ip_addr_t_to_string(ip_addr, dst_ip_str, INET6_ADDRSTRLEN);
-        SWSS_LOG_NOTICE("Tunterm acl rule has dst IP: %s", dst_ip_str);        
+        SWSS_LOG_INFO("Tunterm acl rule has dst IP: %s", dst_ip_str);        
         break;
     }
     case SAI_ACL_ENTRY_ATTR_ACTION_REDIRECT:
@@ -603,32 +604,303 @@ sai_status_t acl_priority_attr_get (
     return SAI_STATUS_FAILURE;
 }
 
-#define MAX_ACL_ATTRS 12
-
-typedef struct _acl_tbl_entries_ {
-    uint32_t priority;
-
-    sai_attribute_t  attr_range;
-    sai_object_id_t  range_objid_list[2];
-
-    sai_u32_range_t range_limit[2];
-    sai_acl_range_type_t range_type[2];
-    uint32_t range_count;
-    sai_attribute_t attrs[MAX_ACL_ATTRS];
-    uint32_t attrs_count;
-} acl_tbl_entries_t;
-
-typedef struct ordered_ace_list_ {
-    uint32_t index;
-    uint32_t priority;
-    sai_object_id_t ace_oid;
-} ordered_ace_list_t;
-
 static bool cmp_priority (
     const ordered_ace_list_t& f,
     const ordered_ace_list_t& s)
 {
     return (f.priority > s.priority);
+}
+
+sai_status_t SwitchStateBase::get_sorted_aces(
+    sai_object_id_t tbl_oid,
+    size_t &n_total_entries,
+    acl_tbl_entries_t *&aces,
+    std::list<ordered_ace_list_t> &ordered_aces)
+{
+    sai_status_t                status = SAI_STATUS_SUCCESS;
+    auto it =                   m_acl_tbl_rules_map.find(tbl_oid);
+    uint32_t                    index = 0;
+    acl_tbl_entries_t          *p_ace = NULL;
+    
+
+    if (it == m_acl_tbl_rules_map.end()) {
+        auto sid = sai_serialize_object_id(tbl_oid);
+        SWSS_LOG_INFO("No ACL entry list for table id %s", sid.c_str());
+        return status;
+    }
+
+    n_total_entries = it->second.size();
+    if (n_total_entries == 0) {
+        return SAI_STATUS_SUCCESS;
+    }
+
+    std::list<sai_object_id_t> &acl_entries = it->second;
+
+    aces = (acl_tbl_entries_t *) calloc(n_total_entries, sizeof(acl_tbl_entries_t));
+    if (!aces) {
+        SWSS_LOG_ERROR("Failed to allocate memory for aces.");
+        return SAI_STATUS_FAILURE;
+    }
+    p_ace = aces;
+
+    /* Collect ACL entries configuration */
+    for (auto entry_id: acl_entries) {
+        SWSS_LOG_INFO("Processing ACL entry %s", sai_serialize_object_id(entry_id).c_str());
+
+        auto sid = sai_serialize_object_id(entry_id);
+
+        if (get(SAI_OBJECT_TYPE_ACL_ENTRY, sid, MAX_ACL_ATTRS,
+            &p_ace->attrs_count, p_ace->attrs) != SAI_STATUS_SUCCESS) {
+            SWSS_LOG_ERROR("Failed to get acl entry.");
+            status = SAI_STATUS_FAILURE;
+            break;
+        }
+        p_ace->attr_range.value.aclfield.data.objlist.list = p_ace->range_objid_list;
+        p_ace->attr_range.value.aclfield.data.objlist.count = 2;
+
+        if (acl_range_attr_get(sid, p_ace->attrs_count,
+                        p_ace->attrs, &p_ace->attr_range) == SAI_STATUS_SUCCESS) {
+            p_ace->range_count = 0;
+            if (acl_rule_range_get(&p_ace->attr_range.value.aclfield.data.objlist,
+                p_ace->range_limit, p_ace->range_type, &p_ace->range_count) 
+                != SAI_STATUS_SUCCESS) {
+                SWSS_LOG_ERROR("Failed acl range get.");
+                status = SAI_STATUS_FAILURE;
+                break;
+            }
+        }
+
+        p_ace->priority = 0;
+        acl_priority_attr_get(p_ace->attrs_count, p_ace->attrs, &p_ace->priority);
+
+        ordered_aces.push_back({index, p_ace->priority, entry_id, false});
+        p_ace++;
+        index++;
+    }
+
+    if (status != SAI_STATUS_SUCCESS) {
+        free(aces);
+        ordered_aces.clear();
+        return SAI_STATUS_FAILURE;
+    }
+
+    /* Sort ACL entries on priority */
+    ordered_aces.sort(cmp_priority);
+
+    return SAI_STATUS_SUCCESS;
+}
+
+void SwitchStateBase::count_tunterm_acl_rules(
+    acl_tbl_entries_t *aces,
+    std::list<ordered_ace_list_t> &ordered_aces,
+    size_t &n_entries,
+    size_t &n_tunterm_entries)
+{
+    acl_tbl_entries_t     *p_ace = NULL;
+    const sai_attribute_t *attr = NULL;
+    bool                   tunterm_flag_set = false;
+
+    for (auto &ace: ordered_aces) {
+        p_ace = &aces[ace.index];
+        tunterm_flag_set = false;
+        for (uint32_t i = 0; i < p_ace->attrs_count; i++) {
+            attr = &p_ace->attrs[i];
+            if (attr->id == SAI_ACL_ENTRY_ATTR_FIELD_TUNNEL_TERMINATED) {
+                if (attr->value.aclfield.data.booldata == true) {
+                    tunterm_flag_set = true;
+                }
+                break;
+            }
+        }
+        if (tunterm_flag_set) { 
+            n_tunterm_entries++;
+            ace.is_tunterm = true;
+        } else {
+            n_entries++;
+        }
+    }
+}
+
+sai_status_t SwitchStateBase::allocate_acl(
+    size_t n_entries,
+    sai_object_id_t tbl_oid,
+    char (&acl_name)[64],
+    vpp_acl_t *&acl)
+{
+    auto tbl_sid = sai_serialize_object_id(tbl_oid);
+
+    if(n_entries == 0) {
+        return SAI_STATUS_SUCCESS;
+    }
+
+    acl = (vpp_acl_t *) calloc(1, sizeof(vpp_acl_t) + (n_entries * sizeof(vpp_acl_rule_t)));
+    if (!acl) {
+        SWSS_LOG_ERROR("Failed to allocate memory for acl.");
+        return SAI_STATUS_FAILURE;
+    }
+    snprintf(acl_name, sizeof(acl_name), "sonic_acl_%s", tbl_sid.c_str());
+    acl->acl_name = acl_name;
+    acl->count = (uint32_t) n_entries;
+
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::allocate_tunterm_acl(
+    size_t n_tunterm_entries,
+    sai_object_id_t tbl_oid,
+    char (&acl_name)[64],
+    vpp_tunterm_acl_t *&tunterm_acl)
+{
+    auto tbl_sid = sai_serialize_object_id(tbl_oid);
+
+    if(n_tunterm_entries == 0) {
+        return SAI_STATUS_SUCCESS;
+    }
+
+    tunterm_acl = (vpp_tunterm_acl_t *) calloc(1, sizeof(vpp_tunterm_acl_t) + (n_tunterm_entries * sizeof(tunterm_acl_rule_t)));
+    if (!tunterm_acl) {
+        SWSS_LOG_ERROR("Failed to allocate memory for tunterm acl.");
+        return SAI_STATUS_FAILURE;
+    }
+    tunterm_acl->count = (uint32_t) n_tunterm_entries;    
+    snprintf(acl_name, sizeof(acl_name), "tunterm_sonic_acl_%s", tbl_sid.c_str());
+    tunterm_acl->acl_name = acl_name;
+
+    return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t SwitchStateBase::fill_acl_rules(
+    acl_tbl_entries_t *aces,
+    std::list<ordered_ace_list_t> &ordered_aces,
+    vpp_acl_t *acl,
+    vpp_tunterm_acl_t *tunterm_acl)
+{
+    sai_status_t       status = SAI_STATUS_SUCCESS;
+    acl_tbl_entries_t  *p_ace = NULL;
+    vpp_acl_rule_t     *rule = NULL;
+    tunterm_acl_rule_t *tunterm_rule = NULL;
+
+    if(acl != NULL) {
+        rule = &acl->rules[0];
+    }
+    if(tunterm_acl != NULL) {
+        tunterm_rule = &tunterm_acl->rules[0];
+    }
+
+    for (auto ace: ordered_aces) {
+        SWSS_LOG_INFO("Acl entry index %u priority %u", ace.index, ace.priority);
+        p_ace = &aces[ace.index];
+        const sai_attribute_t *attr;
+        for (uint32_t i = 0; i < p_ace->attrs_count && status == SAI_STATUS_SUCCESS; i++) {
+            attr = &p_ace->attrs[i];
+            auto meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_ACL_ENTRY, attr->id);
+
+            if (meta != NULL) {
+                SWSS_LOG_INFO("Type %s attrib id %s",
+                    sai_serialize_object_type(SAI_OBJECT_TYPE_ACL_ENTRY).c_str(),
+                    meta->attridname);
+            }
+            if (attr->id == SAI_ACL_ENTRY_ATTR_FIELD_ACL_RANGE_TYPE && !ace.is_tunterm) {
+                for (uint32_t jdx = 0; jdx < p_ace->range_count; jdx++) {
+                    status = acl_rule_port_range_vpp_acl_set(p_ace->range_type[jdx],
+                                                    &p_ace->range_limit[jdx], rule);
+                }
+            } else if (ace.is_tunterm) {
+                status = tunterm_acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, tunterm_rule);
+            } else {
+                status = acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, rule);
+            }
+
+            if(status != SAI_STATUS_SUCCESS) {
+                SWSS_LOG_ERROR("Failed to fill acl rule, status: %d", status);
+                return SAI_STATUS_FAILURE;
+            }
+        }
+        if (ace.is_tunterm) {
+            tunterm_rule++;
+        } else {
+            rule++;
+        } 
+    }
+    return SAI_STATUS_SUCCESS;
+}
+
+void SwitchStateBase::cleanup_AclTblConfig(
+    acl_tbl_entries_t *&aces,
+    std::list<ordered_ace_list_t> &ordered_aces,
+    vpp_acl_t *&acl,
+    vpp_tunterm_acl_t *&tunterm_acl)
+{
+    if(aces != NULL) {
+        free(aces);
+        aces = NULL;
+    }
+    if(acl != NULL) {
+        free(acl);
+        acl = NULL;
+    }
+    if(tunterm_acl != NULL) {
+        free(tunterm_acl);
+        tunterm_acl = NULL;
+    }
+    ordered_aces.clear();
+}
+
+sai_status_t SwitchStateBase::acl_add_replace(
+    vpp_acl_t *&acl,
+    sai_object_id_t tbl_oid,
+    acl_tbl_entries_t *aces,
+    std::list<ordered_ace_list_t> &ordered_aces) 
+{
+    sai_status_t        status = SAI_STATUS_SUCCESS;
+    bool                acl_replace;
+    uint32_t            acl_swindex;
+    uint32_t            index = 0;
+    acl_tbl_entries_t  *p_ace = NULL;
+    auto                tbl_sid = sai_serialize_object_id(tbl_oid);
+    auto                vpp_idx_it = m_acl_swindex_map.find(tbl_oid);
+    if (vpp_idx_it == m_acl_swindex_map.end()) {
+        acl_swindex = 0;
+        acl_replace = false;
+    } else if (acl == NULL) {
+        status = aclDefaultAllowConfigure(tbl_oid);
+        return status;
+    } else {
+        acl_swindex = vpp_idx_it->second;
+        acl_replace = true;
+    }
+
+    status = vpp_acl_add_replace(acl, &acl_swindex, acl_replace);
+    if (status == SAI_STATUS_SUCCESS) {
+        m_acl_swindex_map[tbl_oid] = acl_swindex;
+        index = 0;
+        for (auto ace: ordered_aces) {
+            p_ace = &aces[ace.index];
+            const sai_attribute_t *attr;
+            sai_object_id_t ace_cntr_oid;
+            for (uint32_t i = 0; i < p_ace->attrs_count; i++) {
+                attr = &p_ace->attrs[i];
+                if (attr->id == SAI_ACL_ENTRY_ATTR_ACTION_COUNTER) {
+                    ace_cntr_oid = attr->value.aclaction.parameter.oid;
+                    auto ace_it = m_ace_cntr_info_map.find(ace_cntr_oid);
+                    if (ace_it != m_ace_cntr_info_map.end()) {
+                        m_ace_cntr_info_map.erase(ace_it);
+                    }            
+                    // For stats we need to find vpp rule index from acl_entry_counter (ace_counter)
+                    m_ace_cntr_info_map[ace_cntr_oid] = { tbl_oid, ace.ace_oid, acl_swindex, index };
+                }
+            }
+            index++;
+        }
+    } else {
+        SWSS_LOG_ERROR("Vpp acl add replace failed, status: %d", status);
+        return SAI_STATUS_FAILURE;
+    }
+
+    SWSS_LOG_INFO("ACL table %s %s ", tbl_sid.c_str(),
+            acl_replace ? "replaced" : "added");
+
+    return SAI_STATUS_SUCCESS;
 }
 
 sai_status_t SwitchStateBase::tunterm_acl_bindunbind(sai_object_id_t tbl_oid, bool is_add, std::string hwif_name)
@@ -644,22 +916,25 @@ sai_status_t SwitchStateBase::tunterm_acl_bindunbind(sai_object_id_t tbl_oid, bo
 sai_status_t SwitchStateBase::tunterm_acl_add_replace(vpp_tunterm_acl_t *acl, sai_object_id_t tbl_oid)
 {
     sai_status_t status = SAI_STATUS_SUCCESS;
-    uint32_t tunterm_acl_swindex = 0;
-    bool do_port_bind = false;
+    uint32_t     tunterm_acl_swindex = 0;
+    bool         do_port_bind = false;
+    auto         tbl_sid = sai_serialize_object_id(tbl_oid);
 
     auto tunterm_idx_it = m_tunterm_acl_swindex_map.find(tbl_oid);
-    if ((tunterm_idx_it == m_tunterm_acl_swindex_map.end()) && (acl->count > 0)) {
+    if ((tunterm_idx_it == m_tunterm_acl_swindex_map.end()) && (acl != NULL)) {
         tunterm_acl_swindex = ~tunterm_acl_swindex;
         do_port_bind = true;
+    } else if (tunterm_idx_it != m_tunterm_acl_swindex_map.end() && (acl == NULL)) {
+        status = tunterm_acl_delete(tbl_oid, false);
+        return status;
     } else if (tunterm_idx_it != m_tunterm_acl_swindex_map.end()) {
         tunterm_acl_swindex = tunterm_idx_it->second;
     } else {
-        SWSS_LOG_NOTICE("No tunterm acl rules to add.");
         return status;
     }
 
     std::list<std::string> hwif_names;
-    SWSS_LOG_NOTICE("Adding tunterm acl rules, tunterm_acl index %u", tunterm_acl_swindex);
+    SWSS_LOG_INFO("Adding tunterm acl rules, tunterm_acl index %u", tunterm_acl_swindex);
 
     status = vpp_tunterm_acl_add_replace(&tunterm_acl_swindex, acl->count, acl);
 
@@ -673,15 +948,18 @@ sai_status_t SwitchStateBase::tunterm_acl_add_replace(vpp_tunterm_acl_t *acl, sa
         auto it_hw_ports = m_acl_tbl_hw_ports_map.find(tbl_oid);
         if (it_hw_ports == m_acl_tbl_hw_ports_map.end()) {
             auto sid = sai_serialize_object_id(tbl_oid);
-            SWSS_LOG_WARN("Tunterm acl - no ports bound for table id %s", sid.c_str());
+            SWSS_LOG_INFO("Tunterm acl - no ports bound for table id %s", sid.c_str());
         } else {
             hwif_names = it_hw_ports->second;
             for (auto hwif_name: hwif_names) {
-                SWSS_LOG_NOTICE("Tunterm acl - binding to hwif %s", hwif_name.c_str());
+                SWSS_LOG_INFO("Tunterm acl - binding to hwif %s", hwif_name.c_str());
                 tunterm_acl_bindunbind(tbl_oid, true, hwif_name);
             }
         }
     }
+
+    SWSS_LOG_INFO("Tunterm ACL table %s %s status %d", tbl_sid.c_str(),
+            do_port_bind ? "add" : "replace", status);
     
     return status;
 }
@@ -696,25 +974,36 @@ sai_status_t SwitchStateBase::tbl_hw_ports_map_delete(sai_object_id_t tbl_oid)
     return SAI_STATUS_SUCCESS;
 }
 
-sai_status_t SwitchStateBase::tunterm_acl_delete(sai_object_id_t tbl_oid)
+sai_status_t SwitchStateBase::tunterm_acl_delete(sai_object_id_t tbl_oid, bool table_delete)
 {
     sai_status_t status = SAI_STATUS_SUCCESS;
+    auto         tunterm_idx_it = m_tunterm_acl_swindex_map.find(tbl_oid);
 
-    auto tunterm_idx_it = m_tunterm_acl_swindex_map.find(tbl_oid);
     if (tunterm_idx_it == m_tunterm_acl_swindex_map.end()) {
-        SWSS_LOG_WARN("No tunterm ACL configured for table %s", sai_serialize_object_id(tbl_oid).c_str());
-        return SAI_STATUS_SUCCESS;
+        SWSS_LOG_WARN("No tunterm ACL configured for table %s",
+                        sai_serialize_object_id(tbl_oid).c_str());
+        return status;
+    } 
+
+    if(!table_delete) {
+        for(auto hwif_name:  m_acl_tbl_hw_ports_map[tbl_oid]) {
+            tunterm_acl_bindunbind(tbl_oid, false, hwif_name);
+        }
     }
+
     uint32_t tunterm_acl_swindex = tunterm_idx_it->second;
-
     status = vpp_tunterm_acl_del(tunterm_acl_swindex);
-
     if (status == SAI_STATUS_SUCCESS) {
-        m_tunterm_acl_swindex_map.erase(tunterm_idx_it);
+        m_tunterm_acl_swindex_map.erase(tunterm_idx_it);      
+    }
+    
+    if(table_delete && (status == SAI_STATUS_SUCCESS)) {
         tbl_hw_ports_map_delete(tbl_oid);
     }
-    SWSS_LOG_NOTICE("Tunterm acl table %s, remove tunterm_acl index %u, status %d",
-            sai_serialize_object_id(tbl_oid).c_str(), tunterm_acl_swindex, status);
+
+    SWSS_LOG_INFO("Tunterm acl table %s, remove tunterm_acl index %u, "
+                    "status %d", sai_serialize_object_id(tbl_oid).c_str(),
+                    tunterm_acl_swindex, status);
 
     return status;
 }
@@ -722,244 +1011,51 @@ sai_status_t SwitchStateBase::tunterm_acl_delete(sai_object_id_t tbl_oid)
 sai_status_t SwitchStateBase::AclTblConfig(
     _In_ sai_object_id_t tbl_oid)
 {
-    auto it = m_acl_tbl_rules_map.find(tbl_oid);
-
-    sai_status_t status = SAI_STATUS_SUCCESS;
-
-    if (it == m_acl_tbl_rules_map.end()) {
-	auto sid = sai_serialize_object_id(tbl_oid);
-	SWSS_LOG_WARN("No ACL entry list for table id %s", sid.c_str());
-	return SAI_STATUS_FAILURE;
-    }
-    std::list<sai_object_id_t>& acl_entries = it->second;
-    size_t n_total_entries = acl_entries.size();
-
-    if (n_total_entries == 0) {
-	return SAI_STATUS_SUCCESS;
-    }
-
-    acl_tbl_entries_t *aces, *p_ace;
-    std::list<ordered_ace_list_t> ordered_aces = {};
-    uint32_t index;
-
-    aces = (acl_tbl_entries_t *) calloc(n_total_entries, sizeof(acl_tbl_entries_t));
-    if (!aces) {
-	return SAI_STATUS_FAILURE;
-    }
-    p_ace = aces;
-
-    index = 0;
-
-    /* Collect ACL entries configuration */
-    for (auto entry_id: acl_entries) {
-	SWSS_LOG_NOTICE("Processing ACL entry %s", sai_serialize_object_id(entry_id).c_str());
-
-	auto sid = sai_serialize_object_id(entry_id);
-
-	if (get(SAI_OBJECT_TYPE_ACL_ENTRY, sid, MAX_ACL_ATTRS,
-		&p_ace->attrs_count, p_ace->attrs) != SAI_STATUS_SUCCESS) {
-	    status = SAI_STATUS_FAILURE;
-	    break;
-	}
-	p_ace->attr_range.value.aclfield.data.objlist.list = p_ace->range_objid_list;
-	p_ace->attr_range.value.aclfield.data.objlist.count = 2;
-
-	if (acl_range_attr_get(sid, p_ace->attrs_count,
-			       p_ace->attrs, &p_ace->attr_range) == SAI_STATUS_SUCCESS) {
-	    p_ace->range_count = 0;
-	    if (acl_rule_range_get(&p_ace->attr_range.value.aclfield.data.objlist,
-				   p_ace->range_limit, p_ace->range_type,
-				   &p_ace->range_count) != SAI_STATUS_SUCCESS) {
-		status = SAI_STATUS_FAILURE;
-		break;
-	    }
-	}
-
-	p_ace->priority = 0;
-	acl_priority_attr_get(p_ace->attrs_count, p_ace->attrs, &p_ace->priority);
-
-	ordered_aces.push_back({index, p_ace->priority, entry_id});
-	p_ace++;
-	index++;
-    }
-
-    if (status != SAI_STATUS_SUCCESS) {
-	free(aces);
-	ordered_aces.clear();
-	return SAI_STATUS_FAILURE;
-    }
-
-    /* Sort ACL entries on priority */
-    ordered_aces.sort(cmp_priority);
-    // SWSS_LOG_NOTICE("# aces %u after sort", ordered_aces.size());
-
-    size_t n_entries = 0;
-    size_t n_tunterm_entries  = 0;
-    for (auto ace: ordered_aces) {
-        p_ace = &aces[ace.index];
-        const sai_attribute_t *attr;
-        bool ttf_flag_set = false;
-        for (uint32_t i = 0; i < p_ace->attrs_count; i++) {
-            attr = &p_ace->attrs[i];
-            if (attr->id == SAI_ACL_ENTRY_ATTR_FIELD_TUNNEL_TERMINATED) {
-                if (attr->value.aclfield.data.booldata == true) {
-                    ttf_flag_set=true;
-                }
-                break;
-            }
-        }
-        if (ttf_flag_set) { 
-            n_tunterm_entries++;
-        } else {
-            n_entries++;
-        }        
-    }
-
-    SWSS_LOG_NOTICE("Tunterm acl count: %d, regular acl count: %d, total: %d", n_tunterm_entries, n_entries, n_total_entries);
-
-    vpp_acl_t *acl;
-
-    acl = (vpp_acl_t *) calloc(1, sizeof(vpp_acl_t) + (n_entries * sizeof(vpp_acl_rule_t)));
-    if (!acl) {
-	free(aces);
-	ordered_aces.clear();
-	return SAI_STATUS_FAILURE;
-    }
-    acl->count = (uint32_t) n_entries;
-    char aclname[64];
-
-    auto tbl_sid = sai_serialize_object_id(tbl_oid);
-    snprintf(aclname, sizeof(aclname), "sonic_acl_%s", tbl_sid.c_str());
-    acl->acl_name = aclname;
-
-    vpp_acl_rule_t *rule = &acl->rules[0];
-
-    /* Tunterm ACL setup */
-    vpp_tunterm_acl_t *tunterm_acl;
-    tunterm_acl = (vpp_tunterm_acl_t *) calloc(1, sizeof(vpp_tunterm_acl_t) + (n_tunterm_entries * sizeof(tunterm_acl_rule_t)));
-    if (!tunterm_acl) {
-        free(aces);
-        free(acl);
-        ordered_aces.clear();
-        return SAI_STATUS_FAILURE;
-    }
-    tunterm_acl->count = (uint32_t) n_tunterm_entries;
-    char tunterm_aclname[64];
-    snprintf(tunterm_aclname, sizeof(tunterm_aclname), "tunterm_sonic_acl_%s", tbl_sid.c_str());
-    tunterm_acl->acl_name = tunterm_aclname;
-    tunterm_acl_rule_t *tunterm_rule = &tunterm_acl->rules[0];
-
+    sai_status_t                        status = SAI_STATUS_SUCCESS;
+    size_t                              n_entries = 0;
+    size_t                              n_tunterm_entries = 0;
+    size_t                              n_total_entries = 0;
+    acl_tbl_entries_t                  *aces = NULL;
+    vpp_acl_t                          *acl = NULL;
+    vpp_tunterm_acl_t                  *tunterm_acl = NULL; 
+    char                                aclname[64];
+    char                                tunterm_aclname[64];    
     std::map<sai_object_id_t, uint32_t> acl_aces_index_map;
-    for (auto ace: ordered_aces) {
-	SWSS_LOG_NOTICE("Acl entry index %u prtiority %u", ace.index, ace.priority);
+    std::list<ordered_ace_list_t>       ordered_aces = {};
 
-	p_ace = &aces[ace.index];
-	const sai_attribute_t *attr;
-	bool update_tunterm_rule = false;
-	for (uint32_t i = 0; i < p_ace->attrs_count; i++) {
-	    attr = &p_ace->attrs[i];
-	    auto meta = sai_metadata_get_attr_metadata(SAI_OBJECT_TYPE_ACL_ENTRY, attr->id);
-
-	    if (meta != NULL) {
-	        SWSS_LOG_NOTICE("Type %s attrib id %s",
-				sai_serialize_object_type(SAI_OBJECT_TYPE_ACL_ENTRY).c_str(),
-				meta->attridname);
-	    }
-	    
-	    if ((attr->id == SAI_ACL_ENTRY_ATTR_FIELD_TUNNEL_TERMINATED) &&
-	        (attr->value.aclfield.data.booldata == true)) {
-	        update_tunterm_rule = true;
-	    }
-
-	    if (attr->id == SAI_ACL_ENTRY_ATTR_FIELD_ACL_RANGE_TYPE && acl->count>0  && (rule<(&acl->rules[0]+n_entries))) {
-		for (uint32_t jdx = 0; jdx < p_ace->range_count; jdx++) {
-		    status = acl_rule_port_range_vpp_acl_set(p_ace->range_type[jdx],
-							     &p_ace->range_limit[jdx], rule);
-		}
-	    } else {
-	        if (acl->count>0 && (rule<(&acl->rules[0]+n_entries))) {
-	            status = acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, rule);
-	        }
-	        if (tunterm_acl->count>0 && (tunterm_rule<(&tunterm_acl->rules[0]+n_tunterm_entries))) {
-	            status = tunterm_acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, tunterm_rule);
-	        }
-	    }
-	}
-    
-	if (update_tunterm_rule) {
-	    if (acl->count>0 && (rule<(&acl->rules[0]+n_entries))) {
-	        memset(rule, 0, sizeof(*rule)); // clear any fields that were added to regular rule
-	    }
-	    tunterm_rule++;
-	} else {
-	    if (tunterm_acl->count>0 && (tunterm_rule<(&tunterm_acl->rules[0]+n_tunterm_entries))) {
-	        memset(tunterm_rule, 0, sizeof(*tunterm_rule)); // clear any fields that were added to tunterm_rule
-	    }
-	    rule++;
-	} 
+    #define CHECK_STATUS_ACLTBLCONFIG(status) {                         \
+        sai_status_t _status = (status);                                \
+        if (_status != SAI_STATUS_SUCCESS) {                            \
+            cleanup_AclTblConfig(aces, ordered_aces, acl, tunterm_acl); \
+            return _status;                                             \
+        }                                                               \
     }
 
-    bool acl_replace;
-    uint32_t acl_swindex;
-    auto vpp_idx_it = m_acl_swindex_map.find(tbl_oid);
-    if (acl->count > 0) {
-        if (vpp_idx_it == m_acl_swindex_map.end()) {
-        acl_swindex = 0;
-        acl_replace = false;
-        } else {
-        acl_swindex = vpp_idx_it->second;
-        acl_replace = true;
-        }
+    CHECK_STATUS_ACLTBLCONFIG(get_sorted_aces(tbl_oid, n_total_entries, aces,
+                                              ordered_aces));
 
-        status = vpp_acl_add_replace(acl, &acl_swindex, acl_replace);
-        if (status == SAI_STATUS_SUCCESS) {
-        m_acl_swindex_map[tbl_oid] = acl_swindex;
+    count_tunterm_acl_rules(aces, ordered_aces, n_entries, n_tunterm_entries);
 
-        index = 0;
+    SWSS_LOG_INFO("Tunterm acl count: %d, regular acl count: %d, "
+                    "total: %d", n_tunterm_entries, n_entries, n_total_entries);
 
-        for (auto ace: ordered_aces) {
-            p_ace = &aces[ace.index];
-            const sai_attribute_t *attr;
-            sai_object_id_t ace_cntr_oid;
+    CHECK_STATUS_ACLTBLCONFIG(allocate_acl(n_entries, tbl_oid, aclname, acl));
 
-            for (uint32_t i = 0; i < p_ace->attrs_count; i++) {
-            attr = &p_ace->attrs[i];
+    CHECK_STATUS_ACLTBLCONFIG(allocate_tunterm_acl(n_tunterm_entries, tbl_oid,
+                                                   tunterm_aclname, tunterm_acl));
 
-            if (attr->id == SAI_ACL_ENTRY_ATTR_ACTION_COUNTER) {
-                ace_cntr_oid = attr->value.aclaction.parameter.oid;
+    CHECK_STATUS_ACLTBLCONFIG(fill_acl_rules(aces, ordered_aces, acl, tunterm_acl));
 
-                auto ace_it = m_ace_cntr_info_map.find(ace_cntr_oid);
-
-                if (ace_it != m_ace_cntr_info_map.end()) {
-                m_ace_cntr_info_map.erase(ace_it);
-                }
+    status = acl_add_replace(acl, tbl_oid, aces, ordered_aces);
         
-                // For stats we need to find vpp rule index from acl_entry_counter (ace_counter)
-                m_ace_cntr_info_map[ace_cntr_oid] = { tbl_oid, ace.ace_oid, acl_swindex, index };
-            }
-            }
-            index++;
-        }
-        }
-    }
-
-    SWSS_LOG_NOTICE("ACL table %s %s status %d", tbl_sid.c_str(),
-		    acl_replace ? "replace" : "add", status);
-    
     if (status == SAI_STATUS_SUCCESS) {
         status = tunterm_acl_add_replace(tunterm_acl, tbl_oid);
-        SWSS_LOG_NOTICE("Tunterm ACL table %s %s status %d", tbl_sid.c_str(),
-		    acl_replace ? "replace" : "add", status);
     } else {
-        SWSS_LOG_NOTICE("ACL plugin operation failed, skipping tunterm configuration.");;
+        SWSS_LOG_ERROR("ACL plugin operation failed, skipping tunterm "
+                       "configuration. status %d", status);
     }
 
-    free(aces);
-    free(acl);
-    ordered_aces.clear();
-    
-    free(tunterm_acl);
-
+    cleanup_AclTblConfig(aces, ordered_aces, acl, tunterm_acl);
     return status;
 }
 
@@ -979,7 +1075,7 @@ sai_status_t SwitchStateBase::aclGetVppIndices(
     *acl_index = ace_info.acl_index;
     *ace_index = ace_info.ace_index;
 
-    SWSS_LOG_NOTICE("VPP acl index %u ace index %u for acl_counter %s acl_table %s",
+    SWSS_LOG_INFO("VPP acl index %u ace index %u for acl_counter %s acl_table %s",
 		    *acl_index, *ace_index,
 		    sai_serialize_object_id(ace_cntr_oid).c_str(),
 		    sai_serialize_object_id(ace_info.tbl_oid).c_str());
@@ -1018,6 +1114,13 @@ sai_status_t SwitchStateBase::aclDefaultAllowConfigure (
     _In_ sai_object_id_t tbl_oid)
 {
     sai_attribute_t attr[2];
+    uint32_t        acl_swindex = 0;
+    bool            acl_replace = false;
+    auto            vpp_idx_it = m_acl_swindex_map.find(tbl_oid);
+    if (vpp_idx_it != m_acl_swindex_map.end()) {
+        acl_swindex = vpp_idx_it->second;
+        acl_replace = true;
+    }
 
     attr[0].id = SAI_ACL_ENTRY_ATTR_FIELD_ACL_IP_TYPE;
     attr[0].value.aclfield.enable = true;
@@ -1051,16 +1154,15 @@ sai_status_t SwitchStateBase::aclDefaultAllowConfigure (
     acl_rule_field_update((sai_acl_entry_attr_t) attr[1].id, &attr[1].value, rule);
     rule->action = VPP_ACL_ACTION_API_PERMIT;
 
-    uint32_t acl_swindex = 0;
     sai_status_t status;
 
-    status = vpp_acl_add_replace(acl, &acl_swindex, false);
-    if (status == SAI_STATUS_SUCCESS) {
+    status = vpp_acl_add_replace(acl, &acl_swindex, acl_replace);
+    if (status == SAI_STATUS_SUCCESS && !acl_replace) {
 	m_acl_swindex_map[tbl_oid] = acl_swindex;
     }
 
     free(acl);
-    SWSS_LOG_NOTICE("Default Allow all ACL for table %s added, status %d swindex %u",
+    SWSS_LOG_INFO("Default Allow all ACL for table %s added, status %d swindex %u",
 		    sid.c_str(), status, acl_swindex);
     return SAI_STATUS_SUCCESS;
 }
@@ -1081,7 +1183,7 @@ sai_status_t SwitchStateBase::AclTblRemove(
 	m_acl_tbl_rules_map.erase(it);
     }
 
-    status = tunterm_acl_delete(tbl_oid);
+    status = tunterm_acl_delete(tbl_oid, true);
 
     auto vpp_idx_it = m_acl_swindex_map.find(tbl_oid);
     if (vpp_idx_it == m_acl_swindex_map.end()) {
@@ -1140,17 +1242,14 @@ sai_status_t SwitchStateBase::addRemoveAclEntrytoMap(
 sai_status_t SwitchStateBase::AclAddRemoveCheck(
     _In_ sai_object_id_t tbl_oid)
 {
+    sai_status_t status = SAI_STATUS_SUCCESS;
     auto it = m_acl_tbl_rules_map.find(tbl_oid);
 
     if (it == m_acl_tbl_rules_map.end()) {
-	return SAI_STATUS_SUCCESS;
+        return SAI_STATUS_SUCCESS;
     }
-    sai_status_t status = SAI_STATUS_SUCCESS;
-    std::list<sai_object_id_t>& member_list = it->second;
-
-    if (member_list.size()) {
-	status = AclTblConfig(tbl_oid);
-    }
+    
+    status = AclTblConfig(tbl_oid);
     return status;
 }
 
@@ -1232,6 +1331,11 @@ sai_status_t SwitchStateBase::removeAclEntry(
     }
     remove_internal(SAI_OBJECT_TYPE_ACL_ENTRY, serializedObjectId);
 
+    SWSS_LOG_NOTICE("ACL entry %s in table %s remove status %d",
+        sai_serialize_object_id(entry_oid).c_str(),
+        sai_serialize_object_id(tbl_oid).c_str(),
+        status);
+
     return status;
 }
 
@@ -1245,7 +1349,7 @@ sai_status_t SwitchStateBase::getAclTableGroupId(
     if (get(SAI_OBJECT_TYPE_ACL_TABLE_GROUP_MEMBER, member_oid, 1, &attr) != SAI_STATUS_SUCCESS) {
 	auto sid = sai_serialize_object_id(member_oid);
 
-	SWSS_LOG_NOTICE("ACL table group oid for acl grp member id %s not found", sid.c_str());
+	SWSS_LOG_INFO("ACL table group oid for acl grp member id %s not found", sid.c_str());
 	return SAI_STATUS_FAILURE;
     }
 
@@ -1293,7 +1397,7 @@ sai_status_t SwitchStateBase::addRemoveAclGrpMbr(
     if (get(SAI_OBJECT_TYPE_ACL_TABLE_GROUP_MEMBER, member_oid, 1, &attr) != SAI_STATUS_SUCCESS) {
 	auto sid = sai_serialize_object_id(member_oid);
 
-	SWSS_LOG_NOTICE("ACL group member %s table id not found", sid.c_str());
+	SWSS_LOG_INFO("ACL group member %s table id not found", sid.c_str());
 	return SAI_STATUS_SUCCESS;
     }
 
@@ -1430,7 +1534,7 @@ sai_status_t SwitchStateBase::addRemovePortTblGrp(
 
     if (it == m_acl_tbl_grp_ports_map.end()) {
 	if (!is_add) {
-	    SWSS_LOG_NOTICE("port id %s delete failed, no table group %s",
+	    SWSS_LOG_INFO("port id %s delete failed, no table group %s",
 			    sai_serialize_object_id(port_oid).c_str(),
 			    sai_serialize_object_id(tbl_grp_oid).c_str());
 	    return SAI_STATUS_FAILURE;
@@ -1462,7 +1566,7 @@ sai_status_t SwitchStateBase::aclBindUnbindPort(
 
     if (it == m_acl_tbl_grp_mbr_map.end()) {
 	auto sid = sai_serialize_object_id(tbl_grp_oid);
-	SWSS_LOG_NOTICE("ACL tbl group with id %s not found", sid.c_str());
+	SWSS_LOG_INFO("ACL tbl group with id %s not found", sid.c_str());
 	/* 
 	 * The tbl group is not created until a group member is added. The bind port
 	 * will be called later when a group member is added.
@@ -1485,14 +1589,14 @@ sai_status_t SwitchStateBase::aclBindUnbindPort(
 	if (get(SAI_OBJECT_TYPE_ACL_TABLE_GROUP_MEMBER, member_oid, 1, &attr) != SAI_STATUS_SUCCESS) {
 	    auto sid = sai_serialize_object_id(member_oid);
 
-	    SWSS_LOG_NOTICE("ACL table oid for acl grp member id %s not found", sid.c_str());
+	    SWSS_LOG_INFO("ACL table oid for acl grp member id %s not found", sid.c_str());
 	    continue;
 	}
 	auto tbl_oid = attr.value.oid;
 	auto vpp_idx_it = m_acl_swindex_map.find(tbl_oid);
 	if (vpp_idx_it == m_acl_swindex_map.end()) {
 	    auto sid = sai_serialize_object_id(tbl_oid);
-	    SWSS_LOG_NOTICE("VPP swindex for ACL table oid %s not found", sid.c_str());
+	    SWSS_LOG_INFO("VPP swindex for ACL table oid %s not found", sid.c_str());
 	    continue;
 	}
 	auto acl_swindex = vpp_idx_it->second;
@@ -1527,7 +1631,7 @@ sai_status_t SwitchStateBase::aclBindUnbindPorts(
 
     if (it == m_acl_tbl_grp_ports_map.end()) {
 	auto sid = sai_serialize_object_id(tbl_grp_oid);
-	SWSS_LOG_NOTICE("ACL tbl group with id %s not found in acl ports map", sid.c_str());
+	SWSS_LOG_INFO("ACL tbl group with id %s not found in acl ports map", sid.c_str());
 	return SAI_STATUS_SUCCESS;
     }
     sai_attribute_t attr;
@@ -1536,7 +1640,7 @@ sai_status_t SwitchStateBase::aclBindUnbindPorts(
     if (get(SAI_OBJECT_TYPE_ACL_TABLE_GROUP, tbl_grp_oid, 1, &attr) != SAI_STATUS_SUCCESS) {
 	auto sid = sai_serialize_object_id(tbl_grp_oid);
 
-	SWSS_LOG_NOTICE("ACL table group %s direction not found", sid.c_str());
+	SWSS_LOG_INFO("ACL table group %s direction not found", sid.c_str());
 	return SAI_STATUS_SUCCESS;
     }
 
@@ -1555,7 +1659,7 @@ sai_status_t SwitchStateBase::aclBindUnbindPorts(
     default:
     {
 	auto sid = sai_serialize_object_id(tbl_grp_oid);
-	SWSS_LOG_NOTICE("ACL table group %s direction %d", sid.c_str(), dir);
+	SWSS_LOG_INFO("ACL table group %s direction %d", sid.c_str(), dir);
 	return SAI_STATUS_SUCCESS;
     }
     }
@@ -1563,7 +1667,7 @@ sai_status_t SwitchStateBase::aclBindUnbindPorts(
     auto vpp_idx_it = m_acl_swindex_map.find(tbl_oid);
     if (vpp_idx_it == m_acl_swindex_map.end()) {
 	auto sid = sai_serialize_object_id(tbl_oid);
-	SWSS_LOG_NOTICE("VPP swindex for ACL table oid %s not found", sid.c_str());
+	SWSS_LOG_INFO("VPP swindex for ACL table oid %s not found", sid.c_str());
 	return SAI_STATUS_FAILURE;
     }
     auto acl_swindex = vpp_idx_it->second;
