@@ -1,0 +1,10 @@
+Source: sonic-platform-modules-vpp
+Section: main
+Priority: extra
+Maintainer: Yue Gao <yuega2@cisco.com>
+Build-Depends: debhelper (>= 9), bzip2
+Standards-Version: 3.9.3
+
+Package: platform-modules-vpp
+Architecture: amd64
+Description: kernel modules for platform devices
