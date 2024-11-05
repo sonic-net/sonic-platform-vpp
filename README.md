@@ -29,7 +29,7 @@ There are two types of sonic-vpp image build targets supported
 ## Building a single container image
 
 1. git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git
-2. git submodule add https://github.com/sonic-platform-vpp.git platform/vpp
+2. git submodule add https://github.com/sonic-net/sonic-platform-vpp.git platform/vpp
 3. Apply the diff in https://github.com/sonic-net/sonic-sairedis/pull/1424 if the PR hasn't been merged.
 4. make init
 5. make configure PLATFORM=vpp
@@ -43,7 +43,7 @@ Refer to the [Getting started](docs/README.getting-started.md) document in docs 
 
 ## Building a KVM VM image 
 1. git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git
-2. git submodule add https://github.com/sonic-platform-vpp.git platform/vpp
+2. git submodule add https://github.com/sonic-net/sonic-platform-vpp.git platform/vpp
 3. Apply the diff in https://github.com/sonic-net/sonic-sairedis/pull/1424 if the PR hasn't been merged.
 4. make init
 5. make configure PLATFORM=vpp
