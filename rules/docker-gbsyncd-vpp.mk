@@ -20,11 +20,11 @@ include $(PLATFORM_PATH)/../template/docker-gbsyncd-bookworm.mk
 $(DOCKER_GBSYNCD_BASE)_DEPENDS += $(LIBSAIVPP) \
                                 $(SYNCD)
 
-$(DOCKER_GBSYNCD_BASE)_DBG_DEPENDS += $(SYNCD_VPP_DBG) \
+$(DOCKER_GBSYNCD_BASE)_DBG_DEPENDS += $(SYNCD_VPP_DBGSYM) \
                                 $(LIBSWSSCOMMON_DBG) \
-                                $(LIBSAIMETADATA_DBG) \
-                                $(LIBSAIREDIS_DBG) \
-                                $(LIBSAIVPP_DBG)
+                                $(LIBSAIMETADATA_DBSYM) \
+                                $(LIBSAIREDIS_DBGSYM) \
+                                $(LIBSAIVPP_DBGSYM)
 
 $(DOCKER_GBSYNCD_BASE)_VERSION = 1.0.0
 $(DOCKER_GBSYNCD_BASE)_PACKAGE_NAME = gbsyncd
