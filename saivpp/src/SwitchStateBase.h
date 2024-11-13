@@ -1063,7 +1063,7 @@ namespace saivpp
             * @param[in] acl Pointer to the VPP ACL to be cleaned up.
             * @param[in] tunterm_acl Pointer to the VPP tunnel termination ACL to be cleaned up.
             */
-            void cleanup_AclTblConfig(
+            void cleanup_acl_tbl_config(
                     _In_ acl_tbl_entries_t *&aces,
                     _In_ std::list<ordered_ace_list_t> &ordered_aces,
                     _In_ vpp_acl_t *&acl,
@@ -1186,7 +1186,7 @@ namespace saivpp
             sai_status_t tunterm_set_action_redirect(
                     _In_ sai_acl_entry_attr_t          attr_id,
                     _In_ const sai_attribute_value_t  *value,
-                    _In_ tunterm_acl_rule_t      *rule);
+                    _In_ vpp_tunterm_acl_rule_t      *rule);
 
             /**
              * @brief Updates an ACE field for a tunnel termination ACL rule.
@@ -1199,7 +1199,7 @@ namespace saivpp
             sai_status_t tunterm_acl_rule_field_update(
                     _In_ sai_acl_entry_attr_t          attr_id,
                     _In_ const sai_attribute_value_t  *value,
-                    _In_ tunterm_acl_rule_t      *rule);
+                    _In_ vpp_tunterm_acl_rule_t      *rule);
 
             /**
             * @brief Binds or unbinds a tunnel termination ACL table to/from an interface.

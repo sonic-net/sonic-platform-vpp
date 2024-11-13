@@ -87,12 +87,12 @@ extern "C" {
         char hwif_name[64];
         uint8_t  ip_protocol;
         vpp_ip_addr_t next_hop_ip;
-    } tunterm_acl_rule_t;
+    } vpp_tunterm_acl_rule_t;
 
     typedef struct _vpp_tunterm_acl_ {
         char *acl_name;
         uint32_t count;
-        tunterm_acl_rule_t rules[0];
+        vpp_tunterm_acl_rule_t rules[0];
     } vpp_tunterm_acl_t;
 
 
@@ -231,14 +231,14 @@ typedef enum {
 
     extern int vpp_acl_add_replace(vpp_acl_t *in_acl, uint32_t *acl_index, bool is_replace);
     extern int vpp_acl_del(uint32_t acl_index);
-    extern int vpp_tunterm_acl_interface_add_del (uint32_t tunterm_index,
-                                           bool is_bind, const char *hwif_name);
-    extern int vpp_tunterm_acl_del (uint32_t tunterm_index);
-    extern int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tunterm_acl_t *acl);
     extern int vpp_acl_interface_bind(const char *hwif_name, uint32_t acl_index,
 				      bool is_input);
     extern int vpp_acl_interface_unbind(const char *hwif_name, uint32_t acl_index,
 					bool is_input);
+    extern int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tunterm_acl_t *acl);
+    extern int vpp_tunterm_acl_del (uint32_t tunterm_index);
+    extern int vpp_tunterm_acl_interface_add_del (uint32_t tunterm_index,
+                                           bool is_bind, const char *hwif_name);
     extern int interface_get_state(const char *hwif_name, bool *link_is_up);
     extern int vpp_sync_for_events();
     extern int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add);

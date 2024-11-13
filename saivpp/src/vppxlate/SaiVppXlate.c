@@ -2065,7 +2065,7 @@ int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tu
     u32 idx;
     vat_main_t *vam = &vat_main;
     vpp_ip_addr_t *addr;
-    tunterm_acl_rule_t *in_rule;
+    vpp_tunterm_acl_rule_t *in_rule;
     vl_api_address_t *api_addr;
     vl_api_tunterm_acl_rule_t *vpp_rule;
     vl_api_tunterm_acl_add_replace_t *mp;

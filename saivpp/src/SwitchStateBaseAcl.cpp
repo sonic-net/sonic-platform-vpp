@@ -409,7 +409,7 @@ sai_status_t acl_rule_field_update(
 sai_status_t SwitchStateBase::tunterm_set_action_redirect(
     _In_ sai_acl_entry_attr_t          attr_id,
     _In_ const sai_attribute_value_t  *value,
-    _Out_ tunterm_acl_rule_t      *rule)
+    _Out_ vpp_tunterm_acl_rule_t      *rule)
 {
     sai_status_t                 status = SAI_STATUS_SUCCESS;
     sai_object_id_t              next_hop_oid;
@@ -499,7 +499,7 @@ sai_status_t SwitchStateBase::tunterm_set_action_redirect(
 sai_status_t SwitchStateBase::tunterm_acl_rule_field_update(
     _In_ sai_acl_entry_attr_t          attr_id,
     _In_ const sai_attribute_value_t  *value,
-    _Out_ tunterm_acl_rule_t      *rule)
+    _Out_ vpp_tunterm_acl_rule_t      *rule)
 {
     sai_status_t status;
     char         dst_ip_str[INET6_ADDRSTRLEN];
@@ -618,10 +618,7 @@ sai_status_t SwitchStateBase::get_sorted_aces(
     std::list<ordered_ace_list_t> &ordered_aces)
 {
     sai_status_t                status = SAI_STATUS_SUCCESS;
-    auto it =                   m_acl_tbl_rules_map.find(tbl_oid);
-    uint32_t                    index = 0;
-    acl_tbl_entries_t          *p_ace = NULL;
-    
+    auto                        it = m_acl_tbl_rules_map.find(tbl_oid);
 
     if (it == m_acl_tbl_rules_map.end()) {
         auto sid = sai_serialize_object_id(tbl_oid);
@@ -635,7 +632,7 @@ sai_status_t SwitchStateBase::get_sorted_aces(
     }
 
     std::list<sai_object_id_t> &acl_entries = it->second;
-
+    acl_tbl_entries_t          *p_ace = NULL;
     aces = (acl_tbl_entries_t *) calloc(n_total_entries, sizeof(acl_tbl_entries_t));
     if (!aces) {
         SWSS_LOG_ERROR("Failed to allocate memory for aces.");
@@ -644,6 +641,7 @@ sai_status_t SwitchStateBase::get_sorted_aces(
     p_ace = aces;
 
     /* Collect ACL entries configuration */
+    uint32_t index = 0;
     for (auto entry_id: acl_entries) {
         SWSS_LOG_INFO("Processing ACL entry %s", sai_serialize_object_id(entry_id).c_str());
 
@@ -757,7 +755,7 @@ sai_status_t SwitchStateBase::allocate_tunterm_acl(
         return SAI_STATUS_SUCCESS;
     }
 
-    tunterm_acl = (vpp_tunterm_acl_t *) calloc(1, sizeof(vpp_tunterm_acl_t) + (n_tunterm_entries * sizeof(tunterm_acl_rule_t)));
+    tunterm_acl = (vpp_tunterm_acl_t *) calloc(1, sizeof(vpp_tunterm_acl_t) + (n_tunterm_entries * sizeof(vpp_tunterm_acl_rule_t)));
     if (!tunterm_acl) {
         SWSS_LOG_ERROR("Failed to allocate memory for tunterm acl.");
         return SAI_STATUS_FAILURE;
@@ -778,7 +776,7 @@ sai_status_t SwitchStateBase::fill_acl_rules(
     sai_status_t       status = SAI_STATUS_SUCCESS;
     acl_tbl_entries_t  *p_ace = NULL;
     vpp_acl_rule_t     *rule = NULL;
-    tunterm_acl_rule_t *tunterm_rule = NULL;
+    vpp_tunterm_acl_rule_t *tunterm_rule = NULL;
 
     if(acl != NULL) {
         rule = &acl->rules[0];
@@ -800,13 +798,14 @@ sai_status_t SwitchStateBase::fill_acl_rules(
                     sai_serialize_object_type(SAI_OBJECT_TYPE_ACL_ENTRY).c_str(),
                     meta->attridname);
             }
-            if (attr->id == SAI_ACL_ENTRY_ATTR_FIELD_ACL_RANGE_TYPE && !ace.is_tunterm) {
+
+            if (ace.is_tunterm) {
+                status = tunterm_acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, tunterm_rule);
+            } else if (attr->id == SAI_ACL_ENTRY_ATTR_FIELD_ACL_RANGE_TYPE) {
                 for (uint32_t jdx = 0; jdx < p_ace->range_count; jdx++) {
                     status = acl_rule_port_range_vpp_acl_set(p_ace->range_type[jdx],
                                                     &p_ace->range_limit[jdx], rule);
                 }
-            } else if (ace.is_tunterm) {
-                status = tunterm_acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, tunterm_rule);
             } else {
                 status = acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, rule);
             }
@@ -825,7 +824,7 @@ sai_status_t SwitchStateBase::fill_acl_rules(
     return SAI_STATUS_SUCCESS;
 }
 
-void SwitchStateBase::cleanup_AclTblConfig(
+void SwitchStateBase::cleanup_acl_tbl_config(
     acl_tbl_entries_t *&aces,
     std::list<ordered_ace_list_t> &ordered_aces,
     vpp_acl_t *&acl,
@@ -905,12 +904,17 @@ sai_status_t SwitchStateBase::acl_add_replace(
 
 sai_status_t SwitchStateBase::tunterm_acl_bindunbind(sai_object_id_t tbl_oid, bool is_add, std::string hwif_name)
 {
+    sai_status_t status = SAI_STATUS_SUCCESS;
     auto tunterm_idx_it = m_tunterm_acl_swindex_map.find(tbl_oid);
     if (tunterm_idx_it != m_tunterm_acl_swindex_map.end()) {
         auto tunterm_idx = tunterm_idx_it->second;
-        vpp_tunterm_acl_interface_add_del(tunterm_idx, is_add, hwif_name.c_str());
+        status = vpp_tunterm_acl_interface_add_del(tunterm_idx, is_add, hwif_name.c_str());
     }
-    return SAI_STATUS_SUCCESS;
+    if(status != SAI_STATUS_SUCCESS) {
+        SWSS_LOG_ERROR("Tunterm acl bind/unbind failed to hwif %s, status: %d",
+                        hwif_name.c_str(), status);
+    }
+    return status;
 }
 
 sai_status_t SwitchStateBase::tunterm_acl_add_replace(vpp_tunterm_acl_t *acl, sai_object_id_t tbl_oid)
@@ -922,14 +926,17 @@ sai_status_t SwitchStateBase::tunterm_acl_add_replace(vpp_tunterm_acl_t *acl, sa
 
     auto tunterm_idx_it = m_tunterm_acl_swindex_map.find(tbl_oid);
     if ((tunterm_idx_it == m_tunterm_acl_swindex_map.end()) && (acl != NULL)) {
+        // ADD new tunterm acl
         tunterm_acl_swindex = ~tunterm_acl_swindex;
         do_port_bind = true;
     } else if (tunterm_idx_it != m_tunterm_acl_swindex_map.end() && (acl == NULL)) {
-        status = tunterm_acl_delete(tbl_oid, false);
-        return status;
+        // REPLACE with empty ACL (delete tunterm acl)
+        return tunterm_acl_delete(tbl_oid, false);
     } else if (tunterm_idx_it != m_tunterm_acl_swindex_map.end()) {
+        // REPLACE with incoming tunterm acl
         tunterm_acl_swindex = tunterm_idx_it->second;
     } else {
+        // NO-OP, tunterm acl not configured and no incoming tunterm acl.
         return status;
     }
 
@@ -944,6 +951,10 @@ sai_status_t SwitchStateBase::tunterm_acl_add_replace(vpp_tunterm_acl_t *acl, sa
         return SAI_STATUS_FAILURE;
     }
 
+    /*
+     *  Bind tunterm acl to ports which ACL table is already bound when first
+     *  tunterm ACL rule is received.
+     */
     if (do_port_bind) {
         auto it_hw_ports = m_acl_tbl_hw_ports_map.find(tbl_oid);
         if (it_hw_ports == m_acl_tbl_hw_ports_map.end()) {
@@ -953,7 +964,10 @@ sai_status_t SwitchStateBase::tunterm_acl_add_replace(vpp_tunterm_acl_t *acl, sa
             hwif_names = it_hw_ports->second;
             for (auto hwif_name: hwif_names) {
                 SWSS_LOG_INFO("Tunterm acl - binding to hwif %s", hwif_name.c_str());
-                tunterm_acl_bindunbind(tbl_oid, true, hwif_name);
+                status = tunterm_acl_bindunbind(tbl_oid, true, hwif_name);
+                if(status != SAI_STATUS_SUCCESS) {
+                    return status;
+                }
             }
         }
     }
@@ -985,20 +999,27 @@ sai_status_t SwitchStateBase::tunterm_acl_delete(sai_object_id_t tbl_oid, bool t
         return status;
     } 
 
+    /*
+     *  In the case where tunterm ACL is deleted by ACL update with empty ACL,
+     *  need to unbind the ports here before tunterm ACL can be deleted. In the
+     *  regular tunterm ACL delete case, the ports are unbound via SAI calls.
+     */
     if(!table_delete) {
         for(auto hwif_name:  m_acl_tbl_hw_ports_map[tbl_oid]) {
-            tunterm_acl_bindunbind(tbl_oid, false, hwif_name);
+            status = tunterm_acl_bindunbind(tbl_oid, false, hwif_name);
+            if(status != SAI_STATUS_SUCCESS) {
+                return status;
+            }
         }
     }
 
     uint32_t tunterm_acl_swindex = tunterm_idx_it->second;
     status = vpp_tunterm_acl_del(tunterm_acl_swindex);
     if (status == SAI_STATUS_SUCCESS) {
-        m_tunterm_acl_swindex_map.erase(tunterm_idx_it);      
-    }
-    
-    if(table_delete && (status == SAI_STATUS_SUCCESS)) {
-        tbl_hw_ports_map_delete(tbl_oid);
+        m_tunterm_acl_swindex_map.erase(tunterm_idx_it);
+        if(table_delete) {
+            tbl_hw_ports_map_delete(tbl_oid);
+        }
     }
 
     SWSS_LOG_INFO("Tunterm acl table %s, remove tunterm_acl index %u, "
@@ -1023,12 +1044,12 @@ sai_status_t SwitchStateBase::AclTblConfig(
     std::map<sai_object_id_t, uint32_t> acl_aces_index_map;
     std::list<ordered_ace_list_t>       ordered_aces = {};
 
-    #define CHECK_STATUS_ACLTBLCONFIG(status) {                         \
-        sai_status_t _status = (status);                                \
-        if (_status != SAI_STATUS_SUCCESS) {                            \
-            cleanup_AclTblConfig(aces, ordered_aces, acl, tunterm_acl); \
-            return _status;                                             \
-        }                                                               \
+    #define CHECK_STATUS_ACLTBLCONFIG(status) {                           \
+        sai_status_t _status = (status);                                  \
+        if (_status != SAI_STATUS_SUCCESS) {                              \
+            cleanup_acl_tbl_config(aces, ordered_aces, acl, tunterm_acl); \
+            return _status;                                               \
+        }                                                                 \
     }
 
     CHECK_STATUS_ACLTBLCONFIG(get_sorted_aces(tbl_oid, n_total_entries, aces,
@@ -1055,7 +1076,7 @@ sai_status_t SwitchStateBase::AclTblConfig(
                        "configuration. status %d", status);
     }
 
-    cleanup_AclTblConfig(aces, ordered_aces, acl, tunterm_acl);
+    cleanup_acl_tbl_config(aces, ordered_aces, acl, tunterm_acl);
     return status;
 }
 
@@ -1686,15 +1707,18 @@ sai_status_t SwitchStateBase::aclBindUnbindPorts(
 	if (is_bind) {
 	    ret = vpp_acl_interface_bind(hwif_name.c_str(), acl_swindex, is_input);
 	    if (ret == 0) {
-	        tunterm_acl_bindunbind(tbl_oid, true, hwif_name);
-	        m_acl_tbl_hw_ports_map[tbl_oid].push_back(hwif_name);
+	        ret = tunterm_acl_bindunbind(tbl_oid, true, hwif_name);
+	        if(ret == 0) {
+	            m_acl_tbl_hw_ports_map[tbl_oid].push_back(hwif_name);
+	        }
 	    }
-	}
-	else {
+	} else {
 	    ret = vpp_acl_interface_unbind(hwif_name.c_str(), acl_swindex, is_input);
 	    if (ret == 0) {
-	        tunterm_acl_bindunbind(tbl_oid, false, hwif_name);
-	        m_acl_tbl_hw_ports_map[tbl_oid].remove(hwif_name);
+	        ret = tunterm_acl_bindunbind(tbl_oid, false, hwif_name);
+	        if(ret == 0) {
+	            m_acl_tbl_hw_ports_map[tbl_oid].remove(hwif_name);
+	        }
 	    }
 	}
 	if (ret != 0) {
