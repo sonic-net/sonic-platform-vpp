@@ -47,6 +47,9 @@
 #include <vpp_plugins/acl/acl.api_enum.h>
 #include <vpp_plugins/acl/acl.api_types.h>
 
+#include <vpp_plugins/tunterm_acl/tunterm_acl.api_enum.h>
+#include <vpp_plugins/tunterm_acl/tunterm_acl.api_types.h>
+
 #include <vlibmemory/vlib.api_types.h>
 #include <vlibmemory/memclnt.api_enum.h>
 
@@ -79,6 +82,24 @@
 
 #define vl_api_version(n, v) static u32 l2_api_version = v;
 #include <vnet/l2/l2.api.h>
+#undef vl_api_version
+
+/* tunterm API inclusion */
+
+#define vl_typedefs
+#include <vpp_plugins/tunterm_acl/tunterm_acl.api.h>
+#undef vl_typedefs
+
+#define  vl_endianfun
+#include <vpp_plugins/tunterm_acl/tunterm_acl.api.h>
+#undef vl_endianfun
+
+#define vl_calcsizefun
+#include <vpp_plugins/tunterm_acl/tunterm_acl.api.h>
+#undef vl_calcsizefun
+
+#define vl_api_version(n, v) static u32 tunterm_api_version = v;
+#include <vpp_plugins/tunterm_acl/tunterm_acl.api.h>
 #undef vl_api_version
 
 /* interface API inclusion */
@@ -918,6 +939,36 @@ vl_api_vxlan_add_del_tunnel_v3_reply_t_handler (
     SAIVPP_DEBUG("vxlan_add_del handler: if_idx,%d,status,%d",vam->sw_if_index, vam->retval);
 }
 
+static void
+vl_api_tunterm_acl_add_replace_reply_t_handler(vl_api_tunterm_acl_add_replace_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    uint32_t *tunterm_index = (uint32_t *) get_index_ptr(msg->context);
+    *tunterm_index = ntohl(msg->tunterm_acl_index);
+
+    SAIVPP_DEBUG("tunterm acl add_replace %s(%d) tunterm_index index %u", msg->retval ? "failed" : "successful",
+		 msg->retval, *tunterm_index);
+    release_index(msg->context);
+}
+
+static void
+vl_api_tunterm_acl_del_reply_t_handler(vl_api_tunterm_acl_del_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("tunterm acl del %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_tunterm_acl_interface_add_del_reply_t_handler(vl_api_tunterm_acl_interface_add_del_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("tunterm acl interface set/reset  %s(%d)", msg->retval ? "failed" : "successful",
+		 msg->retval);
+}
+
 #define vl_api_get_first_msg_id_reply_t_handler vl_noop_handler
 #define vl_api_get_first_msg_id_reply_t_handler_json vl_noop_handler
 
@@ -929,6 +980,7 @@ vl_api_vxlan_add_del_tunnel_v3_reply_t_handler (
 
 static u16 interface_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
 static u16 l2_msg_id_base, vxlan_msg_id_base;
+static u16 tunterm_msg_id_base;
 static u16 bfd_msg_id_base;
 
 static void vpp_base_vpe_init(void)
@@ -1068,6 +1120,9 @@ vl_api_acl_interface_add_del_reply_t_handler(vl_api_acl_interface_add_del_reply_
 #define ACL_MSG_ID(id) \
     (VL_API_##id + acl_msg_id_base)
 
+#define TUNTERM_MSG_ID(id) \
+    (VL_API_##id + tunterm_msg_id_base)
+
 #define VXLAN_MSG_ID(id) \
     (VL_API_##id + vxlan_msg_id_base)
 
@@ -1077,7 +1132,10 @@ vl_api_acl_interface_add_del_reply_t_handler(vl_api_acl_interface_add_del_reply_
     _(ACL_MSG_ID(ACL_DEL_REPLY), acl_del_reply) \
     _(ACL_MSG_ID(ACL_STATS_INTF_COUNTERS_ENABLE_REPLY), acl_stats_intf_counters_enable_reply) \
     _(ACL_MSG_ID(ACL_INTERFACE_ADD_DEL_REPLY), acl_interface_add_del_reply) \
-    _(VXLAN_MSG_ID(VXLAN_ADD_DEL_TUNNEL_V3_REPLY), vxlan_add_del_tunnel_v3_reply)
+    _(VXLAN_MSG_ID(VXLAN_ADD_DEL_TUNNEL_V3_REPLY), vxlan_add_del_tunnel_v3_reply) \
+    _(TUNTERM_MSG_ID(TUNTERM_ACL_INTERFACE_ADD_DEL_REPLY), tunterm_acl_interface_add_del_reply) \
+    _(TUNTERM_MSG_ID(TUNTERM_ACL_DEL_REPLY), tunterm_acl_del_reply) \
+    _(TUNTERM_MSG_ID(TUNTERM_ACL_ADD_REPLACE_REPLY), tunterm_acl_add_replace_reply)
 static void vpp_plugin_vpe_init(void)
 {
 #define _(N,n)                                                  \
@@ -1132,6 +1190,10 @@ static void get_base_msg_id()
     msg_base_lookup_name = format (0, "vxlan_%08x%c", vxlan_api_version, 0);
     vxlan_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
     assert(vxlan_msg_id_base != (u16) ~0);
+
+    msg_base_lookup_name = format (0, "tunterm_acl_%08x%c", tunterm_api_version, 0);
+    tunterm_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
+    assert(tunterm_msg_id_base != (u16) ~0);
 }
 
 #define API_SOCKET_FILE "/run/vpp/api.sock"
@@ -1934,6 +1996,144 @@ int vpp_acl_del (uint32_t acl_index)
 
     S (mp);
     W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int vpp_tunterm_acl_interface_add_del (uint32_t tunterm_index, bool is_bind, const char *hwif_name)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_tunterm_acl_interface_add_del_t *mp;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = tunterm_msg_id_base;
+    M (TUNTERM_ACL_INTERFACE_ADD_DEL, mp);
+
+    if (hwif_name) {
+        u32 idx;
+        idx = get_swif_idx(vam, hwif_name);
+        if (idx != (u32) -1) {
+            mp->sw_if_index = htonl(idx);
+        } else {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    } else {
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+    mp->is_add = is_bind;
+    mp->tunterm_acl_index= htonl(tunterm_index);
+
+    S (mp);
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+
+int vpp_tunterm_acl_del (uint32_t tunterm_index)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_tunterm_acl_del_t *mp;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = tunterm_msg_id_base;
+    M (TUNTERM_ACL_DEL, mp);
+
+    mp->tunterm_acl_index= htonl(tunterm_index);
+
+    S (mp);
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tunterm_acl_t *in_acl)
+{
+    u32 idx;
+    vat_main_t *vam = &vat_main;
+    vpp_ip_addr_t *addr;
+    vpp_tunterm_acl_rule_t *in_rule;
+    vl_api_address_t *api_addr;
+    vl_api_tunterm_acl_rule_t *vpp_rule;
+    vl_api_tunterm_acl_add_replace_t *mp;
+    int ret;
+
+    init_vpp_client();
+
+    VPP_LOCK();
+
+    __plugin_msg_base = tunterm_msg_id_base;
+
+    M2 (TUNTERM_ACL_ADD_REPLACE, mp, count*sizeof(vl_api_tunterm_acl_rule_t));
+
+    mp->count = htonl(count);
+    mp->tunterm_acl_index = htonl(*tunterm_index);
+
+    for (idx = 0; idx < count; idx++) {
+        in_rule = &in_acl->rules[idx];
+        vpp_rule = &mp->r[idx];
+
+        addr = &in_rule->dst_prefix;
+        api_addr = &vpp_rule->dst;
+
+        if (!vpp_to_vl_api_ip_addr(api_addr, addr)) {
+            SAIVPP_WARN("Unknown protocol in tunterm acl destination prefix");
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+
+        if (addr->sa_family == AF_INET6) {
+            mp->is_ipv6 = true;
+        } else {
+            mp->is_ipv6 = false;
+        }
+
+        if (in_rule->hwif_name) {
+            u32 idx;
+            idx = get_swif_idx(vam, in_rule->hwif_name);
+            if (idx != (u32) -1) {
+                vpp_rule->path.sw_if_index = htonl(idx);
+            } else {
+                SAIVPP_ERROR("Unable to get sw_index for %s\n", in_rule->hwif_name);
+                VPP_UNLOCK();
+                return -EINVAL;
+            }
+        } else {
+            SAIVPP_ERROR("No hwif_name provided.\n");
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+
+        if (in_rule->ip_protocol == 1) {
+            vpp_rule->path.proto = htonl(FIB_API_PATH_NH_PROTO_IP4);
+            memcpy(vpp_rule->path.nh.address.ip4, &in_rule->next_hop_ip.addr.ip4.sin_addr.s_addr, sizeof(vpp_rule->path.nh.address.ip4)); 
+        } else if (in_rule->ip_protocol == 2) {
+            vpp_rule->path.proto  = htonl(FIB_API_PATH_NH_PROTO_IP6);
+            memcpy(vpp_rule->path.nh.address.ip6, &in_rule->next_hop_ip.addr.ip6.sin6_addr.s6_addr, sizeof(vpp_rule->path.nh.address.ip6));
+        } else {
+            SAIVPP_WARN("Unknown protocol in next hop prefix");
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    }
+    mp->context = store_ptr(tunterm_index);
+
+    S (mp);
+
+    WR (ret);
 
     VPP_UNLOCK();
 

@@ -36,6 +36,7 @@
 #include <list>
 
 #include "SwitchStateBaseNexthop.h"
+#include "SwitchStateBaseAcl.h"
 
 #define BFD_MUTEX std::lock_guard<std::mutex> lock(bfdMapMutex);
 
@@ -998,7 +999,9 @@ namespace saivpp
 
         private:
             std::map<sai_object_id_t, std::list<sai_object_id_t>> m_acl_tbl_rules_map;
+            std::map<sai_object_id_t, std::list<std::string>> m_acl_tbl_hw_ports_map;
 	    std::map<sai_object_id_t, uint32_t> m_acl_swindex_map;
+            std::map<sai_object_id_t, uint32_t> m_tunterm_acl_swindex_map;
             std::map<sai_object_id_t, std::list<sai_object_id_t>> m_acl_tbl_grp_mbr_map;
             std::map<sai_object_id_t, std::list<sai_object_id_t>> m_acl_tbl_grp_ports_map;
 	    std::map<sai_object_id_t, vpp_ace_cntr_info_t> m_ace_cntr_info_map;
@@ -1036,6 +1039,180 @@ namespace saivpp
 
             sai_status_t aclTableRemove(
 		_In_ const std::string &serializedObjectId);
+
+            /**
+            * @brief Retrieves ACEs and list of ordered ACE info for a given table.
+            *
+            * @param[in] tbl_oid The object ID of the table for which to retrieve ACEs.
+            * @param[out] n_total_entries The total number of ACEs.
+            * @param[out] aces Pointer to the array of ACEs.
+            * @param[out] ordered_aces Ordered ACE info list.
+            * @return SAI_STATUS_SUCCESS on success, or an appropriate error code otherwise.
+            */
+            sai_status_t get_sorted_aces(
+                    _In_ sai_object_id_t tbl_oid,
+                    _Out_ size_t &n_total_entries,
+                    _Out_ acl_tbl_entries_t *&aces,
+                    _Out_ std::list<ordered_ace_list_t> &ordered_aces);
+
+            /**
+            * @brief Cleans up AclTblConfig variables.
+            *
+            * @param[in] aces Pointer to the ACEs to be cleaned up.
+            * @param[in] ordered_aces Ordered ACE list to be cleaned up.
+            * @param[in] acl Pointer to the VPP ACL to be cleaned up.
+            * @param[in] tunterm_acl Pointer to the VPP tunnel termination ACL to be cleaned up.
+            */
+            void cleanup_acl_tbl_config(
+                    _In_ acl_tbl_entries_t *&aces,
+                    _In_ std::list<ordered_ace_list_t> &ordered_aces,
+                    _In_ vpp_acl_t *&acl,
+                    _In_ vpp_tunterm_acl_t *&tunterm_acl);
+
+            /**
+            * @brief Fills ACL and tunnel termination ACL rules based on the provided ACEs.
+            * 
+            * @param[in] aces Pointer to ACEs.
+            * @param[in] ordered_aces Reference to Ordered ACE list.
+            * @param[in] acl Pointer to the allocated VPP ACL.
+            * @param[in] tunterm_acl Pointer to the allocated VPP tunnel termination ACL.
+            * @return SAI_STATUS_SUCCESS on success, or an appropriate error code otherwise.
+            */
+            sai_status_t fill_acl_rules(
+                    _In_ acl_tbl_entries_t *aces,
+                    _In_ std::list<ordered_ace_list_t> &ordered_aces,
+                    _In_ vpp_acl_t *acl,
+                    _In_ vpp_tunterm_acl_t *tunterm_acl);
+
+            /**
+            * @brief Creates or replaces the provided ACL in VPP.
+            *
+            * @param[in] acl Pointer to the VPP ACL to be added or replaced.
+            * @param[in] tbl_oid Object ID of the ACL table where the entry will be added or replaced.
+            * @param[in] aces Pointer to the ACEs.
+            * @param[in] ordered_aces Ordered ACE list.
+            * @return SAI_STATUS_SUCCESS on success, or an appropriate error code otherwise.
+            */
+            sai_status_t acl_add_replace(
+                    _In_ vpp_acl_t *&acl,
+                    _In_ sai_object_id_t tbl_oid,
+                    _In_ acl_tbl_entries_t *aces,
+                    _In_ std::list<ordered_ace_list_t> &ordered_aces);
+
+
+            /**
+             * @brief Allocates memory for VPP ACL.
+             *
+             * @param[in] n_entries Number of entries in the ACL.
+             * @param[in] tbl_oid Object ID of the table to which the ACL belongs.
+             * @param[out] acl_name Name of the allocated ACL.
+             * @param[out] acl Pointer to the allocated ACL.
+             * @return SAI_STATUS_SUCCESS on success, or an appropriate error code otherwise.
+             */
+            sai_status_t allocate_acl(
+                    _In_ size_t n_entries,
+                    _In_ sai_object_id_t tbl_oid,
+                    _Out_ char (&acl_name)[64],
+                    _Out_ vpp_acl_t *&acl);
+
+            /**
+             * @brief Allocates memory for VPP tunnel termination ACL.
+             *
+             * @param[in] n_tunterm_entries Number of tunnel termination entries to allocate.
+             * @param[in] tbl_oid Object ID of the ACL table.
+             * @param[out] acl_name Name of the allocated ACL.
+             * @param[out] tunterm_acl Pointer to the allocated tunnel termination ACL.
+             * @return SAI_STATUS_SUCCESS on success, or an appropriate error code otherwise.
+             */
+            sai_status_t allocate_tunterm_acl(
+                    _In_ size_t n_tunterm_entries,
+                    _In_ sai_object_id_t tbl_oid,
+                    _Out_ char (&acl_name)[64],
+                    _Out_ vpp_tunterm_acl_t *&tunterm_acl);
+
+            /**
+            * @brief Counts the total number of ACL rules and tunnel termination ACL rules, and sets is_tunterm in the ordered ACE list.
+            *
+            * @param[in] aces Pointer to ACEs.
+            * @param[in] ordered_aces Reference to the ordered ACE list.
+            * @param[out] n_entries Reference to the number of ACL entries.
+            * @param[out] n_tunterm_entries Reference to the number of tunnel termination ACL entries.
+            */
+            void count_tunterm_acl_rules(
+                    _In_ acl_tbl_entries_t *aces,
+                    _In_ std::list<ordered_ace_list_t> &ordered_aces,
+                    _Out_ size_t &n_entries,
+                    _Out_ size_t &n_tunterm_entries);
+
+            /**
+            * @brief Deletes the hardware ports map associated with the given table object ID.
+            *
+            * @param[in] tbl_oid The object ID of the table whose hardware ports map is to be deleted.
+            * @return SAI_STATUS_SUCCESS on success, or an appropriate error code otherwise.
+            */
+            sai_status_t tbl_hw_ports_map_delete(
+                    _In_ sai_object_id_t tbl_oid);
+
+            /**
+            * @brief Deletes a tunnel termination ACL in VPP.
+            *
+            * @param[in] tbl_oid The object ID of the ACL table.
+            * @param[in] table_delete Boolean flag indicating whether the overall ACL table is being deleted.
+            * @return SAI_STATUS_SUCCESS on success, or an appropriate error code otherwise.
+            */
+            sai_status_t tunterm_acl_delete(
+                    _In_ sai_object_id_t tbl_oid,
+                    _In_ bool table_delete);
+                    
+            /**
+            * @brief Creates or replaces the provided tunnel termination ACL in VPP.
+            *
+            * @param[in] acl Pointer to the tunnel termination ACL.
+            * @param[in] tbl_oid Object ID of the ACL table where the entry will be added or replaced.
+            * @return SAI_STATUS_SUCCESS on success, or an appropriate error code otherwise.
+            */
+            sai_status_t tunterm_acl_add_replace(
+                    _In_ vpp_tunterm_acl_t *acl,
+                    _In_ sai_object_id_t tbl_oid);
+
+            /**
+            * @brief Sets the redirect action for a tunnel termination ACL rule.
+            *
+            * @param[in] attr_id The ID of the SAI attribute to be updated.
+            * @param[in] value Pointer to the SAI attribute value.
+            * @param[in] rule Pointer to the tunnel termination ACL rule to be updated.
+            * @return SAI_STATUS_SUCCESS on success, or an appropriate error code otherwise.
+            */
+            sai_status_t tunterm_set_action_redirect(
+                    _In_ sai_acl_entry_attr_t          attr_id,
+                    _In_ const sai_attribute_value_t  *value,
+                    _In_ vpp_tunterm_acl_rule_t      *rule);
+
+            /**
+             * @brief Updates an ACE field for a tunnel termination ACL rule.
+             *
+             * @param[in] attr_id The ID of the SAI attribute to be updated.
+             * @param[in] value Pointer to the SAI attribute value.
+             * @param[in] rule Pointer to the tunnel termination ACL rule to be updated.
+             * @return SAI_STATUS_SUCCESS on success, or an appropriate error code otherwise.
+             */
+            sai_status_t tunterm_acl_rule_field_update(
+                    _In_ sai_acl_entry_attr_t          attr_id,
+                    _In_ const sai_attribute_value_t  *value,
+                    _In_ vpp_tunterm_acl_rule_t      *rule);
+
+            /**
+            * @brief Binds or unbinds a tunnel termination ACL table to/from an interface.
+            *
+            * @param[in] tbl_oid The object ID of the ACL table to be bound or unbound.
+            * @param[in] is_add A boolean flag indicating whether to bind (true) or unbind (false) the ACL table.
+            * @param[in] hwif_name The name of the hardware interface to which the ACL table is to be bound or from which it is to be unbound.
+            * @return SAI_STATUS_SUCCESS on success, or an appropriate error code otherwise.
+            */
+            sai_status_t tunterm_acl_bindunbind(
+                    _In_ sai_object_id_t tbl_oid,
+                    _In_ bool is_add,
+                    _In_ std::string hwif_name);
 
 	    sai_status_t aclTableCreate(
 		_In_ sai_object_id_t object_id,
