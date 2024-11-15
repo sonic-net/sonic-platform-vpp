@@ -320,6 +320,7 @@ TunnelManager::create_vpp_vxlan_decap(
     vpp_status = create_bvi_interface(bvi_mac, bd_id);
     if (vpp_status != 0) {
         SWSS_LOG_ERROR("Failed to create bvi interface");
+        m_switch_db->dynamic_bd_id_pool.free(bd_id);
         return SAI_STATUS_FAILURE;
     }
     // Get new list of physical interfaces from VPP
@@ -390,6 +391,7 @@ TunnelManager::remove_vpp_vxlan_decap(
 
     delete_bvi_interface(hw_bvi_ifname);
 
+    m_switch_db->dynamic_bd_id_pool.free(tunnel_data.bd_id);
     refresh_interfaces_list();
     //bd is create automatically when the fist interface is add to it but requires manual deletion
     vpp_bridge_domain_add_del(tunnel_data.bd_id, false);
