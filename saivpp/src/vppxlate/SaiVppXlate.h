@@ -21,6 +21,7 @@ extern "C" {
 #endif
 
 #include <netinet/in.h>
+#include "sai.h"
 
     typedef enum {
 	VPP_NEXTHOP_NORMAL = 1,
@@ -121,6 +122,43 @@ extern "C" {
        vpp_intf_status_t     intf_status;
        vpp_bfd_state_notif_t bfd_notif;
     } vpp_event_data_t;
+
+    typedef struct vpp_my_sid_entry_ {
+        vpp_ip_addr_t localsid;
+        bool end_psp;
+        uint32_t behavior;
+        char hwif_name[64];
+        uint32_t vlan_index;
+        uint32_t fib_table;
+        vpp_ip_addr_t nh_addr;
+    } vpp_my_sid_entry_t;
+
+    typedef struct vpp_sid_list_ {
+        uint8_t num_sids;
+        vpp_ip_addr_t sids[16];
+    } vpp_sids_t;
+
+    typedef struct vpp_sidlist_ {
+        vpp_ip_addr_t bsid;
+        uint32_t weight;
+        bool is_encap;
+        uint8_t type;
+        uint32_t fib_table;
+        vpp_sids_t sids;
+        vpp_ip_addr_t encap_src;
+    } vpp_sidlist_t;
+
+    typedef struct vpp_sr_steer_prefix_ {
+        vpp_ip_addr_t address;
+        uint8_t prefix_len;
+    } vpp_sr_steer_prefix_t;
+
+    typedef struct vpp_sr_steer_ {
+        bool is_del;
+        vpp_ip_addr_t bsid;
+        uint32_t fib_table;
+        vpp_sr_steer_prefix_t prefix;
+    } vpp_sr_steer_t;
 
     typedef struct vpp_event_info_ {
 	struct vpp_event_info_ *next;
@@ -242,6 +280,11 @@ typedef enum {
 
     extern int vpp_vxlan_tunnel_add_del(vpp_vxlan_tunnel_t *tunnel, bool is_add,  uint32_t *sw_if_index);
     extern int vpp_ip_addr_t_to_string(vpp_ip_addr_t *ip_addr, char *buffer, size_t maxlen);
+    extern int vpp_my_sid_entry_add_del(vpp_my_sid_entry_t *my_sid, bool is_del);
+    extern int vpp_sidlist_add(vpp_sidlist_t *sidlist);
+    extern int vpp_sidlist_del(vpp_ip_addr_t *bsid);
+    extern int vpp_sr_steer_add_del(vpp_sr_steer_t *sr_steer, bool is_del);
+    extern int vpp_sr_set_encap_source(vpp_ip_addr_t *encap_src);
 #ifdef __cplusplus
 }
 #endif

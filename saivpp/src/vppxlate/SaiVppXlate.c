@@ -58,6 +58,9 @@
 #include <vnet/bfd/bfd.api_enum.h>
 #include <vnet/bfd/bfd.api_types.h>
 
+#include <vnet/srv6/sr.api_enum.h>
+#include <vnet/srv6/sr.api_types.h>
+
 /* l2 API inclusion */
 
 #define vl_typedefs
@@ -104,6 +107,24 @@
 
 #define vl_api_version(n, v) static u32 interface_api_version = v;
 #include <vnet/interface.api.h>
+#undef vl_api_version
+
+/* SRv6 API inclusion */
+
+#define vl_typedefs
+#include <vnet/srv6/sr.api.h>
+#undef vl_typedefs
+
+#define  vl_endianfun
+#include <vnet/srv6/sr.api.h>
+#undef vl_endianfun
+
+#define vl_calcsizefun
+#include <vnet/srv6/sr.api.h>
+#undef vl_calcsizefun
+
+#define vl_api_version(n, v) static u32 sr_api_version = v;
+#include <vnet/srv6/sr.api.h>
 #undef vl_api_version
 
 /* ipv4 API inclusion */
@@ -478,6 +499,25 @@ static bool vpp_to_vl_api_ip_addr(vl_api_address_t *vpp_addr, vpp_ip_addr_t *ipa
         struct sockaddr_in6 *ip6 = &(ipaddr->addr.ip6);
         vpp_addr->af = ADDRESS_IP6;
         memcpy(&vpp_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(vpp_addr->un.ip6));
+    }
+    else
+    {
+        return false;
+    }
+    return ret;
+}
+
+static bool vpp_to_vl_api_ip6_address(vl_api_ip6_address_t *vpp_addr, vpp_ip_addr_t *ipaddr)
+{
+    bool ret = true;
+    if (ipaddr->sa_family == AF_INET)
+    {
+        return false;
+    }
+    else if (ipaddr->sa_family == AF_INET6)
+    {
+        struct sockaddr_in6 *ip6 = &(ipaddr->addr.ip6);
+        memcpy(vpp_addr, &ip6->sin6_addr.s6_addr, sizeof(vl_api_ip6_address_t));
     }
     else
     {
@@ -918,6 +958,52 @@ vl_api_vxlan_add_del_tunnel_v3_reply_t_handler (
     SAIVPP_DEBUG("vxlan_add_del handler: if_idx,%d,status,%d",vam->sw_if_index, vam->retval);
 }
 
+static void
+vl_api_sr_localsid_add_del_reply_t_handler(vl_api_sr_localsid_add_del_reply_t *msg) 
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sr local sid add/del %s(%d)",
+                  msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_sr_policy_add_v2_reply_t_handler(vl_api_sr_policy_add_v2_reply_t *msg) 
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sr policy add %s(%d)",
+                  msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_sr_policy_del_reply_t_handler(vl_api_sr_policy_del_reply_t *msg) 
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sr policy del %s(%d)",
+                  msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_sr_steering_add_del_reply_t_handler(vl_api_sr_steering_add_del_reply_t *msg) 
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sr steer add/del %s(%d)",
+                  msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_sr_set_encap_source_reply_t_handler(vl_api_sr_set_encap_source_reply_t *msg) 
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sr set encap source %s(%d)",
+                  msg->retval ? "failed" : "successful", msg->retval);
+}
+
+
 #define vl_api_get_first_msg_id_reply_t_handler vl_noop_handler
 #define vl_api_get_first_msg_id_reply_t_handler_json vl_noop_handler
 
@@ -930,6 +1016,7 @@ vl_api_vxlan_add_del_tunnel_v3_reply_t_handler (
 static u16 interface_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
 static u16 l2_msg_id_base, vxlan_msg_id_base;
 static u16 bfd_msg_id_base;
+static u16 sr_msg_id_base;
 
 static void vpp_base_vpe_init(void)
 {
@@ -1071,13 +1158,21 @@ vl_api_acl_interface_add_del_reply_t_handler(vl_api_acl_interface_add_del_reply_
 #define VXLAN_MSG_ID(id) \
     (VL_API_##id + vxlan_msg_id_base)
 
+#define SR_MSG_ID(id) \
+    (VL_API_##id + sr_msg_id_base)
+
 #define foreach_vpe_plugin_api_reply_msg                                \
     _(LCP_MSG_ID(LCP_ITF_PAIR_ADD_DEL_REPLY), lcp_itf_pair_add_del_reply) \
     _(ACL_MSG_ID(ACL_ADD_REPLACE_REPLY), acl_add_replace_reply)	\
     _(ACL_MSG_ID(ACL_DEL_REPLY), acl_del_reply) \
     _(ACL_MSG_ID(ACL_STATS_INTF_COUNTERS_ENABLE_REPLY), acl_stats_intf_counters_enable_reply) \
     _(ACL_MSG_ID(ACL_INTERFACE_ADD_DEL_REPLY), acl_interface_add_del_reply) \
-    _(VXLAN_MSG_ID(VXLAN_ADD_DEL_TUNNEL_V3_REPLY), vxlan_add_del_tunnel_v3_reply)
+    _(VXLAN_MSG_ID(VXLAN_ADD_DEL_TUNNEL_V3_REPLY), vxlan_add_del_tunnel_v3_reply) \
+    _(SR_MSG_ID(SR_LOCALSID_ADD_DEL_REPLY), sr_localsid_add_del_reply) \
+    _(SR_MSG_ID(SR_POLICY_ADD_V2_REPLY), sr_policy_add_v2_reply) \
+    _(SR_MSG_ID(SR_POLICY_DEL_REPLY), sr_policy_del_reply) \
+    _(SR_MSG_ID(SR_STEERING_ADD_DEL_REPLY), sr_steering_add_del_reply) \
+    _(SR_MSG_ID(SR_SET_ENCAP_SOURCE_REPLY), sr_set_encap_source_reply)
 static void vpp_plugin_vpe_init(void)
 {
 #define _(N,n)                                                  \
@@ -1126,6 +1221,10 @@ static void get_base_msg_id()
     msg_base_lookup_name = format (0, "bfd_%08x%c", bfd_api_version, 0);
     bfd_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
     assert(bfd_msg_id_base != (u16) ~0);
+
+    msg_base_lookup_name = format (0, "sr_%08x%c", sr_api_version, 0);
+    sr_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
+    assert(sr_msg_id_base != (u16) ~0);
 
     memclnt_msg_id_base = 0;
 
@@ -2997,3 +3096,252 @@ static int vpp_bfd_udp_enable_multihop ()
 
     return ret;
 }
+
+static u8 translate_behavior(u32 behavior) 
+{
+    switch(behavior) {
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_E:
+            return SR_BEHAVIOR_API_END;
+            break;
+        // case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_X:
+        //     return SR_BEHAVIOR_API_X;
+        //     break;
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_T:
+            return SR_BEHAVIOR_API_T;
+            break;
+        // case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_DX6:
+        //     return SR_BEHAVIOR_API_DX6;
+        //     break;
+        // case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_DX4:
+        //     return SR_BEHAVIOR_API_DX4;
+        //     break;
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_DT6:
+            return SR_BEHAVIOR_API_DT6;
+            break;
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_DT4:
+            return SR_BEHAVIOR_API_DT4;
+            break;
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_UN:
+            return SR_BEHAVIOR_API_END_UN_PERF;
+            break;
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_UA:
+            return SR_BEHAVIOR_API_UA;
+            break;
+        default:
+            return SR_BEHAVIOR_API_LAST;
+            break;
+    }
+}
+
+int vpp_my_sid_entry_add_del (vpp_my_sid_entry_t *my_sid, bool is_del)
+{
+    int                           ret;
+    vat_main_t                   *vam = &vat_main;
+    vl_api_sr_localsid_add_del_t *mp;
+
+    init_vpp_client();
+
+    VPP_LOCK();
+
+    __plugin_msg_base = sr_msg_id_base;
+
+    M (SR_LOCALSID_ADD_DEL, mp);
+
+    if (!vpp_to_vl_api_ip6_address(&mp->localsid, &my_sid->localsid)) {
+        SAIVPP_ERROR("Unknown protocol in local sid");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    u8 behavior = translate_behavior(my_sid->behavior);
+    if (behavior == SR_BEHAVIOR_API_LAST) {
+        SAIVPP_ERROR("Unsupported behavior %u in local sid", behavior);
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    if (behavior == SR_BEHAVIOR_API_UA) {
+        if (!vpp_to_vl_api_ip_addr(&mp->nh_addr, &my_sid->nh_addr)) {
+            SAIVPP_ERROR("Unknown protocol in nh address");
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+
+        u32 idx = get_swif_idx(vam, my_sid->hwif_name);
+        if (idx != (u32) -1) {
+            mp->sw_if_index = htonl(idx);
+        } else {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", my_sid->hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    }    
+
+    mp->is_del =  is_del;
+    mp->end_psp = my_sid->end_psp;
+    mp->behavior = behavior;
+    mp->vlan_index = htonl(my_sid->vlan_index);
+    mp->fib_table = htonl(my_sid->fib_table);
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int vpp_sidlist_add(vpp_sidlist_t *sidlist)
+{
+    int                           ret;
+    vat_main_t                   *vam = &vat_main;
+    vl_api_sr_policy_add_v2_t    *mp;
+
+    init_vpp_client();
+
+    VPP_LOCK();
+
+    __plugin_msg_base = sr_msg_id_base;
+
+    M (SR_POLICY_ADD_V2, mp);
+
+    mp->weight = htonl(sidlist->weight);
+    mp->is_encap = sidlist->is_encap;
+    mp->type = sidlist->type;
+    mp->fib_table = htonl(sidlist->fib_table);
+    mp->sids.num_sids = sidlist->sids.num_sids;
+
+    if (!vpp_to_vl_api_ip6_address(&mp->bsid_addr, &sidlist->bsid)) {
+        SAIVPP_ERROR("Unknown protocol in bsid");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    if (!vpp_to_vl_api_ip6_address(&mp->encap_src, &sidlist->encap_src)) {
+        SAIVPP_ERROR("Unknown protocol in encap src");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    for(uint8_t i = 0; i<mp->sids.num_sids; i++) {
+        if (!vpp_to_vl_api_ip6_address(&mp->sids.sids[i], &sidlist->sids.sids[i])) {
+            SAIVPP_ERROR("Unknown protocol in sid");
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    }
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int vpp_sidlist_del(vpp_ip_addr_t *bsid)
+{
+    int                     ret;
+    vat_main_t             *vam = &vat_main;
+    vl_api_sr_policy_del_t *mp;
+
+    init_vpp_client();
+
+    VPP_LOCK();
+
+    __plugin_msg_base = sr_msg_id_base;
+
+    M (SR_POLICY_DEL, mp);
+
+    mp->sr_policy_index = htonl((uint32_t)~0);
+    if (!vpp_to_vl_api_ip6_address(&mp->bsid_addr, bsid)) {
+        SAIVPP_ERROR("Unknown protocol in bsid");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int  vpp_sr_steer_add_del(vpp_sr_steer_t *sr_steer, bool is_del)
+{
+    int                     ret;
+    vat_main_t             *vam = &vat_main;
+    vl_api_sr_steering_add_del_t *mp;
+
+    init_vpp_client();
+
+    VPP_LOCK();
+
+    __plugin_msg_base = sr_msg_id_base;
+
+    M (SR_STEERING_ADD_DEL, mp);
+
+    mp->is_del = is_del;
+    mp->sr_policy_index = htonl((uint32_t)~0);
+    mp->table_id = htonl(sr_steer->fib_table);
+    mp->sw_if_index =  htonl((uint32_t)~0);   //L2 currently unsupported
+    mp->prefix.len = sr_steer->prefix.prefix_len;
+    mp->traffic_type = SR_STEER_API_IPV4;
+    if (sr_steer->prefix.address.sa_family == AF_INET6) {
+        mp->traffic_type = SR_STEER_API_IPV6;
+    }
+
+    if (!vpp_to_vl_api_ip6_address(&mp->bsid_addr, &sr_steer->bsid)) {
+        SAIVPP_ERROR("Unknown protocol in bsid");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    if (!vpp_to_vl_api_ip_addr(&mp->prefix.address, &sr_steer->prefix.address)) {
+        SAIVPP_ERROR("Unknown protocol in nh address");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int vpp_sr_set_encap_source(vpp_ip_addr_t *encap_src)
+{
+    int                     ret;
+    vat_main_t             *vam = &vat_main;
+    vl_api_sr_set_encap_source_t *mp;
+
+    init_vpp_client();
+
+    VPP_LOCK();
+
+    __plugin_msg_base = sr_msg_id_base;
+
+    M (SR_SET_ENCAP_SOURCE, mp);
+
+    if (!vpp_to_vl_api_ip6_address(&mp->encaps_source, encap_src)) {
+        SAIVPP_ERROR("Unknown protocol in encap_src");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+    
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+

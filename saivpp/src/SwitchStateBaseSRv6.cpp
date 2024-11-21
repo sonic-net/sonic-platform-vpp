@@ -1,0 +1,551 @@
+/*
+ * Copyright (c) 2024 Cisco and/or its affiliates.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at:
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <list>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <net/if.h>
+#include <netinet/in.h>
+
+#include "swss/logger.h"
+#include "swss/exec.h"
+#include "swss/converter.h"
+#include "vppxlate/SaiVppXlate.h"
+
+#include "SwitchStateBase.h"
+#include "SwitchStateBaseUtils.h"
+#include "TunnelManager.h"
+#include "sai_serialize.h"
+#include "NotificationPortStateChange.h"
+#include "BitResourcePool.h"
+
+using namespace saivpp;
+
+sai_status_t TunnelManager::fill_next_hop(
+        _In_ sai_object_id_t next_hop_oid,
+        _Out_ vpp_ip_addr_t &nh_ip,
+        _Out_ uint32_t &vlan_idx,
+        _Out_ char (&if_name)[64])
+{
+    sai_status_t    status = SAI_STATUS_SUCCESS;
+    sai_attribute_t attr;
+    sai_object_id_t rif_oid;
+    sai_object_id_t port_oid;
+    std::string     hwif_name;
+
+    attr.id = SAI_NEXT_HOP_ATTR_TYPE;
+    CHECK_STATUS(m_switch_db->get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr));
+    uint32_t next_hop_type = attr.value.s32;
+    if(next_hop_type!= SAI_NEXT_HOP_TYPE_IP) {
+        SWSS_LOG_ERROR("Nexthop type %d not supported.", next_hop_type);
+        return SAI_STATUS_FAILURE;
+    }
+    attr.id = SAI_NEXT_HOP_ATTR_IP;
+    if(m_switch_db->get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS)
+    {
+        sai_ip_address_t_to_vpp_ip_addr_t(attr.value.ipaddr, nh_ip);
+    } else {
+        SWSS_LOG_ERROR("IP address missing in nexthop %s", sai_serialize_object_id(next_hop_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    attr.id = SAI_NEXT_HOP_ATTR_ROUTER_INTERFACE_ID;
+    if(m_switch_db->get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS)
+    {
+        rif_oid = attr.value.oid;
+    } else {
+        SWSS_LOG_ERROR("RIF missing in nexthop %s", sai_serialize_object_id(next_hop_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    attr.id = SAI_ROUTER_INTERFACE_ATTR_PORT_ID;
+    if(m_switch_db->get(SAI_OBJECT_TYPE_ROUTER_INTERFACE, rif_oid, 1, &attr) == SAI_STATUS_SUCCESS)
+    {
+        port_oid = attr.value.oid;
+    } else {
+        SWSS_LOG_ERROR("Port ID is missing missing in RIF object %s", sai_serialize_object_id(rif_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    attr.id = SAI_ROUTER_INTERFACE_ATTR_OUTER_VLAN_ID;
+    if(m_switch_db->get(SAI_OBJECT_TYPE_ROUTER_INTERFACE, rif_oid, 1, &attr) == SAI_STATUS_SUCCESS)
+    {
+        vlan_idx = attr.value.u16;
+    } else {
+        vlan_idx = 0;
+    }
+    
+    if(!m_switch_db->vpp_get_hwif_name(port_oid, vlan_idx, hwif_name)) {
+        SWSS_LOG_WARN("VPP hwif name not found for port %s", sai_serialize_object_id(port_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+    strncpy(if_name, hwif_name.c_str(), sizeof(if_name) -1);
+
+    return status;
+}
+
+sai_status_t TunnelManager::fill_my_sid_entry(
+        _In_ const std::string &serial_id,
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list,
+        _Out_ vpp_my_sid_entry_t &my_sid)
+{
+    sai_status_t    status = SAI_STATUS_SUCCESS;
+    sai_my_sid_entry_t my_sid_entry;
+
+    sai_deserialize_my_sid_entry(serial_id, my_sid_entry);
+
+    struct sockaddr_in6 *sin6 =  &my_sid.localsid.addr.ip6;
+    my_sid.localsid.sa_family = AF_INET6;
+    sin6->sin6_family = AF_INET6;
+    memcpy(sin6->sin6_addr.s6_addr, my_sid_entry.sid, sizeof(sin6->sin6_addr.s6_addr));
+
+    auto vrf =  m_switch_db->vpp_get_ip_vrf(my_sid_entry.vr_id);
+    if(vrf == nullptr) {
+        my_sid.fib_table = 0;
+    } else {
+        my_sid.fib_table = vrf->m_vrf_id;
+    }
+
+    for(uint32_t i = 0; i<attr_count; i++) {
+        switch(attr_list[i].id) {
+            case SAI_MY_SID_ENTRY_ATTR_NEXT_HOP_ID:
+                status = fill_next_hop(attr_list[i].value.oid, my_sid.localsid,
+                                       my_sid.vlan_index, my_sid.hwif_name);
+                break;
+            case SAI_MY_SID_ENTRY_ATTR_ENDPOINT_BEHAVIOR:
+                my_sid.behavior = (uint32_t) attr_list[i].value.u32;
+                break;
+            case SAI_MY_SID_ENTRY_ATTR_ENDPOINT_BEHAVIOR_FLAVOR:
+                my_sid.end_psp = false;
+                if(attr_list[i].value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP ||
+                   attr_list[i].value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP_AND_USP ||
+                   attr_list[i].value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP_AND_USD ||
+                   attr_list[i].value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP_AND_USP_AND_USD) {
+                    my_sid.end_psp = true;
+                }
+                break;
+            case SAI_MY_SID_ENTRY_ATTR_VRF:
+                break;
+            default:
+                SWSS_LOG_ERROR("Unsupported attribute: %u", attr_list[i].id);
+                status = SAI_STATUS_FAILURE;
+                break;
+        }
+
+        if(status != SAI_STATUS_SUCCESS) {
+            break;
+        }
+    }
+    return status;
+}
+
+sai_status_t TunnelManager::add_remove_my_sid_entry(
+        _In_ const std::string &serializedObjectId,
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list,
+        _In_ bool is_del)
+{
+    sai_status_t          status = SAI_STATUS_SUCCESS;
+    vpp_my_sid_entry_t    my_sid;
+    memset(&my_sid, 0, sizeof(my_sid));
+
+    status = fill_my_sid_entry(serializedObjectId, attr_count, attr_list, my_sid);
+    if(status != SAI_STATUS_SUCCESS) {
+        SWSS_LOG_ERROR("Failed to fill fields for my_sid entry %s, status %d",
+                        serializedObjectId.c_str(), status);
+        status = SAI_STATUS_FAILURE;
+    }
+
+    status = vpp_my_sid_entry_add_del(&my_sid, is_del);
+    if(status != SAI_STATUS_SUCCESS) {
+        SWSS_LOG_ERROR("Failed to add/remove my_sid entry %s, status %d",
+                        serializedObjectId.c_str(), status);
+        status = SAI_STATUS_FAILURE;
+    }
+
+    return status;
+}
+
+sai_status_t TunnelManager::create_my_sid_entry(
+        _In_ const std::string &serializedObjectId,
+        _In_ sai_object_id_t switch_id,
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+
+    SWSS_LOG_ENTER();
+    
+    status = add_remove_my_sid_entry(serializedObjectId, attr_count, attr_list, false);
+
+    if(status == SAI_STATUS_SUCCESS) {
+        CHECK_STATUS(m_switch_db->create_internal(SAI_OBJECT_TYPE_MY_SID_ENTRY, serializedObjectId, switch_id, attr_count, attr_list));
+    }
+
+    SWSS_LOG_NOTICE("Create my_sid status: %d", status);
+
+    return status;
+}
+
+sai_status_t TunnelManager::remove_my_sid_entry(
+        _In_ const std::string &serializedObjectId)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+
+    SWSS_LOG_ENTER();
+
+    status = add_remove_my_sid_entry(serializedObjectId, 0, NULL, true);
+    
+    if(status == SAI_STATUS_SUCCESS) {
+        CHECK_STATUS(m_switch_db->remove_internal(SAI_OBJECT_TYPE_MY_SID_ENTRY, serializedObjectId));
+    }
+
+    SWSS_LOG_NOTICE("Remove my_sid status: %d", status);
+
+    return status;
+}
+
+static sai_status_t fill_segment_list(
+        _In_ const sai_segment_list_t &sai_list,
+        _Out_ vpp_sids_t &sidlist)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    if(sai_list.count > 16) {
+        SWSS_LOG_ERROR("VPP max sid list size is 16, received %u", sai_list.count);
+        return SAI_STATUS_FAILURE;
+    }
+    sidlist.num_sids = sai_list.count;
+    for(uint32_t i = 0; i<sai_list.count; i++) {
+        sidlist.sids[i].sa_family = AF_INET6;
+        sidlist.sids[i].addr.ip6.sin6_family = AF_INET6;
+        memcpy(sidlist.sids[i].addr.ip6.sin6_addr.s6_addr, sai_list.list[i], sizeof(uint8_t[16]));
+    }   
+    return status;
+}
+
+void TunnelManager::generate_bsid(
+        _In_ sai_object_id_t sid_list_oid) 
+{
+    vpp_ip_addr_t bsid;
+    memset(&bsid, 0, sizeof(bsid));
+    bsid.sa_family = AF_INET6;
+    bsid.addr.ip6.sin6_family = AF_INET6;
+
+    // Set first bytes of BSID to fixed value
+    bsid.addr.ip6.sin6_addr.s6_addr[0] = 0xFE;
+    bsid.addr.ip6.sin6_addr.s6_addr[1] = 0xC0;
+    // Fill bottom half of BSID with SID list OID
+    for(uint8_t i=0; i<8; i++) {
+        bsid.addr.ip6.sin6_addr.s6_addr[15-i] = (uint8_t)(sid_list_oid>>(8*i)) & 0xFF;
+    }
+
+    m_bsid_map[sid_list_oid] = bsid;
+}
+
+sai_status_t TunnelManager::fill_sidlist(
+        _In_ const std::string &sidlist_id,
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list,
+        _Out_ vpp_sidlist_t &sidlist)
+{
+    sai_status_t    status = SAI_STATUS_SUCCESS;
+    sai_object_id_t object_id;
+    sai_deserialize_object_id(sidlist_id, object_id);
+
+    generate_bsid(object_id);
+    sidlist.bsid = m_bsid_map[object_id];
+    sidlist.weight = (uint32_t) ~0;         // Use default weight
+    sidlist.type = 0;                       // Use SR_API_POLICY_TYPE_DEFAULT
+    sidlist.fib_table = (uint32_t) ~0;      // Use default fib table
+    sidlist.encap_src.sa_family = AF_INET6; // Use default encap source, leave address as 0's.
+
+    for(uint32_t i = 0; i<attr_count; i++) {
+        switch(attr_list[i].id) {
+            case SAI_SRV6_SIDLIST_ATTR_SEGMENT_LIST:
+                status = fill_segment_list(attr_list[i].value.segmentlist, sidlist.sids);
+                break;
+            case SAI_SRV6_SIDLIST_ATTR_TYPE:
+                sidlist.is_encap = false;
+                if(attr_list[i].value.u32 == SAI_SRV6_SIDLIST_TYPE_ENCAPS  ||
+                   attr_list[i].value.u32 == SAI_SRV6_SIDLIST_TYPE_ENCAPS_RED) {
+                    sidlist.is_encap = true;
+                }
+                break;
+            default:
+                SWSS_LOG_ERROR("Unsupported attribute: %u", attr_list[i].id);
+                status = SAI_STATUS_FAILURE;
+                break;
+        }
+
+        if(status != SAI_STATUS_SUCCESS) {
+            break;
+        }
+    }
+    return status;
+}
+
+sai_status_t TunnelManager::add_sidlist(
+        _In_ const std::string &serializedObjectId,
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list)
+{
+    sai_status_t          status = SAI_STATUS_SUCCESS;
+    vpp_sidlist_t         sidlist;
+    memset(&sidlist, 0, sizeof(sidlist));
+
+    status = fill_sidlist(serializedObjectId, attr_count, attr_list, sidlist);
+    if(status != SAI_STATUS_SUCCESS) {
+        SWSS_LOG_ERROR("Failed to fill fields for sidlist %s, status %d",
+                        serializedObjectId.c_str(), status);
+        status = SAI_STATUS_FAILURE;
+    }
+
+    status = vpp_sidlist_add(&sidlist);
+    if(status != SAI_STATUS_SUCCESS) {
+        SWSS_LOG_ERROR("Failed to add sidlist %s, status %d",
+                        serializedObjectId.c_str(), status);
+        status = SAI_STATUS_FAILURE;
+    }
+
+    return status;
+}
+
+sai_status_t TunnelManager::create_sidlist(
+        _In_ const std::string &serializedObjectId,
+        _In_ sai_object_id_t switch_id,
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+
+    SWSS_LOG_ENTER();
+
+    status = add_sidlist(serializedObjectId, attr_count, attr_list);
+
+    if(status == SAI_STATUS_SUCCESS) {
+        CHECK_STATUS(m_switch_db->create_internal(SAI_OBJECT_TYPE_SRV6_SIDLIST, serializedObjectId, switch_id, attr_count, attr_list));
+    }
+
+    SWSS_LOG_NOTICE("Create sidlist status: %d", status);
+
+    return status;
+}
+
+sai_status_t TunnelManager::del_sidlist(
+        _In_ const std::string &serializedObjectId)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_object_id_t object_id;
+
+    sai_deserialize_object_id(serializedObjectId, object_id);
+    auto it = m_bsid_map.find(object_id);
+    if (it == m_bsid_map.end()) {
+        return status;
+    }
+
+    status = vpp_sidlist_del(&it->second);
+    if(status != SAI_STATUS_SUCCESS) {
+        SWSS_LOG_ERROR("Failed to delete sidlist %s, status %d",
+                        serializedObjectId.c_str(), status);
+        return SAI_STATUS_FAILURE;
+    }
+
+    m_bsid_map.erase(it);
+
+    return status;
+}
+
+sai_status_t TunnelManager::remove_sidlist(
+        _In_ const std::string &serializedObjectId)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+
+    SWSS_LOG_ENTER();
+
+    status = del_sidlist(serializedObjectId);
+
+    if(status == SAI_STATUS_SUCCESS) {
+       CHECK_STATUS(m_switch_db->remove_internal(SAI_OBJECT_TYPE_SRV6_SIDLIST, serializedObjectId))
+    }
+
+    SWSS_LOG_NOTICE("Remove sidlist status: %d", status);
+
+    return status;
+}
+
+sai_status_t TunnelManager::fill_bsid_set_src_addr(
+        _In_ sai_object_id_t next_hop_oid,
+        _Out_ vpp_ip_addr_t &bsid)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_attribute_t attr;
+    sai_object_id_t tunnel_oid;
+    sai_object_id_t sr_list_oid;
+
+    attr.id = SAI_NEXT_HOP_ATTR_SRV6_SIDLIST_ID;
+    if(m_switch_db->get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS)
+    {
+        sr_list_oid = attr.value.oid;
+    } else {
+        SWSS_LOG_ERROR("SRV6_SIDLIST missing in nexthop %s", sai_serialize_object_id(next_hop_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    attr.id = SAI_NEXT_HOP_ATTR_TUNNEL_ID;
+    if(m_switch_db->get(SAI_OBJECT_TYPE_NEXT_HOP, next_hop_oid, 1, &attr) == SAI_STATUS_SUCCESS)
+    {
+        tunnel_oid = attr.value.oid;
+    } else {
+        SWSS_LOG_ERROR("TUNNEL_ID missing in nexthop %s", sai_serialize_object_id(next_hop_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    attr.id = SAI_TUNNEL_ATTR_ENCAP_SRC_IP;
+    if(m_switch_db->get(SAI_OBJECT_TYPE_TUNNEL, tunnel_oid, 1, &attr) == SAI_STATUS_SUCCESS)
+    {
+        vpp_ip_addr_t encap_src;
+        sai_ip_address_t_to_vpp_ip_addr_t(attr.value.ipaddr, encap_src);
+        status = vpp_sr_set_encap_source(&encap_src);
+        if(status != SAI_STATUS_SUCCESS) {
+            SWSS_LOG_ERROR("Could not set encap source for tunnel obj %u, status: %d", sai_serialize_object_id(tunnel_oid).c_str(), status);
+            return SAI_STATUS_FAILURE;
+        }
+    }
+
+    auto it = m_bsid_map.find(sr_list_oid);
+    if (it == m_bsid_map.end()) {
+        SWSS_LOG_ERROR("Policy does not exists, oid: %u", sr_list_oid);
+        return SAI_STATUS_FAILURE;
+    }
+    bsid = it->second;
+
+    return status;
+}
+
+static uint8_t get_prefix_length(
+        _In_ const sai_ip_prefix_t &addr)
+{
+    uint8_t prefix_len = 0;
+    if(addr.addr_family == SAI_IP_ADDR_FAMILY_IPV4) {
+        prefix_len = __builtin_popcount(addr.mask.ip4);
+    } else if (addr.addr_family == SAI_IP_ADDR_FAMILY_IPV6) {
+        for(uint8_t i = 0; i<16; i++) {
+            prefix_len += __builtin_popcount(addr.mask.ip6[i]);
+        }
+    } else {
+        SWSS_LOG_ERROR("Unsupported address family %d", addr.addr_family);
+        return ~0;
+    }
+    return prefix_len;
+}
+
+sai_status_t TunnelManager::fill_sr_steer(
+        _In_ const std::string &serializedObjectId,
+        _In_ sai_object_id_t next_hop_oid,
+        _Out_ vpp_sr_steer_t  &sr_steer)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_route_entry_t route_entry;
+    sai_deserialize_route_entry(serializedObjectId, route_entry);
+
+    sai_ip_address_t sai_ip_addr = {route_entry.destination.addr_family, route_entry.destination.addr};
+    sai_ip_address_t_to_vpp_ip_addr_t(sai_ip_addr, sr_steer.prefix.address);
+    sr_steer.prefix.prefix_len = get_prefix_length(route_entry.destination);
+    if(sr_steer.prefix.prefix_len == ~0) {
+        SWSS_LOG_ERROR("Failed to get prefix length from mask");
+        return SAI_STATUS_FAILURE;
+    }
+
+    auto vrf = m_switch_db->vpp_get_ip_vrf(route_entry.vr_id);
+    if(vrf == nullptr) {
+        sr_steer.fib_table = 0;
+    } else {
+        sr_steer.fib_table = vrf->m_vrf_id;
+    }
+
+    status = fill_bsid_set_src_addr(next_hop_oid, sr_steer.bsid);
+
+    return status;
+}
+
+sai_status_t TunnelManager::sr_steer_add_remove(
+        _In_ const std::string &serializedObjectId,
+        _In_ sai_object_id_t next_hop_oid,
+        _In_ bool is_del)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    vpp_sr_steer_t sr_steer;
+    memset(&sr_steer, 0, sizeof(sr_steer));
+
+    status = fill_sr_steer(serializedObjectId, next_hop_oid, sr_steer);
+    if(status != SAI_STATUS_SUCCESS) {
+        SWSS_LOG_ERROR("Failed to fill fields for sr steer %s, status %d",
+                        serializedObjectId.c_str(), status);
+        return SAI_STATUS_FAILURE;
+    }
+
+    status = vpp_sr_steer_add_del(&sr_steer, is_del);
+    if(status != SAI_STATUS_SUCCESS) {
+        SWSS_LOG_ERROR("Failed to add/remove nexthop sidlist %s, status %d",
+                        serializedObjectId.c_str(), status);
+        status = SAI_STATUS_FAILURE;
+    }
+
+    return status;
+}
+
+sai_status_t TunnelManager::create_sidlist_route_entry(
+        _In_ const std::string &serializedObjectId,
+        _In_ sai_object_id_t switch_id,
+        _In_ uint32_t attr_count,
+        _In_ const sai_attribute_t *attr_list)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_object_id_t nh_oid = SAI_NULL_OBJECT_ID;
+    SWSS_LOG_ENTER();
+
+    for(uint32_t i = 0; i<attr_count; i++) {
+        if(attr_list[i].id == SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID) {
+            nh_oid = attr_list[i].value.oid;
+            break;
+        }
+    }
+
+    if(nh_oid == SAI_NULL_OBJECT_ID) {
+        SWSS_LOG_ERROR("Next hop id missing in route entry %s", serializedObjectId.c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    status = sr_steer_add_remove(serializedObjectId, nh_oid, false);
+    SWSS_LOG_NOTICE("Create route entry sidlist status: %d", status);
+    return status;
+}
+
+sai_status_t TunnelManager::remove_sidlist_route_entry(
+        _In_ const std::string &serializedObjectId,
+        _In_ sai_object_id_t next_hop_oid)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    SWSS_LOG_ENTER();
+
+    status = sr_steer_add_remove(serializedObjectId, next_hop_oid, true);
+    SWSS_LOG_NOTICE("Remove route entry sidlist status: %d", status);
+
+    return status;
+}
+
