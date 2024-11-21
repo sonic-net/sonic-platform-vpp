@@ -193,6 +193,8 @@ namespace saivpp
         std::unordered_map<sai_object_id_t, TunnelVPPData> m_tunnel_encap_nexthop_map;
         // Sid list obj id to bsid map
         std::map<sai_object_id_t, vpp_ip_addr_t> m_bsid_map;
+        // Mysid behavior map
+        std::map<std::string, uint32_t> m_behavior_map;
 
         sai_status_t tunnel_encap_nexthop_action(
                         _In_ const SaiObject* tunnel_nh_obj, 

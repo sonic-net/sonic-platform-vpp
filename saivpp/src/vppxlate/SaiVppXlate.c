@@ -3154,13 +3154,13 @@ int vpp_my_sid_entry_add_del (vpp_my_sid_entry_t *my_sid, bool is_del)
     }
 
     u8 behavior = translate_behavior(my_sid->behavior);
-    if (behavior == SR_BEHAVIOR_API_LAST) {
+    if (behavior == SR_BEHAVIOR_API_LAST && !is_del) {
         SAIVPP_ERROR("Unsupported behavior %u in local sid", behavior);
         VPP_UNLOCK();
         return -EINVAL;
     }
 
-    if (behavior == SR_BEHAVIOR_API_UA) {
+    if (behavior == SR_BEHAVIOR_API_UA && !is_del) {
         if (!vpp_to_vl_api_ip_addr(&mp->nh_addr, &my_sid->nh_addr)) {
             SAIVPP_ERROR("Unknown protocol in nh address");
             VPP_UNLOCK();

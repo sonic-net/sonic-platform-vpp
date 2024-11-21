@@ -106,7 +106,6 @@ sai_status_t TunnelManager::fill_my_sid_entry(
 {
     sai_status_t    status = SAI_STATUS_SUCCESS;
     sai_my_sid_entry_t my_sid_entry;
-
     sai_deserialize_my_sid_entry(serial_id, my_sid_entry);
 
     struct sockaddr_in6 *sin6 =  &my_sid.localsid.addr.ip6;
@@ -114,7 +113,7 @@ sai_status_t TunnelManager::fill_my_sid_entry(
     sin6->sin6_family = AF_INET6;
     memcpy(sin6->sin6_addr.s6_addr, my_sid_entry.sid, sizeof(sin6->sin6_addr.s6_addr));
 
-    auto vrf =  m_switch_db->vpp_get_ip_vrf(my_sid_entry.vr_id);
+    auto vrf = m_switch_db->vpp_get_ip_vrf(my_sid_entry.vr_id);
     if(vrf == nullptr) {
         my_sid.fib_table = 0;
     } else {
@@ -124,11 +123,11 @@ sai_status_t TunnelManager::fill_my_sid_entry(
     for(uint32_t i = 0; i<attr_count; i++) {
         switch(attr_list[i].id) {
             case SAI_MY_SID_ENTRY_ATTR_NEXT_HOP_ID:
-                status = fill_next_hop(attr_list[i].value.oid, my_sid.localsid,
+                status = fill_next_hop(attr_list[i].value.oid, my_sid.nh_addr,
                                        my_sid.vlan_index, my_sid.hwif_name);
                 break;
             case SAI_MY_SID_ENTRY_ATTR_ENDPOINT_BEHAVIOR:
-                my_sid.behavior = (uint32_t) attr_list[i].value.u32;
+                m_behavior_map[serial_id] = (uint32_t) attr_list[i].value.u32;
                 break;
             case SAI_MY_SID_ENTRY_ATTR_ENDPOINT_BEHAVIOR_FLAVOR:
                 my_sid.end_psp = false;
@@ -151,6 +150,14 @@ sai_status_t TunnelManager::fill_my_sid_entry(
             break;
         }
     }
+
+    if(status == SAI_STATUS_SUCCESS) {
+        auto it = m_behavior_map.find(serial_id);
+        if (it != m_behavior_map.end()) {
+            my_sid.behavior = it->second;
+        }
+    }
+
     return status;
 }
 
@@ -212,6 +219,10 @@ sai_status_t TunnelManager::remove_my_sid_entry(
     status = add_remove_my_sid_entry(serializedObjectId, 0, NULL, true);
     
     if(status == SAI_STATUS_SUCCESS) {
+        auto it = m_behavior_map.find(serializedObjectId);
+        if (it != m_behavior_map.end()) {
+            m_behavior_map.erase(it);
+        }
         CHECK_STATUS(m_switch_db->remove_internal(SAI_OBJECT_TYPE_MY_SID_ENTRY, serializedObjectId));
     }
 
