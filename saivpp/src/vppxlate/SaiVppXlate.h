@@ -82,6 +82,21 @@ extern "C" {
         vpp_acl_rule_t rules[0];
     } vpp_acl_t;
 
+    typedef struct {
+        vpp_ip_addr_t dst_prefix;
+        vpp_ip_addr_t dst_prefix_mask;
+        char hwif_name[64];
+        uint8_t  ip_protocol;
+        vpp_ip_addr_t next_hop_ip;
+    } vpp_tunterm_acl_rule_t;
+
+    typedef struct _vpp_tunterm_acl_ {
+        char *acl_name;
+        uint32_t count;
+        vpp_tunterm_acl_rule_t rules[0];
+    } vpp_tunterm_acl_t;
+
+
     typedef enum {
         VPP_IP_API_FLOW_HASH_SRC_IP = 1,
         VPP_IP_API_FLOW_HASH_DST_IP = 2,
@@ -258,6 +273,10 @@ typedef enum {
 				      bool is_input);
     extern int vpp_acl_interface_unbind(const char *hwif_name, uint32_t acl_index,
 					bool is_input);
+    extern int vpp_tunterm_acl_add_replace (uint32_t *tunterm_index, uint32_t count, vpp_tunterm_acl_t *acl);
+    extern int vpp_tunterm_acl_del (uint32_t tunterm_index);
+    extern int vpp_tunterm_acl_interface_add_del (uint32_t tunterm_index,
+                                           bool is_bind, const char *hwif_name);
     extern int interface_get_state(const char *hwif_name, bool *link_is_up);
     extern int vpp_sync_for_events();
     extern int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add);
