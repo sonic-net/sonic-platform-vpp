@@ -192,6 +192,16 @@ sai_status_t SwitchStateBase::create(
         return addIpRoute(serializedObjectId, switch_id, attr_count, attr_list);
     }
 
+    if (object_type == SAI_OBJECT_TYPE_MY_SID_ENTRY)
+    {
+        return  m_tunnel_mgr.create_my_sid_entry(serializedObjectId, switch_id, attr_count, attr_list);
+    }
+
+    if (object_type == SAI_OBJECT_TYPE_SRV6_SIDLIST)
+    {
+        return  m_tunnel_mgr.create_sidlist(serializedObjectId, switch_id, attr_count, attr_list);
+    }
+
     if (object_type == SAI_OBJECT_TYPE_NEXT_HOP)
     {       
         return createNexthop(serializedObjectId, switch_id, attr_count, attr_list);
@@ -483,6 +493,16 @@ sai_status_t SwitchStateBase::remove(
     if (object_type == SAI_OBJECT_TYPE_ROUTE_ENTRY)
     {
         return removeIpRoute(serializedObjectId);
+    }
+
+    if (object_type == SAI_OBJECT_TYPE_MY_SID_ENTRY)
+    {
+        return  m_tunnel_mgr.remove_my_sid_entry(serializedObjectId);
+    }
+
+    if (object_type == SAI_OBJECT_TYPE_SRV6_SIDLIST)
+    {
+        return  m_tunnel_mgr.remove_sidlist(serializedObjectId);
     }
     
     if (object_type == SAI_OBJECT_TYPE_NEXT_HOP)
