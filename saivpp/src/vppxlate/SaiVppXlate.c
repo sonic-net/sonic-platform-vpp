@@ -907,8 +907,6 @@ vl_api_bfd_udp_session_event_t_handler (vl_api_bfd_udp_session_event_t *msg)
        vpp_ev_enqueue(evinfo);
     }
 
-    set_reply_status(0);
-
     SAIVPP_DEBUG("BFD udp session event, multihop: %d, sw_if_index: %d, "
                  "state: %d ",
                  multihop, htonl(msg->sw_if_index), htonl(msg->state));
