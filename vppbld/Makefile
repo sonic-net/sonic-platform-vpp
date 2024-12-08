@@ -28,10 +28,10 @@ MAIN_TARGET = $(VPPINFRA)
 DERIVED_TARGETS = $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK) \
 				  $(VPP_PLUGIN_DEV) $(VPP_DEV) $(VPPINFRA_DEV) $(VPPDBG)
 
-VPP_DOCKER_DEBS = libnl-3-200_$(LIBNL3_VERSION)_$(CONFIGURED_ARCH).deb \
-                  libnl-3-dev_$(LIBNL3_VERSION)_$(CONFIGURED_ARCH).deb \
-				  libnl-route-3-200_$(LIBNL3_VERSION)_$(CONFIGURED_ARCH).deb \
-				  libnl-route-3-dev_$(LIBNL3_VERSION)_$(CONFIGURED_ARCH).deb
+VPP_DOCKER_DEBS = libnl-3-200_$(LIBNL3_VERSION_SONIC)_$(CONFIGURED_ARCH).deb \
+                  libnl-3-dev_$(LIBNL3_VERSION_SONIC)_$(CONFIGURED_ARCH).deb \
+				  libnl-route-3-200_$(LIBNL3_VERSION_SONIC)_$(CONFIGURED_ARCH).deb \
+				  libnl-route-3-dev_$(LIBNL3_VERSION_SONIC)_$(CONFIGURED_ARCH).deb
 
 VPP_DOCKER_BUILD = docker build --no-cache \
 		    -t vppbld_$(BLDENV):latest \
