@@ -270,6 +270,19 @@ sai_status_t SwitchStateBase::create(
        return bfd_session_add(serializedObjectId, switch_id, attr_count, attr_list);
     }
 
+    if (object_type == SAI_OBJECT_TYPE_LAG )
+    {
+       sai_object_id_t object_id;
+       sai_deserialize_object_id(serializedObjectId, object_id);
+       return createLag(object_id, switch_id, attr_count, attr_list);
+    }
+    if (object_type == SAI_OBJECT_TYPE_LAG_MEMBER)
+    {
+       sai_object_id_t object_id;
+       sai_deserialize_object_id(serializedObjectId, object_id);
+       return createLagMember(object_id, switch_id, attr_count, attr_list);
+    }
+
     return create_internal(object_type, serializedObjectId, switch_id, attr_count, attr_list);
 }
 
@@ -543,6 +556,18 @@ sai_status_t SwitchStateBase::remove(
         sai_object_id_t objectId;
         sai_deserialize_object_id(serializedObjectId, objectId);
         return removeVlanMember(objectId);
+    }
+    else if (object_type == SAI_OBJECT_TYPE_LAG)
+    {
+        sai_object_id_t objectId;
+        sai_deserialize_object_id(serializedObjectId, objectId);
+        return removeLag(objectId);
+    }
+    else if (object_type == SAI_OBJECT_TYPE_LAG_MEMBER)
+    {
+        sai_object_id_t objectId;
+        sai_deserialize_object_id(serializedObjectId, objectId);
+        return removeLagMember(objectId);
     }
     else if (object_type == SAI_OBJECT_TYPE_FDB_ENTRY)
     {
