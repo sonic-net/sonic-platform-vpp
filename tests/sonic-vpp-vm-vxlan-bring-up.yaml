@@ -1,0 +1,439 @@
+# Copyright (c) 2024 Cisco and/or its affiliates.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: SONiC Software Data Plane Automation - VM VxLAN Bring up
+  hosts: clusters
+  tasks:
+   - name: Extract SONiC-VPP VM Image
+     shell: | 
+       cd sonic-vpp
+       sudo chown "{{ ansible_user }}" sonic-vpp.img.gz
+       gzip -cd sonic-vpp.img.gz > sonic-vpp.img
+       cp sonic-vpp.img sonic-vpp1.img
+       cp sonic-vpp.img sonic-vpp2.img
+     register: command_result
+     failed_when: command_result.rc != 0
+     tags:
+     - build 
+   - name:  Launch SONiC-VPP VM 1
+     shell: | 
+       cd sonic-vpp
+       sudo qemu-system-x86_64 -name sonic-simulator_1 -m 4096M -cpu host -smp cpus=4 -drive file=./sonic-vpp1.img,index=0,media=disk,id=drive0 -serial telnet:127.0.0.1:5001,server,nowait -monitor tcp:127.0.0.1:44001,server,nowait -device e1000,netdev=net0 -netdev tap,ifname=tap1,id=net0 -device e1000,netdev=net1 -netdev tap,ifname=sonic1-tap1,id=net1 -device e1000,netdev=net2 -netdev tap,ifname=sonic1-tap2,id=net2 -display vnc=:4 -daemonize -enable-kvm -net user,hostfwd=tcp::10021-:22 -net nic
+     register: command_result
+     failed_when: command_result.rc != 0 
+     tags:
+     - build      
+   - name:  Launch SONiC-VPP VM 2
+     shell: | 
+       cd sonic-vpp
+       sudo qemu-system-x86_64 -name sonic-simulator_2 -m 4096M -cpu host -smp cpus=4 -drive file=./sonic-vpp2.img,index=0,media=disk,id=drive0 -serial telnet:127.0.0.1:5002,server,nowait -monitor tcp:127.0.0.1:44002,server,nowait -device e1000,netdev=net0 -netdev tap,ifname=tap2,id=net0 -device e1000,netdev=net1,mac=52:54:00:12:35:58 -netdev tap,ifname=sonic2-tap1,id=net1 -device e1000,netdev=net2,mac=52:54:00:12:35:59 -netdev tap,ifname=sonic2-tap2,id=net2  -display vnc=:5 -daemonize -enable-kvm -net user,hostfwd=tcp::10022-:22 -net nic
+     register: command_result
+     failed_when: command_result.rc != 0 
+     tags:
+     - build      
+   - name: Pause for 2 minutes for SONiC VM to bootup
+     ansible.builtin.pause:
+       minutes: 2
+     tags:
+     - build        
+   - name: Cleanup SSH known hosts
+     shell: | 
+       ssh-keygen -R [localhost]:10021
+       ssh-keygen -R [localhost]:10022
+     ignore_errors: yes
+     tags:
+     - build        
+   - name: Configure SONiC and syncd-vpp VM 1
+     ansible.builtin.shell: |
+       set timeout 400
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
+       expect "password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - build        
+   - name: Configure SONiC and syncd-vpp VM 2
+     ansible.builtin.shell: |
+       set timeout 400
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
+       expect "password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - build        
+   - name: Configure SONiC-VPP data path interfaces VM 1
+     ansible.builtin.shell: |
+       set timeout 30
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
+       expect "password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       send "sudo config interface ip add Ethernet0 {{ sonic_vm1_ethernet0_vxlan }}/24\n"
+       expect "admin@sonic:~$ "
+       send "sudo config interface ip add Ethernet1 {{ sonic_vm1_ethernet1_vxlan }}/24\n"
+       expect "admin@sonic:~$ "
+       send "sudo config interface startup Ethernet0\n"
+       expect "admin@sonic:~$ "
+       send "sudo config interface startup Ethernet1\n"
+       expect "admin@sonic:~$ "
+       send "sudo config save -y\n"
+       expect "admin@sonic:~$ "
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - build        
+   - name: Configure SONiC-VPP data path interfaces VM 2
+     ansible.builtin.shell: |
+       set timeout 30
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
+       expect "password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       send "sudo config interface ip add Ethernet0 {{ sonic_vm2_ethernet0_vxlan }}/24\n"
+       expect "admin@sonic:~$ "
+       send "sudo config interface ip add Ethernet1 {{ sonic_vm2_ethernet1_vxlan }}/24\n"
+       expect "admin@sonic:~$ "
+       send "sudo config interface startup Ethernet0\n"
+       expect "admin@sonic:~$ "
+       send "sudo config interface startup Ethernet1\n"
+       expect "admin@sonic:~$ "
+       send "sudo config save -y\n"
+       expect "admin@sonic:~$ "
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - build          
+   - name: Pause for 2 minutes for routing to settle
+     ansible.builtin.pause:
+       minutes: 2
+     tags:
+     - build        
+   - name: Configure VxLAN Host Interfaces
+     shell: |
+       sudo ip netns add host1
+       sudo ip link set dev sonic1-tap2 netns host1
+       sudo ip netns exec host1 ip link set dev sonic1-tap2 up
+       sudo ip netns exec host1 ip addr add {{ sonic_host_vxlan_t0_tap_1 }}/24 dev sonic1-tap2
+       sudo ip netns exec host1 ip route add 0.0.0.0/0 via {{ sonic_vm1_ethernet1_vxlan }}
+       sudo ip netns add host2
+       sudo ip link set dev sonic2-tap2 netns host2
+       sudo ip netns exec host2 ip link set dev sonic2-tap2 up
+       sudo ip netns exec host2 ip addr add {{ sonic_host_vxlan_t0_tap_2 }}/24 dev sonic2-tap2
+       sudo ip netns exec host2 ip route add 0.0.0.0/0 via {{ sonic_vm2_ethernet1_vxlan }}
+       sudo ip link set dev sonic1-tap1 up
+       sudo ip link set dev sonic2-tap1 up
+       sudo ip addr add {{ sonic_host_vxlan_tap1 }}/24 dev sonic1-tap1
+       sudo ip addr add {{ sonic_host_vxlan_tap2 }}/24 dev sonic2-tap1
+     register: command_result
+     failed_when: command_result.stderr != ''
+     tags:
+     - build 
+   - name: Configure VxLAN routing VM 1
+     ansible.builtin.shell: |
+       set timeout 30
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
+       expect "admin@localhost's password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       send "sudo config route add prefix {{ sonic_host_2_vxlan_prefix }} nexthop {{ sonic_host_vxlan_tap1 }}\n"
+       expect "admin@sonic:~$ "
+       send "sudo config save -y\n"
+       expect "admin@sonic:~$ "
+       send "\n"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - build
+   - name: Configure VxLAN routing VM 2
+     ansible.builtin.shell: |
+       set timeout 30
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
+       expect "admin@localhost's password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       send "sudo config route add prefix {{ sonic_host_1_vxlan_prefix }} nexthop {{ sonic_host_vxlan_tap2 }}\n"
+       expect "admin@sonic:~$ "
+       send "sudo config save -y\n"
+       expect "admin@sonic:~$ "
+       send "\n"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - build
+   - name: Add firewall rules to allow traffic through host
+     shell: |
+       sudo iptables -A FORWARD -i sonic1-tap1 -o sonic2-tap1 -j ACCEPT
+       sudo iptables -A FORWARD -i sonic2-tap1 -o sonic1-tap1 -j ACCEPT
+     register: command_result
+     failed_when: command_result.stderr != ''
+     tags:
+     - build
+   - name: Verify ping to VM Ethernet interfaces
+     shell: |
+       ping -c5 {{ sonic_vm1_ethernet0_vxlan }}
+       ping -c5 {{ sonic_vm2_ethernet0_vxlan }}
+       sudo ip netns exec host1 ping -c5 {{ sonic_vm1_ethernet1_vxlan }}
+       sudo ip netns exec host2 ping -c5 {{ sonic_vm2_ethernet1_vxlan }}
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - build
+   - name: Verify pings from VM1 to Host and VM2
+     ansible.builtin.shell: |
+       set timeout 30
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
+       expect "admin@localhost's password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       send "ping -c5 {{ sonic_host_vxlan_tap2 }}\n"
+       expect "admin@sonic:~$ "
+       send "ping -c5 {{ sonic_host_vxlan_tap1 }}\n"
+       expect "admin@sonic:~$ "
+       send "ping -c5 {{ sonic_vm2_ethernet0_vxlan }}\n"
+       expect "admin@sonic:~$ "
+       send "ping -c5 {{ sonic_host_vxlan_t0_tap_1 }}\n"
+       expect "admin@sonic:~$ "
+       send "\n"
+       exit 0
+     args: 
+       executable: /usr/bin/expect
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - build
+   - name: Verify pings from VM2 to Host and VM1
+     ansible.builtin.shell: |
+       set timeout 30
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
+       expect "admin@localhost's password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       send "ping -c5 {{ sonic_host_vxlan_tap1 }}\n"
+       expect "admin@sonic:~$ "
+       send "ping -c5 {{ sonic_host_vxlan_tap2 }}\n"
+       expect "admin@sonic:~$ "
+       send "ping -c5 {{ sonic_vm1_ethernet0_vxlan }}\n"
+       expect "admin@sonic:~$ "
+       send "ping -c5 {{ sonic_host_vxlan_t0_tap_2 }}\n"
+       expect "admin@sonic:~$ "
+       send "\n"
+       exit 0
+     args: 
+       executable: /usr/bin/expect
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - build
+   - name: Configure SONiC-VPP VNET VxLAN VM 1
+     ansible.builtin.shell: |
+       set timeout 30
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
+       expect "admin@localhost's password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       send "jq '. + {
+         \"VXLAN_TUNNEL\": {
+           \"test\": {
+             \"src_ip\": \"{{ sonic_vm1_ethernet0_vxlan }}\"
+           }
+         },
+         \"VNET\": {
+           \"Vnet1\": {
+             \"peer_list\": \"\",
+             \"scope\": \"default\",
+             \"vni\": \"10000\",
+             \"vxlan_tunnel\": \"test\"
+           }
+         }
+       }' /etc/sonic/config_db.json > temp.json\n"
+       expect "admin@sonic:~$ "
+       send "sudo mv temp.json /etc/sonic/config_db.json\n"
+       expect "admin@sonic:~$ "
+       send "sudo config load -y\n"
+       expect "admin@sonic:~$ "
+       send "\n"
+       exit 0
+     args: 
+       executable: /usr/bin/expect
+     tags:
+     - build  
+   - name: Configure SONiC-VPP VNET VxLAN VM 2
+     ansible.builtin.shell: |
+       set timeout 30
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
+       expect "admin@localhost's password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       send "jq '. + {
+         \"VXLAN_TUNNEL\": {
+           \"test\": {
+             \"src_ip\": \"{{ sonic_vm2_ethernet0_vxlan }}\"
+           }
+         },
+         \"VNET\": {
+           \"Vnet1\": {
+             \"peer_list\": \"\",
+             \"scope\": \"default\",
+             \"vni\": \"10000\",
+             \"vxlan_tunnel\": \"test\"
+           }
+         }
+       }' /etc/sonic/config_db.json > temp.json\n"
+       expect "admin@sonic:~$ "
+       send "sudo mv temp.json /etc/sonic/config_db.json\n"
+       expect "admin@sonic:~$ "
+       send "sudo config load -y\n"
+       expect "admin@sonic:~$ "
+       send "\n"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - build        
+   - name: Create VNET tunnel configuration file for SONiC-VPP VM 1
+     template:
+       src: "/home/cisco/sonic-vpp/vnet_tunnel.json.j2"
+       dest: "/home/cisco/sonic-vpp/vnet_tunnel_vm1.json"
+     vars:
+       sonic_t0_prefix: "{{ sonic_host_2_vxlan_t0_prefix }}"
+       sonic_vm_ethernet: "{{ sonic_vm2_ethernet0_vxlan }}"
+     tags:
+     - build
+   - name: Create VNET tunnel configuration file for SONiC-VPP VM 2
+     template:
+       src: "/home/cisco/sonic-vpp/vnet_tunnel.json.j2"
+       dest: "/home/cisco/sonic-vpp/vnet_tunnel_vm2.json"
+     vars:
+       sonic_t0_prefix: "{{ sonic_host_1_vxlan_t0_prefix }}"
+       sonic_vm_ethernet: "{{ sonic_vm1_ethernet0_vxlan }}"
+     tags:
+     - build
+   - name: Copy VNET tunnel file to SONiC-VPP VM 1
+     ansible.builtin.shell: |
+       set timeout 60
+       spawn sftp -o StrictHostKeyChecking=no -P 10021 admin@localhost
+       expect "admin@localhost's password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "sftp>"
+       send "put /home/cisco/sonic-vpp/vnet_tunnel_vm1.json\n"
+       expect "sftp>"
+       send "\n"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - build
+   - name: Copy VNET tunnel file to SONiC-VPP VM 2
+     ansible.builtin.shell: |
+       set timeout 60
+       spawn sftp -o StrictHostKeyChecking=no -P 10022 admin@localhost
+       expect "admin@localhost's password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "sftp>"
+       send "put /home/cisco/sonic-vpp/vnet_tunnel_vm2.json\n"
+       expect "sftp>"
+       send "\n"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - build
+   - name: Configure VNET Tunnel VM 1
+     ansible.builtin.shell: |
+       set timeout 30
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10021
+       expect "admin@localhost's password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       send "docker exec -i swss swssconfig /dev/stdin < vnet_tunnel_vm1.json\n"
+       expect "admin@sonic:~$ "
+       send "\n"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - build
+   - name: Configure VNET Tunnel VM 2
+     ansible.builtin.shell: |
+       set timeout 30
+       spawn ssh -o StrictHostKeyChecking=no admin@localhost -p 10022
+       expect "admin@localhost's password:"
+       send "{{ sonic_vm_password }}\n"
+       expect "admin@sonic:~$ "
+       send "docker exec -i swss swssconfig /dev/stdin < vnet_tunnel_vm2.json\n"
+       expect "admin@sonic:~$ "
+       send "\n"
+       exit 0
+     args:
+       executable: /usr/bin/expect
+     tags:
+     - build
+   - name: Pause for 1 minutes
+     ansible.builtin.pause:
+       minutes: 1
+     tags:
+     - build
+   - name: Verify VM1 to VM2 VxLAN tunnel
+     shell: |
+       sudo ip netns exec host1 ping -c5 {{ sonic_host_vxlan_t0_tap_2 }}
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - build
+   - name: Verify VM2 to VM1 VxLAN tunnel
+     shell: |
+       sudo ip netns exec host2 ping -c5 {{ sonic_host_vxlan_t0_tap_1 }}
+     register: command_result
+     failed_when: "'0 received' in command_result.stdout"
+     tags:
+     - build
+   - name: Remove firewall rules
+     shell: |
+       sudo iptables -D FORWARD -i sonic1-tap1 -o sonic2-tap1 -j ACCEPT
+       sudo iptables -D FORWARD -i sonic2-tap1 -o sonic1-tap1 -j ACCEPT
+     ignore_errors: yes
+     tags:
+     - tear
+   - name: Clean up VxLAN Host Interfaces
+     shell: |
+       sudo ip netns del host1
+       sudo ip netns del host2
+     ignore_errors: yes
+     tags:
+     - tear         
+   - name: Cleaning up SONiC-VPP VM Instance
+     shell: |
+       sudo pkill -9 -f qemu-system-x86_64
+     register: command_result
+     failed_when: command_result.rc != -9
+     tags:
+     - tear          
+   - name: Removing SONiC-VPP VM Image file
+     shell: |
+       cd sonic-vpp
+       rm sonic-vpp.img sonic-vpp1.img sonic-vpp2.img
+     register: command_result
+     failed_when: command_result.rc != 0 
+     tags:
+     - tear
+     

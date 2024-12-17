@@ -12,17 +12,17 @@
 # limitations under the License.
 
 diff --git a/files/build_templates/sonic_debian_extension.j2 b/files/build_templates/sonic_debian_extension.j2
-index 0dc60b2b6..1ec418964 100644
+index ece833119..6aba38d03 100644
 --- a/files/build_templates/sonic_debian_extension.j2
 +++ b/files/build_templates/sonic_debian_extension.j2
-@@ -881,6 +881,26 @@ sudo LANG=C cp $SCRIPTS_DIR/mgmt-framework.sh $FILESYSTEM_ROOT/usr/local/bin/mgm
- sudo LANG=C cp $SCRIPTS_DIR/asic_status.sh $FILESYSTEM_ROOT/usr/local/bin/asic_status.sh
+@@ -1006,6 +1006,27 @@ sudo LANG=C cp $SCRIPTS_DIR/asic_status.sh $FILESYSTEM_ROOT/usr/local/bin/asic_s
  sudo LANG=C cp $SCRIPTS_DIR/asic_status.py $FILESYSTEM_ROOT/usr/local/bin/asic_status.py
+ sudo LANG=C cp $SCRIPTS_DIR/startup_tsa_tsb.py $FILESYSTEM_ROOT/usr/local/bin/startup_tsa_tsb.py
  
 +{% if sonic_asic_platform == "vpp" %}
 +
 +sudo LANG=C cp $SCRIPTS_DIR/vpp_ports_setup.sh $FILESYSTEM_ROOT/usr/local/bin/vpp_ports_setup.sh
-+sudo LANG=C cp $SCRIPTS_DIR/sonic_vpp_cfg.sh $FILESYSTEM_ROOT/usr/local/bin/sonic_vpp_cfg.sh
++
 +j2 files/build_templates/vppcfg.service.j2 | sudo tee $FILESYSTEM_ROOT_USR_LIB_SYSTEMD_SYSTEM/vppcfg.service
 +sudo LANG=C cp $SCRIPTS_DIR/vppcfg_load.py $FILESYSTEM_ROOT/usr/local/bin/vppcfg_load.py
 +sudo LANG=C chroot $FILESYSTEM_ROOT mkdir -p /etc/sonic/vpp/
@@ -36,8 +36,9 @@ index 0dc60b2b6..1ec418964 100644
 +sudo cp {{vpp_platform_vppcfgd_py3_wheel_path}} $FILESYSTEM_ROOT/$VPP_PLATFORM_VPPCFGD_WHEEL_NAME
 +sudo https_proxy=$https_proxy LANG=C chroot $FILESYSTEM_ROOT pip3 install $VPP_PLATFORM_VPPCFGD_WHEEL_NAME
 +sudo rm -rf $FILESYSTEM_ROOT/$VPP_PLATFORM_VPPCFGD_WHEEL_NAME
-+
++sudo rsync -a platform/{{ sonic_asic_platform }}/files/ $FILESYSTEM_ROOT/
 +{% endif %}
++
 +
  # Copy sonic-netns-exec script
  sudo LANG=C cp $SCRIPTS_DIR/sonic-netns-exec $FILESYSTEM_ROOT/usr/bin/sonic-netns-exec

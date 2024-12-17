@@ -1,0 +1,15 @@
+[Unit]
+Description=VPP Data Port Setup Service
+ConditionPathExists=/usr/bin/vpp_ports_setup.sh
+After=config-setup.service
+Before=syncd.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/vpp_ports_setup.sh start
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

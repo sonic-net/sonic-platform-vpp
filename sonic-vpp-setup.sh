@@ -26,8 +26,9 @@ cd ./build/sonic-buildimage
 
 # Below is the build label information
 
-#384846	20231012.7	master	Azure.sonic-buildimage.official.vs	succeeded	2023-10-12T08:18:39	2023-10-12T12:32:39	be22217b64
-WORKING_LABEL=be22217b64
+# 20240718.7	master	Azure.sonic-buildimage.official.vs	succeeded
+WORKING_LABEL=21f2d3b7
+
 
 SONIC_CHECKOUT_LABEL=${SONIC_CHECKOUT_LABEL:=$WORKING_LABEL}
 
@@ -66,7 +67,6 @@ git apply $MKRULES_PATH/files/build_templates/sonic_debian_extension.j2.patch
 cp $MKRULES_PATH/files/sai.profile ./src/sonic-device-data/src/sai.vs_profile
 
 # Copy the sonic-vpp configuration scripts
-cp $MKRULES_PATH/files/scripts/sonic_vpp_cfg.sh ./files/scripts/sonic_vpp_cfg.sh
 cp $MKRULES_PATH/files/scripts/vpp_ports_setup.sh ./files/scripts/vpp_ports_setup.sh
 
 # Setup the swss docker file template to ignore the vpp sysctl during installation
@@ -81,9 +81,6 @@ cp $MKRULES_PATH/rules/vpp.dep  ./rules/vpp.dep
 cp $MKRULES_PATH/rules/vppcfgd.mk ./rules/
 cp $MKRULES_PATH/rules/vppcfgd.dep  ./rules/
 
-#Configure.ac explicitly uses LIBSAIVS. Use LIBSAIVPP instead.
-cp $SONIC_SAIREDIS/configure.ac.vpp ./src/sonic-sairedis/configure.ac
-
 #Replace the saivs debian package config/scripts with vpp ones
 mv ./src/sonic-sairedis/debian ./src/sonic-sairedis/debian-vs
 cp -r $SONIC_SAIREDIS/debian ./src/sonic-sairedis/debian
@@ -92,13 +89,7 @@ cp -r $SONIC_SAIREDIS/debian ./src/sonic-sairedis/debian
 cp $SONIC_SAIREDIS/syncd/scripts/syncd_init_common.sh ./src/sonic-sairedis/syncd/scripts/syncd_init_common.sh
 
 # Add saivpp lib instead of saivs
-cp $SONIC_SAIREDIS/saidiscovery/Makefile.am ./src/sonic-sairedis/saidiscovery/Makefile.am
-cp $SONIC_SAIREDIS/syncd/Makefile.am ./src/sonic-sairedis/syncd/Makefile.am
-cp $SONIC_SAIREDIS/saisdkdump/Makefile.am ./src/sonic-sairedis/saisdkdump/Makefile.am
-cp $SONIC_SAIREDIS/tests/Makefile.am ./src/sonic-sairedis/tests/Makefile.am
-cp $SONIC_SAIREDIS/unittest/Makefile.am ./src/sonic-sairedis/unittest/Makefile.am
-cp $SONIC_SAIREDIS/unittest/vslib/Makefile.am ./src/sonic-sairedis/unittest/vslib/Makefile.am
-cp $SONIC_SAIREDIS/pyext/py3/Makefile.am ./src/sonic-sairedis/pyext/py3/Makefile.am
+pushd . ; cd ./src/sonic-sairedis; git apply $SONIC_SAIREDIS/Makefile.patch; git apply $SONIC_SAIREDIS/configure.ac.patch; popd
 
 # Linking error with saivpp. Disable mock_tests for swss for now. Fix it later
 # Also fix the fpmsync to configure routes in APPL_DB from the default routing table.

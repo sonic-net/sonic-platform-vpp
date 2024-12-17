@@ -1,0 +1,169 @@
+diff --git a/saidiscovery/Makefile.am b/saidiscovery/Makefile.am
+index 3e2515fa..2bc3141b 100644
+--- a/saidiscovery/Makefile.am
++++ b/saidiscovery/Makefile.am
+@@ -2,8 +2,8 @@ AM_CXXFLAGS = $(SAIINC) -I$(top_srcdir)/meta -I$(top_srcdir)/lib
+ 
+ bin_PROGRAMS = saidiscovery
+ 
+-if SAIVS
+-SAILIB=-L$(top_srcdir)/vslib/.libs -lsaivs
++if SAIVPP
++SAILIB=-L$(top_srcdir)/vpplib/.libs -lsaivpp
+ else
+ SAILIB=-lsai
+ endif
+@@ -13,4 +13,4 @@ saidiscovery_SOURCES = saidiscovery.cpp
+ saidiscovery_CPPFLAGS = $(CODE_COVERAGE_CPPFLAGS)
+ saidiscovery_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) $(CODE_COVERAGE_CXXFLAGS)
+ saidiscovery_LDADD = -lhiredis -lswsscommon $(top_srcdir)/syncd/libSyncd.a $(SAILIB) -lpthread \
+-					 -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta -lzmq $(CODE_COVERAGE_LIBS) $(EXTRA_LIBSAI_LDFLAGS)
++					 -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta -lzmq $(CODE_COVERAGE_LIBS)
+diff --git a/saisdkdump/Makefile.am b/saisdkdump/Makefile.am
+index 07618ad8..020ffa33 100644
+--- a/saisdkdump/Makefile.am
++++ b/saisdkdump/Makefile.am
+@@ -2,8 +2,8 @@ AM_CXXFLAGS = $(SAIINC)
+ 
+ bin_PROGRAMS = saisdkdump
+ 
+-if SAIVS
+-SAILIB=-L$(top_srcdir)/vslib/.libs -lsaivs
++if SAIVPP
++SAILIB=-L$(top_srcdir)/vpplib/.libs -lsaivpp
+ else
+ SAILIB=-lsai
+ endif
+@@ -11,4 +11,4 @@ endif
+ saisdkdump_SOURCES = saisdkdump.cpp
+ saisdkdump_CPPFLAGS = $(CODE_COVERAGE_CPPFLAGS)
+ saisdkdump_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) $(CODE_COVERAGE_CXXFLAGS)
+-saisdkdump_LDADD = -lhiredis -lswsscommon $(SAILIB) -lpthread -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta -lzmq $(CODE_COVERAGE_LIBS) $(EXTRA_LIBSAI_LDFLAGS)
++saisdkdump_LDADD = -lhiredis -lswsscommon $(SAILIB) -lpthread -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta -lzmq $(CODE_COVERAGE_LIBS)
+diff --git a/syncd/Makefile.am b/syncd/Makefile.am
+index 3c546fb7..2276ecf6 100644
+--- a/syncd/Makefile.am
++++ b/syncd/Makefile.am
+@@ -1,18 +1,14 @@
+-SUBDIRS = . tests
+-
+ AM_CXXFLAGS = $(SAIINC) -I$(top_srcdir)/lib -I$(top_srcdir)/vslib
+ 
+-if SAIVS
+-SAILIB=-L$(top_srcdir)/vslib/.libs -lsaivs
++if SAIVPP
++SAILIB=-L$(top_srcdir)/vpplib/.libs -lsaivpp
+ else
+ SAILIB=-lsai
+ endif
+ 
+ bin_PROGRAMS = syncd syncd_request_shutdown syncd_tests
+ 
+-lib_LTLIBRARIES = libMdioIpcClient.la
+-
+-noinst_LIBRARIES = libSyncd.a libSyncdRequestShutdown.a libMdioIpcClient.a
++noinst_LIBRARIES = libSyncd.a libSyncdRequestShutdown.a
+ 
+ libSyncd_a_SOURCES = \
+ 				AsicOperation.cpp \
+@@ -64,12 +60,11 @@ libSyncd_a_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) $(CODE_COVER
+ syncd_SOURCES = main.cpp
+ if ASAN_ENABLED
+ syncd_SOURCES += Asan.cpp
+-libSyncd_a_CXXFLAGS += -DASAN_ENABLED
+ endif
+ syncd_CPPFLAGS = $(CODE_COVERAGE_CPPFLAGS)
+ syncd_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) $(CODE_COVERAGE_CXXFLAGS) $(CFLAGS_ASAN)
+ syncd_LDADD = libSyncd.a $(top_srcdir)/lib/libSaiRedis.a -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta \
+-			  -ldl -lhiredis -lswsscommon $(SAILIB) -lpthread -lzmq $(CODE_COVERAGE_LIBS) $(EXTRA_LIBSAI_LDFLAGS)
++			  -ldl -lhiredis -lswsscommon $(SAILIB) -lpthread -lzmq $(CODE_COVERAGE_LIBS)
+ syncd_LDFLAGS = $(LDFLAGS_ASAN) -rdynamic
+ 
+ if SAITHRIFT
+@@ -95,17 +90,6 @@ syncd_request_shutdown_CPPFLAGS = $(CODE_COVERAGE_CPPFLAGS)
+ syncd_request_shutdown_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) $(CODE_COVERAGE_CXXFLAGS)
+ syncd_request_shutdown_LDADD = libSyncdRequestShutdown.a $(top_srcdir)/lib/libSaiRedis.a -lhiredis -lswsscommon -lpthread $(CODE_COVERAGE_LIBS)
+ 
+-libMdioIpcClient_a_SOURCES = MdioIpcClient.cpp
+-
+-libMdioIpcClient_la_SOURCES = MdioIpcClient.cpp
+-
+-libMdioIpcClient_a_CPPFLAGS = $(CODE_COVERAGE_CPPFLAGS) -Wno-format-truncation
+-libMdioIpcClient_a_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) $(CODE_COVERAGE_CXXFLAGS)
+-
+-libMdioIpcClient_la_CPPFLAGS = $(CODE_COVERAGE_CPPFLAGS) -Wno-format-truncation
+-libMdioIpcClient_la_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) $(CODE_COVERAGE_CXXFLAGS)
+-libMdioIpcClient_la_LIBADD = -lswsscommon $(CODE_COVERAGE_LIBS)
+-
+ syncd_tests_SOURCES = tests.cpp
+ syncd_tests_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON)
+ syncd_tests_LDFLAGS = -Wl,-rpath,$(top_srcdir)/lib/.libs -Wl,-rpath,$(top_srcdir)/meta/.libs
+@@ -113,15 +97,3 @@ syncd_tests_LDADD = libSyncd.a -lhiredis -lswsscommon -lpthread -L$(top_srcdir)/
+ 			  -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta -lzmq $(CODE_COVERAGE_LIBS)
+ 
+ TESTS = syncd_tests
+-
+-if SAIVS
+-if DASHSAI
+-bin_PROGRAMS += syncd_dash
+-syncd_dash_SOURCES = $(syncd_SOURCES)
+-syncd_dash_CPPFLAGS = $(syncd_CPPFLAGS)
+-syncd_dash_CXXFLAGS = $(syncd_CXXFLAGS)
+-syncd_dash_LDADD = libSyncd.a $(top_srcdir)/lib/libSaiRedis.a -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta \
+-			  -ldl -lhiredis -lswsscommon -lsai -lprotobuf -lpiprotobuf -lpiprotogrpc -lgrpc++ -lpthread -lzmq $(CODE_COVERAGE_LIBS) $(EXTRA_LIBSAI_LDFLAGS)
+-syncd_dash_LDFLAGS = $(syncd_LDFLAGS)
+-endif
+-endif
+diff --git a/tests/Makefile.am b/tests/Makefile.am
+index b86eb095..f82961a2 100644
+--- a/tests/Makefile.am
++++ b/tests/Makefile.am
+@@ -1,8 +1,8 @@
+-AM_CXXFLAGS = $(SAIINC) -I$(top_srcdir)/lib -I$(top_srcdir)/vslib
++AM_CXXFLAGS = $(SAIINC) -I$(top_srcdir)/lib -I$(top_srcdir)/vpplib
+ 
+-bin_PROGRAMS = vssyncd tests testclient testdash_gtest
++bin_PROGRAMS = vssyncd tests testclient
+ 
+-SAILIB=-L$(top_srcdir)/vslib/.libs -lsaivs
++SAILIB=-L$(top_srcdir)/vpplib/.libs -lsaivpp
+ 
+ vssyncd_SOURCES = main.cpp
+ vssyncd_CPPFLAGS = $(CODE_COVERAGE_CPPFLAGS)
+diff --git a/unittest/Makefile.am b/unittest/Makefile.am
+index 8cd9711f..0539e25f 100644
+--- a/unittest/Makefile.am
++++ b/unittest/Makefile.am
+@@ -1 +1 @@
+-SUBDIRS = meta lib vslib syncd proxylib
++SUBDIRS = meta lib
+diff --git a/unittest/vslib/Makefile.am b/unittest/vslib/Makefile.am
+index 092bcf04..b9930a68 100644
+--- a/unittest/vslib/Makefile.am
++++ b/unittest/vslib/Makefile.am
+@@ -1,4 +1,4 @@
+-AM_CXXFLAGS = $(SAIINC) -I$(top_srcdir)/meta -I$(top_srcdir)/vslib -I$(top_srcdir)/lib -I/usr/include/libnl3
++AM_CXXFLAGS = $(SAIINC) -I$(top_srcdir)/meta -I$(top_srcdir)/vpplib -I$(top_srcdir)/lib -I/usr/include/libnl3
+ 
+ bin_PROGRAMS = tests
+ 
+@@ -39,17 +39,15 @@ tests_SOURCES = main.cpp \
+ 				TestSwitchContainer.cpp \
+ 				TestSwitch.cpp \
+ 				TestSwitchMLNX2700.cpp \
+-				TestSwitchNvdaMBF2H536C.cpp \
+ 				TestSwitchBCM56850.cpp \
+ 				TestSwitchBCM81724.cpp \
+ 				TestSwitchStateBaseMACsec.cpp \
+ 				TestMACsecManager.cpp \
+ 				TestSwitchStateBase.cpp \
+-				TestSai.cpp \
+-				TestVirtualSwitchSaiInterface.cpp
++				TestSai.cpp
+ 
+ tests_CXXFLAGS = $(DBGFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS_COMMON) -fno-access-control
+-tests_LDADD = $(LDADD_GTEST) $(top_srcdir)/vslib/libSaiVS.a -lhiredis -lswsscommon -lnl-genl-3 -lnl-nf-3 -lnl-route-3 -lnl-3 \
++tests_LDADD = $(LDADD_GTEST) $(top_srcdir)/vpplib/libSaiVPP.a -lhiredis -lswsscommon -lnl-genl-3 -lnl-nf-3 -lnl-route-3 -lnl-3 \
+ 			  -lpthread -L$(top_srcdir)/meta/.libs -lsaimetadata -lsaimeta -lzmq $(CODE_COVERAGE_LIBS)
+ 
+ TESTS = tests

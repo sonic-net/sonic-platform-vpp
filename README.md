@@ -1,7 +1,7 @@
 # Description
 SONiC-VPP is a platform under SONIC that supports VPP data plane. For more details about VPP see [What is VPP](https://s3-docs.fd.io/vpp/23.06/) 
 
-This repo contains  scripts, Makefiles, configuration file, Docker files etc to build a SONIC-VPP image. It also pulls some extra git repos and makes these repos part of SONiC build. In this process it will prompt for user/password while cloning. There are some VPP platform specific Makefile, config files which are applied to the sonic-buildimage repo to fecilitate the successful build of the SONiC-VPP image.
+This repo contains  scripts, Makefiles, configuration file, Docker files etc to build a SONIC-VPP image. It also pulls some extra git repos and makes these repos part of SONiC build. In this process it will prompt for user/password while cloning. There are some VPP platform specific Makefile, config files which are applied to the sonic-buildimage repo to facilitate the successful build of the SONiC-VPP image.
 
 > Note: The first build takes good amount of time. The SONiC image build has two parts to it, [backend and frontend](https://github.com/sonic-net/sonic-buildimage/blob/master/README.buildsystem.md). The backend consumes a lot of time when the build is done first time. The follow on builds only do the frontend.
 
@@ -28,49 +28,13 @@ There are two types of sonic-vpp image build targets supported
 
 ## Building a single container image
 
-Issue the command shown below. It will pull the required repos, setup the vpp platform, configure and then initiate the image build.
-
-```
-make sonic
-```
-
-Note- If your internet access is only through a proxy, set the http_proxy and issue the command as suggested below
-```
-http_proxy=http_proxy_url https_proxy=https_proxy_url no_proxy=localhost,127.0.0.1,<other_hosts_or_ipaddresses> make sonic
-```
-
-To use a different label for SONiC build
-```
-SONIC_CHECKOUT_LABEL=sonic_git_commit_label make sonic
-```
-To build a debug container image run below command
-```
-INSTALL_DEBUG_TOOLS=y make sonic
-```
-
-> Note: Refer the instructions above on how to pass proxy if internet access is only though proxy
-
-The ./build directory contains all the repos pulled. The ./build/sonic-buildimage/target directory contains the
-sonic vpp targets.
-
-In case of a build failure just run below command. There is no need to do rest of targets in the Makefile.
-```
-make sonic_build
-```
-
-If internet access is only through a proxy use below command
-```
-http_proxy=http_proxy_url http_proxy=https_proxy_url no_proxy=localhost,127.0.0.1,other_hosts_or_ipaddresses make sonic
-```
-
-To use a different label for SONiC build
-```
-SONIC_CHECKOUT_LABEL=sonic_git_commit_label make sonic_build
-```
-
-> Note : The nightly build labels can be found [*here*](https://sonic-build.azurewebsites.net/ui/sonic/pipelines/142/builds?branchName=master)
-
-The built image can be found at `./build/sonic-buildimage/target/docker-sonic-vpp.gz`.
+1. git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git
+2. git submodule add https://github.com/sonic-net/sonic-platform-vpp.git platform/vpp
+3. Apply the diff in https://github.com/sonic-net/sonic-sairedis/pull/1424 if the PR hasn't been merged.
+4. make init
+5. make configure PLATFORM=vpp
+6. NOBULLSEYE=1 NOBUSTER=1 make SONIC_BUILD_JOBS=4 target/docker-sonic-vpp.gz
+Note: this is not tested and could be broken, which will be fixed later. In the meantime, use branch prior-to-build-change for single container image build.
 
 ### Testing the single container image
 
@@ -78,18 +42,13 @@ Refer to the [Getting started](docs/README.getting-started.md) document in docs 
 
 
 ## Building a KVM VM image 
-Run below make command (in case of proxy use the proxy parameters as mentioned above in the "make sonic" build)
-```
-make sonic_vm
-```
-
-To build a debug VM image image run below command
-```
-INSTALL_DEBUG_TOOLS=y make sonic_vm
-```
-
-The built vm image can be found at `build/sonic-buildimage/target/sonic-vpp.img.gz`.
-
+1. git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git
+2. git submodule add https://github.com/sonic-net/sonic-platform-vpp.git platform/vpp
+3. Apply the diff in https://github.com/sonic-net/sonic-sairedis/pull/1424 if the PR hasn't been merged.
+4. make init
+5. make configure PLATFORM=vpp
+6. NOBULLSEYE=1 NOBUSTER=1 make SONIC_BUILD_JOBS=4 target/sonic-vpp.img.gz
+Note: the first 3 steps are needed until the PR to upstream sonic is merged. 
 ### Testing the qemu VM image
 
 Refer to the [document](docs/README.sonic_vm.md) in docs directory for details. 

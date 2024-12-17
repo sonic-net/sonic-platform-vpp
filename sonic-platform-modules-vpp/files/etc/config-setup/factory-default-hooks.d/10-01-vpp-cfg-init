@@ -1,0 +1,163 @@
+#!/bin/bash
+
+# Copyright (c) 2023-2024 Cisco and/or its affiliates.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -e
+
+PRIV=$(id -u)
+if [ $PRIV -ne 0 ]; then
+    echo "Run this script as root"
+    error "operation not permitted"
+fi
+
+PLATFORM=`sonic-cfggen -H -v DEVICE_METADATA.localhost.platform`
+PRESET=(`head -n 1 /usr/share/sonic/device/$PLATFORM/default_sku`)
+HW_KEY=${PRESET[0]}
+DEFAULT_PRESET=${PRESET[1]}
+VPP_ROOT_CFG=/etc/sonic/vpp
+VPP_ENV_FILE=$VPP_ROOT_CFG/syncd_vpp_env
+VPP_HWSKU="$PLATFORM/$HW_KEY"
+SONIC_VPP_IFMAP=/usr/share/sonic/device/$VPP_HWSKU/sonic_vpp_ifmap.ini
+PORT_CONFIG_INI=/usr/share/sonic/device/$VPP_HWSKU/port_config.ini
+SONIC_CFG_FILE=/etc/sonic/config_db.json
+MAX_PORTS=32
+DRY_RUN=n
+LANES=${LANES:=4}
+portlist=()
+
+function error()
+{
+    echo "Error: $*" 1>&2
+    exit 255
+}
+
+function setup_ports_list()
+{
+    NETPORTS=
+    for i in $(seq 1 $MAX_PORTS); do
+        port="eth$i"
+	    if eval ip link show type veth dev $port | grep "$port" >& /dev/null; then
+		    PORTS_BUS="${PORTS_BUS}${SEP}${port}"
+	    else 
+		    PCI_ID=$(ethtool -i $port | grep bus-info | awk '{ print $2}')
+            if [ "$PCI_ID" == "" ]; then
+                break
+            fi
+            PORTS_BUS="${PORTS_BUS}${SEP}${PCI_ID}"
+            DPDK_DISABLE="n"
+	    fi
+        NETPORTS=${NETPORTS}${SEP}${port}
+        portlist+=( $port ) 
+	    SEP=","
+    done
+    # create syncd_vpp_env
+    echo > $VPP_ENV_FILE
+    echo "DPDK_DISABLE=$DPDK_DISABLE" >> $VPP_ENV_FILE
+    echo "VPP_DPDK_PORTS=$PORTS_BUS" >> $VPP_ENV_FILE
+    echo "SONIC_NUM_PORTS=${#portlist[@]}" >> $VPP_ENV_FILE
+    echo "VPP_PORT_LIST=$NETPORTS" >> $VPP_ENV_FILE
+
+    NO_LINUX_NL=${NO_LINUX_NL:="y"}
+    echo "NO_LINUX_NL=$NO_LINUX_NL" >> $VPP_ENV_FILE
+
+    if [ "$VPP_CONF_DB" == "y" ]; then
+        echo "VPP_CONF_DB=y" >> $VPP_ENV_FILE
+    fi
+
+    if [ "x$PERPORT_BUF" != "x" ]; then
+        echo "PERPORT_BUF=$PERPORT_BUF" >> $VPP_ENV_FILE
+    fi
+
+    if [ "x$SONIC_VPP_SWITCH" != "x" ]; then
+        echo "SONIC_VPP_SWITCH=$SONIC_VPP_SWITCH" >> $VPP_ENV_FILE
+    fi    
+}
+
+function create_if_mapping()
+{
+    IFS=","
+    read -a portlist <<< "$1"
+    unset IFS
+
+    PATH=$PATH:/usr/sbin
+    DPDK_IFNAME="bobm"
+
+    cp /dev/null $SONIC_VPP_IFMAP
+
+    local IDX=0
+    local DPDK_IDX=0
+    for port in ${portlist[@]};
+    do
+	if eval ip link show type veth dev $port >& /dev/null; then
+	    port_name="host-$port"
+	else
+	    port_name="$DPDK_IFNAME$DPDK_IDX"
+	    DPDK_IDX=$((DPDK_IDX + 1))
+	fi
+	echo "Ethernet$((IDX * LANES)) $port_name" >> $SONIC_VPP_IFMAP
+	IDX=$((IDX + 1))
+    done
+}
+
+function create_config_db()
+{
+    TMPCFG1=$(mktemp)
+    # trim non-existent ports from port_config.ini
+    NUM_INTFS=${#portlist[@]}
+    head -n $((NUM_INTFS+1)) $PORT_CONFIG_INI > $TMPCFG1
+    cp $TMPCFG1 $PORT_CONFIG_INI
+
+    # generate config_db.json from port_config.ini
+    if [ "${HW_KEY}" != "" ]; then
+        sonic-cfggen -H -k ${HW_KEY} --preset ${DEFAULT_PRESET} > $TMPCFG1
+    else
+        error "missing HW_KEY in /usr/share/sonic/device/$PLATFORM/default_sku"
+    fi
+
+    jq 'del(.INTERFACE)|del(.LOOPBACK_INTERFACE)|del(.DEVICE_NEIGHBOR)|del(.BGP_NEIGHBOR)' $TMPCFG1 > $SONIC_CFG_FILE
+    rm -f $TMPCFG1
+}
+
+while true
+do
+    case "$1" in
+        "-d")
+            shift 1
+            DRY_RUN=y
+            VPP_ENV_FILE=/dev/stdout
+            SONIC_CFG_FILE=/dev/stdout
+            SONIC_VPP_IFMAP=/dev/stdout
+            ;;
+
+        *)
+            break
+            ;;
+    esac
+done      
+
+mkdir -p $VPP_ROOT_CFG
+
+# setup port list based on the available interfaces up to MAX_PORTS
+setup_ports_list
+
+create_config_db
+
+# creating vpp to sonic interface mapping file"
+create_if_mapping $PORTS_BUS
+
+
+
+
+
+

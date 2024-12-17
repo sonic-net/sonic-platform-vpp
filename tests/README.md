@@ -52,20 +52,26 @@ Perform following steps to deploy and validate SONiC VPP docker image.
 ## SONiC VPP VM image Deployment and Validation
 
 Perform following steps to deploy and validate SONiC VPP VM image.
-1. Downalod SONiC-VPP VM image ("sonic-vpp.img.gz") and script "sonic_vpp_cfg.sh" to VM in directory "/home/\<user-name\>/sonic-vpp". Script "sonic_vpp_cfg.sh" is available at https://github.com/sonic-net/sonic-platform-vpp/blob/main/platform/mkrules/files/scripts/sonic_vpp_cfg.sh
+1. Downalod SONiC-VPP VM image ("sonic-vpp.img.gz")
 
 2. Clone repository https://github.com/sonic-net/sonic-platform-vpp 
    ```
     git clone https://github.com/sonic-net/sonic-platform-vpp 
    ```
-   Repository contains python script validate-sonic-vpp-vm-routing.py and playbook:
+   Repository contains python script validate-sonic-vpp-vm-routing.py, validate-sonic-vpp-vm-vxlan-routing.py, and playbooks:
 
     sonic-vpp-vm-bring-up.yaml:  Bring/tear up/down SONiC-VPP VM, set up validation topology and perform ping test. 
+    sonic-vpp-vm-vxlan-bring-up.yaml:  Bring/tear up/down SONiC-VPP VM, set up validation topology and VxLAN tunnels and perform ping test.
     
    
 3. From 'sonic-platform-vpp/tests' directory, run python script validate-sonic-vpp-vm-routing.py using following arguments to deploy and validate image for multi-hop topology with BGP routing:
    ```
     python validate-sonic-vpp-vm-routing.py --host <VM IP Address> --username <SSH Username> --password <SSH User Password>
+   ```
+
+4. From 'sonic-platform-vpp/tests' directory, run python script validate-sonic-vpp-vm-vxlan-routing.py using following arguments to deploy and validate VxLAN encap and decap for multi-hop topology:
+   ```
+    python validate-sonic-vpp-vm-vxlan-routing.py --host <VM IP Address> --username <SSH Username> --password <SSH User Password>
    ```
 > Note : 
   * Python script can be executed on your local machine (i.e Mac) or directly on VM (Where SONIC-VPP VM is being deployed for validation). On your Ubuntu VM, need to enable Hardware virtualization on ESXi host running Ubuntu VM. On ESXI host, Edit the VM configuration in the VMware, select CPU section. You will see “Expose hardware assisted virtualization to the guest OS” , press the tick box and save the configuration. Reboot you VM. 
