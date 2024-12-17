@@ -94,7 +94,7 @@ However, the linux-cp plugin does not currently support LACP packets. We will ne
 
 As an experiment, I  added a new node to the plugin (fashioned after lip_punt_node) that can punt and inject packets (between host and phy), then registered it with ethernet-input to handle ETHERNET_TYPE_SLOW_PROTOCOLS packets. This resulted in the injected SONiC LACP packets successfully forwarded and then punted to the peer SONiC device, allowing the PortChannel to come up and the LACP protocol to run successfully.
 
-Also note that that the lacp plugin should not be enabled, nor should we configure the BondEthernet in lacp mode to ensure VPP does not run its own LACP protocol. Instead, we configure the BondEthernet in xor mode so that we can use the loadbalancing algorithms (L2L3 or L3L4).
+Also note that that the lacp plugin should not be enabled, nor should we configure the BondEthernet in lacp mode to ensure VPP does not run its own LACP protocol. Instead, we configure the BondEthernet in `VPP_BOND_API_MODE_XOR` so that we can use the loadbalancing algorithms (`VPP_BOND_API_LB_ALGO_L23` or `VPP_BOND_API_LB_ALGO_L34`).
 
 ### Next
 - Productize the VPP linux-cp change to support LACP packets, socialize it with the VPP community and upstream it
@@ -106,11 +106,11 @@ Also note that that the lacp plugin should not be enabled, nor should we configu
 Currently, adding an ip address to a PortChannel is not supported.
 This is the SAI update we get for applying an address:
 
-`2024-11-27.22:47:22.421304|c|SAI_OBJECT_TYPE_ROUTE_ENTRY:{"dest":"10.0.1.1/32","switch_id":"oid:0x21000000000000","vr":"oid:0x3000000000022"}|SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION=SAI_PACKET_ACTION_FORWARD|SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID=oid:0x1000000000001`
+    2024-11-27.22:47:22.421304|c|SAI_OBJECT_TYPE_ROUTE_ENTRY:{"dest":"10.0.1.1/32","switch_id":"oid:0x21000000000000","vr":"oid:0x3000000000022"}|SAI_ROUTE_ENTRY_ATTR_PACKET_ACTION=SAI_PACKET_ACTION_FORWARD|SAI_ROUTE_ENTRY_ATTR_NEXT_HOP_ID=oid:0x1000000000001
 
-The SONiC-VPP SAI code which handles this call uses the `ip` command's output to derive the interface to which this address belongs as there is no indication of the interface in the SAI update (we get the CPU port id, which is common for all). For a PortChannel, we can derive the PortChannelX name in the same way, but we won't know the VPP BondEthernetY associated with it (X and Y are not equal). Furthermore, when the LAG is created, we don't get any attributes, ie. we don't even get the PortChannelX name. This presents a challenge in applying the IP address based on the current design.
+The SONiC-VPP SAI code which handles this call (`vpp_add_del_intf_ip_addr_norif`) uses the `ip` command's output to derive the interface to which this address belongs as there is no indication of the interface in the SAI update (we get the CPU port id, which is common for all). For a PortChannel, we can derive the PortChannelX name in the same way, but we won't know the VPP BondEthernetY associated with it so that we can configure the IP in VPP (X and Y are not equal). When the LAG is created, we don't get any attributes with the SAI call, ie. we don't even get the PortChannelX name. This presents a challenge in applying the IP address based on the current design.
 
-As part of my experiment, I added code to detect which PortChannelX we are dealing with during LAG create (also using the `ip` command, by scanning for the newly added PortChannel in the output). I then make sure the BondEthernet is created with the same bond_id (ie. set X=Y). This way, we can easily derive the BondEthernet in question from the PortChannel when applying the IP address to VPP.
+As part of my experiment, I added code to detect which PortChannelX we are dealing with during LAG create (also using the `ip` command, by scanning for the newly added PortChannel in the output). I then make sure the BondEthernet is created with the same bond_id (ie. set X=Y). This way, we can easily derive the BondEthernet in question from the PortChannel when applying the IP address to VPP in `vpp_add_del_intf_ip_addr_norif`.
 
 ### Ping
 
@@ -124,7 +124,16 @@ As such, we need to call `configure_lcp_pair` for the BondEthernet interface to 
 
 To resolve (1), we defer calling `configure_lcp_pair` until the first member is added, and then delete the pair when the LAG itself is deleted
 
-Addressing (2) is a little more complicated. The solution that worked is to use the Traffic Control (tc) utility in the syncd container to create a filter and mirror packets from the tap interface to the PortChannel. This resolves the ARP entry and ping. However, we notice the ping packets are duplicated in this case, so we can limit the filter to only mirror ARP and ND packets. Altnerative solutions/suggestions are welcome.
+Addressing (2) is a little more complicated. The solution that worked is to use the Traffic Control (tc) utility in the syncd container to create a filter and mirror packets from the tap interface to the PortChannel. This resolves the ARP entry and ping. However, we notice the ping packets are duplicated in this case, so we can limit the filter to only mirror ARP and ND packets.
+
+```
+tc qdisc add dev <bond-tap-interface> ingress
+tc filter add dev <bond-tap-interface> parent ffff: \
+   protocol arp prio 2 u32 \
+   match u32 0 0 flowid 1:1 \
+   action mirred ingress mirror dev <port-channel-interface>
+```
+
 
 ### Next
 - Experiment with tc filtering to nail down select traffic mirroring or explore alternative designs.
