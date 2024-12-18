@@ -29,9 +29,9 @@ There are two types of sonic-vpp image build targets supported
 ## Building a single container image
 
 1. git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git
-4. make init
-5. make configure PLATFORM=vpp
-6. NOBULLSEYE=1 NOBUSTER=1 make SONIC_BUILD_JOBS=4 target/docker-sonic-vpp.gz
+2. make init
+3. make configure PLATFORM=vpp
+4. NOBULLSEYE=1 NOBUSTER=1 make SONIC_BUILD_JOBS=4 target/docker-sonic-vpp.gz
 Note: this is not tested and could be broken, which will be fixed later. In the meantime, use branch prior-to-build-change for single container image build.
 
 ### Testing the single container image
@@ -41,9 +41,9 @@ Refer to the [Getting started](docs/README.getting-started.md) document in docs 
 
 ## Building a KVM VM image 
 1. git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git
-4. make init
-5. make configure PLATFORM=vpp
-6. NOBULLSEYE=1 NOBUSTER=1 make SONIC_BUILD_JOBS=4 target/sonic-vpp.img.gz
+2. make init
+3. make configure PLATFORM=vpp
+4. NOBULLSEYE=1 NOBUSTER=1 make SONIC_BUILD_JOBS=4 target/sonic-vpp.img.gz
 ### Testing the qemu VM image
 
 Refer to the [document](docs/README.sonic_vm.md) in docs directory for details. 
