@@ -109,8 +109,37 @@ namespace saivpp
         /**
          * @brief Set VxLAN port.
          */
-        void set_vxlan_port(const sai_attribute_t* attr);     
+        void set_vxlan_port(const sai_attribute_t* attr);
 
+    private:
+        SwitchStateBase* m_switch_db;
+        std::array<uint8_t, 6> m_router_mac;
+        u_int16_t m_vxlan_port;
+        //nexthop SAI object ID to sw_if_index map
+        std::unordered_map<sai_object_id_t, TunnelVPPData> m_tunnel_encap_nexthop_map;
+
+        sai_status_t tunnel_encap_nexthop_action(
+                        _In_ const SaiObject* tunnel_nh_obj,
+                        _In_ Action action);
+
+        sai_status_t create_vpp_vxlan_encap(
+                        _In_  vpp_vxlan_tunnel_t& req,
+                        _Out_ TunnelVPPData& tunnel_data);
+
+        sai_status_t remove_vpp_vxlan_encap(
+                        _In_  vpp_vxlan_tunnel_t& req,
+                        _In_ TunnelVPPData& tunnel_data);
+
+        sai_status_t create_vpp_vxlan_decap(
+                        _Out_ TunnelVPPData& tunnel_data);
+
+        sai_status_t remove_vpp_vxlan_decap(
+                        _In_ TunnelVPPData& tunnel_data);
+    };
+
+    class TunnelManagerSRv6 {
+    public:
+        TunnelManagerSRv6(SwitchStateBase* switch_db);
         /**
          * @brief Creates a new MySID (Segment Identifier) entry.
          *
@@ -187,33 +216,11 @@ namespace saivpp
 
     private:
         SwitchStateBase* m_switch_db;
-        std::array<uint8_t, 6> m_router_mac;
-        u_int16_t m_vxlan_port;
-        //nexthop SAI object ID to sw_if_index map
-        std::unordered_map<sai_object_id_t, TunnelVPPData> m_tunnel_encap_nexthop_map;
         // Sid list obj id to bsid map
         std::map<sai_object_id_t, vpp_ip_addr_t> m_bsid_map;
         // Mysid behavior map
         std::map<std::string, uint32_t> m_behavior_map;
 
-        sai_status_t tunnel_encap_nexthop_action(
-                        _In_ const SaiObject* tunnel_nh_obj, 
-                        _In_ Action action);
-
-        sai_status_t create_vpp_vxlan_encap(
-                        _In_  vpp_vxlan_tunnel_t& req,
-                        _Out_ TunnelVPPData& tunnel_data);
-
-        sai_status_t remove_vpp_vxlan_encap(
-                        _In_  vpp_vxlan_tunnel_t& req,            
-                        _In_ TunnelVPPData& tunnel_data);
-
-        sai_status_t create_vpp_vxlan_decap(
-                        _Out_ TunnelVPPData& tunnel_data);
-
-        sai_status_t remove_vpp_vxlan_decap(
-                        _In_ TunnelVPPData& tunnel_data);
-        
         sai_status_t add_remove_my_sid_entry(
                         _In_ const std::string &serializedObjectId,
                         _In_ uint32_t attr_count,
@@ -232,7 +239,7 @@ namespace saivpp
                         _Out_ uint32_t &vlan_idx,
                         _Out_ char (&if_name)[64]);
 
-        sai_status_t add_sidlist(
+        sai_status_t create_sidlist_internal(
                         _In_ const std::string &serializedObjectId,
                         _In_ uint32_t attr_count,
                         _In_ const sai_attribute_t *attr_list);
@@ -246,7 +253,7 @@ namespace saivpp
         void generate_bsid(
                         _In_ sai_object_id_t sid_list_oid);
 
-        sai_status_t del_sidlist(
+        sai_status_t remove_sidlist_internal(
                         _In_ const std::string &serializedObjectId);
         
         sai_status_t sr_steer_add_remove(
@@ -263,5 +270,4 @@ namespace saivpp
                         _In_ sai_object_id_t nexthop_oid,
                         _Out_ vpp_ip_addr_t &bsid);
     };
-
 }

@@ -1323,10 +1323,12 @@ namespace saivpp
             std::shared_ptr<RealObjectIdManager> m_realObjectIdManager;
             
             friend class TunnelManager;
+            friend class TunnelManagerSRv6;
 
         private:
             SaiObjectDB m_object_db;
             TunnelManager m_tunnel_mgr;
+            TunnelManagerSRv6 m_tunnel_mgr_srv6;
         
     };
 }

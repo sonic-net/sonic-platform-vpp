@@ -3297,7 +3297,7 @@ static int vpp_bfd_udp_enable_multihop ()
     return ret;
 }
 
-static u8 translate_behavior(u32 behavior) 
+static u8 translate_sr_behavior(u32 behavior)
 {
     switch(behavior) {
         case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_E:
@@ -3353,7 +3353,7 @@ int vpp_my_sid_entry_add_del (vpp_my_sid_entry_t *my_sid, bool is_del)
         return -EINVAL;
     }
 
-    u8 behavior = translate_behavior(my_sid->behavior);
+    u8 behavior = translate_sr_behavior(my_sid->behavior);
     if (behavior == SR_BEHAVIOR_API_LAST && !is_del) {
         SAIVPP_ERROR("Unsupported behavior %u in local sid", behavior);
         VPP_UNLOCK();
@@ -3385,7 +3385,7 @@ int vpp_my_sid_entry_add_del (vpp_my_sid_entry_t *my_sid, bool is_del)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -3434,7 +3434,7 @@ int vpp_sidlist_add(vpp_sidlist_t *sidlist)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -3464,7 +3464,7 @@ int vpp_sidlist_del(vpp_ip_addr_t *bsid)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -3509,7 +3509,7 @@ int  vpp_sr_steer_add_del(vpp_sr_steer_t *sr_steer, bool is_del)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -3538,7 +3538,7 @@ int vpp_sr_set_encap_source(vpp_ip_addr_t *encap_src)
     
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
