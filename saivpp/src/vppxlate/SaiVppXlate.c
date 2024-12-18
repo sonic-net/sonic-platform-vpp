@@ -1126,7 +1126,7 @@ static void vpp_base_vpe_init(void)
     _(BOND_MSG_ID(BOND_CREATE_REPLY), bond_create_reply) \
     _(BOND_MSG_ID(BOND_DELETE_REPLY), bond_delete_reply) \
     _(BOND_MSG_ID(BOND_ADD_MEMBER_REPLY), bond_add_member_reply) \
-    _(BOND_MSG_ID(BOND_DETACH_MEMBER_REPLY), bond_detach_member_reply)
+    _(BOND_MSG_ID(BOND_DETACH_MEMBER_REPLY), bond_detach_member_reply) \
     _(L2_MSG_ID(L2FIB_ADD_DEL_REPLY), l2fib_add_del_reply) \
     _(L2_MSG_ID(L2FIB_FLUSH_ALL_REPLY), l2fib_flush_all_reply) \
     _(L2_MSG_ID(L2FIB_FLUSH_INT_REPLY), l2fib_flush_int_reply) \
