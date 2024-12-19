@@ -227,6 +227,24 @@ typedef enum {
     VPP_BD_FLAG_ARP_UFWD = 32,
 } vpp_bd_flags_t;
 
+typedef enum {
+  VPP_BOND_API_MODE_ROUND_ROBIN = 1,
+  VPP_BOND_API_MODE_ACTIVE_BACKUP = 2,
+  VPP_BOND_API_MODE_XOR = 3,
+  VPP_BOND_API_MODE_BROADCAST = 4,
+  VPP_BOND_API_MODE_LACP = 5,
+}  vpp_bond_mode;
+
+
+typedef enum {
+  VPP_BOND_API_LB_ALGO_L2 = 0,
+  VPP_BOND_API_LB_ALGO_L34 = 1,
+  VPP_BOND_API_LB_ALGO_L23 = 2,
+  VPP_BOND_API_LB_ALGO_RR = 3,
+  VPP_BOND_API_LB_ALGO_BC = 4,
+  VPP_BOND_API_LB_ALGO_AB = 5,
+}  vpp_bond_lb_algo;
+
     typedef struct  _vpp_vxlan_tunnel {
         vpp_ip_addr_t src_address;
         vpp_ip_addr_t dst_address;
@@ -257,6 +275,7 @@ typedef enum {
     extern int hw_interface_set_mtu(const char *hwif_name, uint32_t mtu);
     extern int sw_interface_set_mtu(const char *hwif_name, uint32_t mtu, int type);
     extern int sw_interface_set_mac(const char *hwif_name, uint8_t *mac_address);
+    extern int sw_interface_ip6_enable_disable(const char *hwif_name, bool enable);
     extern int ip_vrf_add(uint32_t vrf_id, const char *vrf_name, bool is_ipv6);
     extern int ip_vrf_del(uint32_t vrf_id, const char *vrf_name, bool is_ipv6);
 
@@ -287,6 +306,11 @@ typedef enum {
     extern int create_bvi_interface(uint8_t *mac_address, uint32_t instance);
     extern int delete_bvi_interface(const char *hwif_name);
     extern int set_bridge_domain_flags(uint32_t bd_id, vpp_bd_flags_t flag, bool enable);
+    extern int create_bond_interface(uint32_t bond_id, uint32_t mode, uint32_t lb, uint32_t *swif_idx);
+    extern int delete_bond_interface(const char *hwif_name);
+    extern int create_bond_member(uint32_t bond_sw_if_index, const char *hwif_name, bool is_passive, bool is_long_timeout);
+    extern int delete_bond_member(const char * hwif_name);
+    extern const char * vpp_get_swif_name(const uint32_t swif_idx);
     extern int l2fib_add_del(const char *hwif_name, const uint8_t *mac, uint32_t bd_id, bool is_add, bool is_static_mac);
     extern int l2fib_flush_all();
     extern int l2fib_flush_int(const char *hwif_name);

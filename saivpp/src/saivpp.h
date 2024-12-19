@@ -19,8 +19,8 @@ extern "C" {
 #include "sai.h"
 }
 
-#define SAI_KEY_VPP_SWITCH_TYPE              "SAI_VPP_SWITCH_TYPE"
-#define SAI_KEY_VPP_SAI_SWITCH_TYPE          "SAI_VPP_SAI_SWITCH_TYPE"
+#define SAI_KEY_VPP_SWITCH_TYPE              "SAI_VS_SWITCH_TYPE"
+#define SAI_KEY_VPP_SAI_SWITCH_TYPE          "SAI_VS_SAI_SWITCH_TYPE"
 
 #define SAI_VALUE_SAI_SWITCH_TYPE_NPU       "SAI_SWITCH_TYPE_NPU"
 #define SAI_VALUE_SAI_SWITCH_TYPE_PHY       "SAI_SWITCH_TYPE_PHY"
@@ -36,7 +36,7 @@ extern "C" {
  *
  * TODO must support hardware info for multiple switches
  */
-#define SAI_KEY_VPP_INTERFACE_LANE_MAP_FILE  "SAI_VPP_INTERFACE_LANE_MAP_FILE"
+#define SAI_KEY_VPP_INTERFACE_LANE_MAP_FILE  "SAI_VS_INTERFACE_LANE_MAP_FILE"
 
 /**
  * @def SAI_KEY_VPP_RESOURCE_LIMITER_FILE
@@ -46,7 +46,7 @@ extern "C" {
  * Example:
  * SAI_OBJECT_TYPE_ACL_TABLE=3
  */
-#define SAI_KEY_VPP_RESOURCE_LIMITER_FILE    "SAI_VPP_RESOURCE_LIMITER_FILE"
+#define SAI_KEY_VPP_RESOURCE_LIMITER_FILE    "SAI_VS_RESOURCE_LIMITER_FILE"
 
 /**
  * @def SAI_KEY_VPP_INTERFACE_FABRIC_LANE_MAP_FILE
@@ -58,7 +58,7 @@ extern "C" {
  * fabric1:2
  *
  */
-#define SAI_KEY_VPP_INTERFACE_FABRIC_LANE_MAP_FILE  "SAI_VPP_INTERFACE_FABRIC_LANE_MAP_FILE"
+#define SAI_KEY_VPP_INTERFACE_FABRIC_LANE_MAP_FILE  "SAI_VS_INTERFACE_FABRIC_LANE_MAP_FILE"
 
 /**
  * @def SAI_KEY_VPP_HOSTIF_USE_TAP_DEVICE
@@ -69,7 +69,7 @@ extern "C" {
  *
  * By default this flag is set to false.
  */
-#define SAI_KEY_VPP_HOSTIF_USE_TAP_DEVICE      "SAI_VPP_HOSTIF_USE_TAP_DEVICE"
+#define SAI_KEY_VPP_HOSTIF_USE_TAP_DEVICE      "SAI_VS_HOSTIF_USE_TAP_DEVICE"
 
 /**
  * @def SAI_KEY_VPP_CORE_PORT_INDEX_MAP_FILE
@@ -82,7 +82,7 @@ extern "C" {
  * eth17:1,1
  *
  */
-#define SAI_KEY_VPP_CORE_PORT_INDEX_MAP_FILE  "SAI_VPP_CORE_PORT_INDEX_MAP_FILE"
+#define SAI_KEY_VPP_CORE_PORT_INDEX_MAP_FILE  "SAI_VS_CORE_PORT_INDEX_MAP_FILE"
 
 /**
  * @brief Context config.
@@ -91,7 +91,7 @@ extern "C" {
  * contexts (syncd) we have in the system globally and each context how many
  * switches it manages. Only one of this contexts will be used in VS.
  */
-#define SAI_KEY_VPP_CONTEXT_CONFIG             "SAI_VPP_CONTEXT_CONFIG"
+#define SAI_KEY_VPP_CONTEXT_CONFIG             "SAI_VS_CONTEXT_CONFIG"
 
 /**
  * @brief Global context.
@@ -99,12 +99,12 @@ extern "C" {
  * Optional. Should point to GUID value which is provided in context_config.json
  * by SAI_KEY_VPP_CONTEXT_CONFIG. Default is 0.
  */
-#define SAI_KEY_VPP_GLOBAL_CONTEXT             "SAI_VPP_GLOBAL_CONTEXT"
+#define SAI_KEY_VPP_GLOBAL_CONTEXT             "SAI_VS_GLOBAL_CONTEXT"
 
-#define SAI_VALUE_VPP_SWITCH_TYPE_BCM56850     "SAI_VPP_SWITCH_TYPE_BCM56850"
-#define SAI_VALUE_VPP_SWITCH_TYPE_BCM56971B0   "SAI_VPP_SWITCH_TYPE_BCM56971B0"
-#define SAI_VALUE_VPP_SWITCH_TYPE_BCM81724     "SAI_VPP_SWITCH_TYPE_BCM81724"
-#define SAI_VALUE_VPP_SWITCH_TYPE_MLNX2700     "SAI_VPP_SWITCH_TYPE_MLNX2700"
+#define SAI_VALUE_VPP_SWITCH_TYPE_BCM56850     "SAI_VS_SWITCH_TYPE_BCM56850"
+#define SAI_VALUE_VPP_SWITCH_TYPE_BCM56971B0   "SAI_VS_SWITCH_TYPE_BCM56971B0"
+#define SAI_VALUE_VPP_SWITCH_TYPE_BCM81724     "SAI_VS_SWITCH_TYPE_BCM81724"
+#define SAI_VALUE_VPP_SWITCH_TYPE_MLNX2700     "SAI_VS_SWITCH_TYPE_MLNX2700"
 
 /*
  * Values for SAI_KEY_BOOT_TYPE (defined in saiswitch.h)
