@@ -97,7 +97,7 @@ As an experiment, I  added a new node to the plugin (fashioned after lip_punt_no
 Also note that that the lacp plugin should not be enabled, nor should we configure the BondEthernet in lacp mode to ensure VPP does not run its own LACP protocol. Instead, we configure the BondEthernet in `VPP_BOND_API_MODE_XOR` so that we can use the loadbalancing algorithms (`VPP_BOND_API_LB_ALGO_L23` or `VPP_BOND_API_LB_ALGO_L34`).
 
 ### Next
-- Productize the VPP linux-cp change to support LACP packets, socialize it with the VPP community and upstream it
+- Productize the VPP linux-cp change to support LACP packets, socialize it with the VPP community and upstream it --> WIP, see VPP Review: https://gerrit.fd.io/r/c/vpp/+/42124
 
 <a id="item-7"></a>
 ## LAG L3 Support
