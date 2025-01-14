@@ -13,7 +13,7 @@ Rev v0.2
 5. [LAG and Bridging](#item-5)
 6. [LACP Support](#item-6)
 7. [LAG L3 Support](#item-7)
-8. [TODOs](#item-8)
+8. [Status](#item-8)
 
 <br/>
 <br/>
@@ -150,7 +150,7 @@ Add IP to PortChannel | Coded solution using `ip` command to detect newly added 
 Ping between PortChannels | Coded solution using `tc` utility to mirror ARP/ND traffic between tap and Sonic intf | <li>Address duplicate packets if continuing with `tc` solution</li><li>Explore alternative design using common punt port (Potentially larger project)</li><li>Productize</ul>
 PortChannel Subinterfaces | Identified changes required to provision PortChannel subintf in VPP and apply IP | <li>Ping fails</li><li>Code/Productize solution</li>
 Testing | Simple Bring-up and Ping of PortChannel with 2 members | <li>Add/remove members, v4/v6/subif/multiple-members/mutiple-portchannel/full lifecycle tests</li><li>Any sonic-mgmt tests?</li>
-Address Bugs | | <li>Occasional PortCannel configuration failure when all configs copy/pasted at once</li><li>orchagent crash when running tcpdump on PortChannel</li>
+Bug Fixing | | <li>Occasional PortCannel configuration failure when all configs copy/pasted at once</li><li>orchagent crash when running tcpdump on PortChannel</li>
 Hashing algo selection | Coded using XOR & L2L3 | (Optional, from review comments) Ability to switchover between L2L3 and L3L4 depending on presence of IP?
 
 
