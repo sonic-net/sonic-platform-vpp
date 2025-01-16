@@ -148,6 +148,7 @@ Item | Done | Remaining
 LACP punt/inject support in VPP | Coded and submitted for review in VPP https://gerrit.fd.io/r/c/vpp/+/42124 | <li>Complete review and commit</li><li>(Optional) Change trigger to API</li>
 Add IP to PortChannel | Coded solution using `ip` command to detect newly added PortChannel and create BondEthernet with same id | Productize solution
 Ping between PortChannels | Coded solution using `tc` utility to mirror ARP/ND traffic between tap and Sonic intf | <li>Address duplicate packets if continuing with `tc` solution</li><li>Explore alternative design using common punt port (Potentially larger project)</li><li>Productize</ul>
+Port Channel config | Works with sudo config with delay. | Fix bug when all applied at once... Ensure json works |
 PortChannel Subinterfaces | Identified changes required to provision PortChannel subintf in VPP and apply IP | <li>Ping fails</li><li>Code/Productize solution</li>
 Punt/Inject | | Verify and fix Non-ARP/ping punt/inject path
 Testing | Simple Bring-up and Ping of PortChannel with 2 members | <li>Add/remove members, v4/v6/subif/multiple-members/mutiple-portchannel/full lifecycle tests</li><li>Any sonic-mgmt tests?</li>
