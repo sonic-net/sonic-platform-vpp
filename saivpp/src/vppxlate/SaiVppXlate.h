@@ -163,16 +163,16 @@ extern "C" {
         vpp_ip_addr_t encap_src;
     } vpp_sidlist_t;
 
-    typedef struct vpp_sr_steer_prefix_ {
+    typedef struct vpp_prefix_ {
         vpp_ip_addr_t address;
         uint8_t prefix_len;
-    } vpp_sr_steer_prefix_t;
+    } vpp_prefix_t;
 
     typedef struct vpp_sr_steer_ {
         bool is_del;
         vpp_ip_addr_t bsid;
         uint32_t fib_table;
-        vpp_sr_steer_prefix_t prefix;
+        vpp_prefix_t prefix;
     } vpp_sr_steer_t;
 
     typedef struct vpp_event_info_ {

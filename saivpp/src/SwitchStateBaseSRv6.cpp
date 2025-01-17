@@ -98,14 +98,14 @@ sai_status_t TunnelManagerSRv6::fill_next_hop(
 }
 
 sai_status_t TunnelManagerSRv6::fill_my_sid_entry(
-        _In_ const std::string &serial_id,
-        _In_ uint32_t attr_count,
-        _In_ const sai_attribute_t *attr_list,
+        _In_ const SaiObject* my_sid_obj,
         _Out_ vpp_my_sid_entry_t &my_sid)
 {
     sai_status_t    status = SAI_STATUS_SUCCESS;
+    sai_attribute_t attr;
     sai_my_sid_entry_t my_sid_entry;
-    sai_deserialize_my_sid_entry(serial_id, my_sid_entry);
+
+    sai_deserialize_my_sid_entry(my_sid_obj->get_id(), my_sid_entry);
 
     struct sockaddr_in6 *sin6 =  &my_sid.localsid.addr.ip6;
     my_sid.localsid.sa_family = AF_INET6;
@@ -119,68 +119,50 @@ sai_status_t TunnelManagerSRv6::fill_my_sid_entry(
         my_sid.fib_table = vrf->m_vrf_id;
     }
 
-    for(uint32_t i = 0; i<attr_count; i++) {
-        switch(attr_list[i].id) {
-            case SAI_MY_SID_ENTRY_ATTR_NEXT_HOP_ID:
-                status = fill_next_hop(attr_list[i].value.oid, my_sid.nh_addr,
-                                       my_sid.vlan_index, my_sid.hwif_name);
-                break;
-            case SAI_MY_SID_ENTRY_ATTR_ENDPOINT_BEHAVIOR:
-                m_behavior_map[serial_id] = (uint32_t) attr_list[i].value.u32;
-                break;
-            case SAI_MY_SID_ENTRY_ATTR_ENDPOINT_BEHAVIOR_FLAVOR:
-                my_sid.end_psp = false;
-                if(attr_list[i].value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP ||
-                   attr_list[i].value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP_AND_USP ||
-                   attr_list[i].value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP_AND_USD ||
-                   attr_list[i].value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP_AND_USP_AND_USD) {
-                    my_sid.end_psp = true;
-                }
-                break;
-            case SAI_MY_SID_ENTRY_ATTR_VRF:
-                break;
-            default:
-                SWSS_LOG_ERROR("Unsupported attribute: %u", attr_list[i].id);
-                status = SAI_STATUS_FAILURE;
-                break;
-        }
+    attr.id = SAI_MY_SID_ENTRY_ATTR_ENDPOINT_BEHAVIOR;
+    CHECK_STATUS_W_MSG(my_sid_obj->get_attr(attr), "Could not get behavior.");
+    my_sid.behavior = (uint32_t) attr.value.u32;
 
-        if(status != SAI_STATUS_SUCCESS) {
-            break;
-        }
+    attr.id = SAI_MY_SID_ENTRY_ATTR_ENDPOINT_BEHAVIOR_FLAVOR;
+    CHECK_STATUS_W_MSG(my_sid_obj->get_attr(attr), "Could not get endpoint behavior flavor.");
+    if(attr.value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP ||
+       attr.value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP_AND_USP ||
+       attr.value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP_AND_USD ||
+       attr.value.u32 == SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_FLAVOR_PSP_AND_USP_AND_USD) {
+        my_sid.end_psp = true;
+    } else {
+        my_sid.end_psp = false;
     }
 
-    if(status == SAI_STATUS_SUCCESS) {
-        auto it = m_behavior_map.find(serial_id);
-        if (it != m_behavior_map.end()) {
-            my_sid.behavior = it->second;
-        }
+    attr.id = SAI_MY_SID_ENTRY_ATTR_NEXT_HOP_ID;
+    if(my_sid_obj->get_attr(attr) == SAI_STATUS_SUCCESS) {
+        status = fill_next_hop(attr.value.oid, my_sid.nh_addr,
+                           my_sid.vlan_index, my_sid.hwif_name);
     }
 
     return status;
 }
 
 sai_status_t TunnelManagerSRv6::add_remove_my_sid_entry(
-        _In_ const std::string &serializedObjectId,
-        _In_ uint32_t attr_count,
-        _In_ const sai_attribute_t *attr_list,
+        _In_ const SaiObject* my_sid_obj,
         _In_ bool is_del)
 {
     sai_status_t          status = SAI_STATUS_SUCCESS;
     vpp_my_sid_entry_t    my_sid;
+    SaiObject            *obj;
     memset(&my_sid, 0, sizeof(my_sid));
 
-    status = fill_my_sid_entry(serializedObjectId, attr_count, attr_list, my_sid);
+    status = fill_my_sid_entry(my_sid_obj, my_sid);
     if(status != SAI_STATUS_SUCCESS) {
         SWSS_LOG_ERROR("Failed to fill fields for my_sid entry %s, status %d",
-                        serializedObjectId.c_str(), status);
+                        my_sid_obj->get_id().c_str(), status);
         return SAI_STATUS_FAILURE;
     }
 
     status = vpp_my_sid_entry_add_del(&my_sid, is_del);
     if(status != SAI_STATUS_SUCCESS) {
         SWSS_LOG_ERROR("Failed to add/remove my_sid entry %s, status %d",
-                        serializedObjectId.c_str(), status);
+                        my_sid_obj->get_id().c_str(), status);
         status = SAI_STATUS_FAILURE;
     }
 
@@ -197,7 +179,8 @@ sai_status_t TunnelManagerSRv6::create_my_sid_entry(
 
     SWSS_LOG_ENTER();
     
-    status = add_remove_my_sid_entry(serializedObjectId, attr_count, attr_list, false);
+    SaiCachedObject my_sid_obj(m_switch_db, SAI_OBJECT_TYPE_MY_SID_ENTRY, serializedObjectId, attr_count, attr_list);
+    status = add_remove_my_sid_entry(&my_sid_obj, false);
 
     if(status == SAI_STATUS_SUCCESS) {
         CHECK_STATUS(m_switch_db->create_internal(SAI_OBJECT_TYPE_MY_SID_ENTRY, serializedObjectId, switch_id, attr_count, attr_list));
@@ -215,13 +198,10 @@ sai_status_t TunnelManagerSRv6::remove_my_sid_entry(
 
     SWSS_LOG_ENTER();
 
-    status = add_remove_my_sid_entry(serializedObjectId, 0, NULL, true);
+    SaiDBObject my_sid_obj(m_switch_db, SAI_OBJECT_TYPE_MY_SID_ENTRY, serializedObjectId);
+    status = add_remove_my_sid_entry(&my_sid_obj, true);
     
     if(status == SAI_STATUS_SUCCESS) {
-        auto it = m_behavior_map.find(serializedObjectId);
-        if (it != m_behavior_map.end()) {
-            m_behavior_map.erase(it);
-        }
         CHECK_STATUS(m_switch_db->remove_internal(SAI_OBJECT_TYPE_MY_SID_ENTRY, serializedObjectId));
     }
 
@@ -297,8 +277,7 @@ sai_status_t TunnelManagerSRv6::fill_sidlist(
                 }
                 break;
             default:
-                SWSS_LOG_ERROR("Unsupported attribute: %u", attr_list[i].id);
-                status = SAI_STATUS_FAILURE;
+                SWSS_LOG_WARN("Unsupported attribute: %u", attr_list[i].id);
                 break;
         }
 
@@ -427,6 +406,7 @@ sai_status_t TunnelManagerSRv6::fill_bsid_set_src_addr(
     {
         vpp_ip_addr_t encap_src;
         sai_ip_address_t_to_vpp_ip_addr_t(attr.value.ipaddr, encap_src);
+        // Per sr-steer encap address not supported, encap address will be applied to all.
         status = vpp_sr_set_encap_source(&encap_src);
         if(status != SAI_STATUS_SUCCESS) {
             SWSS_LOG_ERROR("Could not set encap source.");

@@ -218,19 +218,13 @@ namespace saivpp
         SwitchStateBase* m_switch_db;
         // Sid list obj id to bsid map
         std::map<sai_object_id_t, vpp_ip_addr_t> m_bsid_map;
-        // Mysid behavior map
-        std::map<std::string, uint32_t> m_behavior_map;
 
         sai_status_t add_remove_my_sid_entry(
-                        _In_ const std::string &serializedObjectId,
-                        _In_ uint32_t attr_count,
-                        _In_ const sai_attribute_t *attr_list,
+                        _In_ const SaiObject* my_sid_obj,
                         _In_ bool is_del);
         
         sai_status_t fill_my_sid_entry(
-                        _In_ const std::string &serial_id,
-                        _In_ uint32_t attr_count,
-                        _In_ const sai_attribute_t *attr_list,
+                        _In_ const SaiObject* my_sid_obj,
                         _Out_ vpp_my_sid_entry_t &my_sid);
         
         sai_status_t fill_next_hop(
