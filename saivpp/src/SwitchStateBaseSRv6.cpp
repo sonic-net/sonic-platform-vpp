@@ -228,7 +228,7 @@ static sai_status_t fill_segment_list(
     return status;
 }
 
-void TunnelManagerSRv6::generate_bsid(
+vpp_ip_addr_t TunnelManagerSRv6::generate_bsid(
         _In_ sai_object_id_t sid_list_oid) 
 {
     vpp_ip_addr_t bsid;
@@ -244,7 +244,7 @@ void TunnelManagerSRv6::generate_bsid(
         bsid.addr.ip6.sin6_addr.s6_addr[15-i] = (uint8_t)(sid_list_oid>>(8*i)) & 0xFF;
     }
 
-    m_bsid_map[sid_list_oid] = bsid;
+    return bsid;
 }
 
 sai_status_t TunnelManagerSRv6::fill_sidlist(
@@ -258,7 +258,7 @@ sai_status_t TunnelManagerSRv6::fill_sidlist(
     sai_deserialize_object_id(sidlist_id, object_id);
 
     generate_bsid(object_id);
-    sidlist.bsid = m_bsid_map[object_id];
+    sidlist.bsid = generate_bsid(object_id);
     sidlist.weight = (uint32_t) ~0;         // Use default weight
     sidlist.type = 0;                       // Use SR_API_POLICY_TYPE_DEFAULT
     sidlist.fib_table = (uint32_t) ~0;      // Use default fib table
@@ -342,19 +342,14 @@ sai_status_t TunnelManagerSRv6::remove_sidlist_internal(
     sai_object_id_t object_id;
 
     sai_deserialize_object_id(serializedObjectId, object_id);
-    auto it = m_bsid_map.find(object_id);
-    if (it == m_bsid_map.end()) {
-        return status;
-    }
 
-    status = vpp_sidlist_del(&it->second);
+    auto bsid = generate_bsid(object_id);
+    status = vpp_sidlist_del(&bsid);
     if(status != SAI_STATUS_SUCCESS) {
         SWSS_LOG_ERROR("Failed to delete sidlist %s, status %d",
                         serializedObjectId.c_str(), status);
         return SAI_STATUS_FAILURE;
     }
-
-    m_bsid_map.erase(it);
 
     return status;
 }
@@ -414,12 +409,7 @@ sai_status_t TunnelManagerSRv6::fill_bsid_set_src_addr(
         }
     }
 
-    auto it = m_bsid_map.find(sr_list_oid);
-    if (it == m_bsid_map.end()) {
-        SWSS_LOG_ERROR("Policy does not exists, oid: %u", sr_list_oid);
-        return SAI_STATUS_FAILURE;
-    }
-    bsid = it->second;
+    bsid = generate_bsid(sr_list_oid);
 
     return status;
 }

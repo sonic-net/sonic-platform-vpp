@@ -216,8 +216,6 @@ namespace saivpp
 
     private:
         SwitchStateBase* m_switch_db;
-        // Sid list obj id to bsid map
-        std::map<sai_object_id_t, vpp_ip_addr_t> m_bsid_map;
 
         sai_status_t add_remove_my_sid_entry(
                         _In_ const SaiObject* my_sid_obj,
@@ -244,7 +242,7 @@ namespace saivpp
                         _In_ const sai_attribute_t *attr_list,
                         _Out_ vpp_sidlist_t &sidlist);
 
-        void generate_bsid(
+        vpp_ip_addr_t generate_bsid(
                         _In_ sai_object_id_t sid_list_oid);
 
         sai_status_t remove_sidlist_internal(
