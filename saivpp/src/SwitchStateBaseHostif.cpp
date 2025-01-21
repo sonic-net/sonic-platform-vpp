@@ -765,6 +765,16 @@ sai_status_t SwitchStateBase::vpp_create_hostif_tap_interface(
     }
     SWSS_LOG_INFO("Successfully set mac to %s for %s", sai_serialize_mac(attr.value.mac).c_str(), name.c_str());
 
+    // enable ipv6, which will set link local address based on mac. ipv4 can be enabled
+    // when ip is configured.
+    err = sw_interface_ip6_enable_disable(hwif_name, true);
+    if (err < 0)
+    {
+        SWSS_LOG_ERROR("failed to enable ipv6 for %s", hwif_name);
+        close(tapfd);
+        return SAI_STATUS_FAILURE;
+    }
+
     setIfNameToPortId(name, obj_id);
     setPortIdToTapName(obj_id, name);
 
