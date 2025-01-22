@@ -36,11 +36,11 @@ function bind_ports_to_uio()
 	    continue
 	fi
 	CUR_DRIVER=$(lspci -k -s $PCI_ID | grep "Kernel driver in use:" | cut -d ':' -f2 | xargs)
-  # Only skip mlx5_core devices as they need their native driver
-  if [ "$CUR_DRIVER" == "mlx5_core" ]; then
-      echo "Skipping device with mlx5_core driver: $pci_dev"
-      continue
-  fi
+	# Only skip mlx5_core devices as they need their native driver
+	if [ "$CUR_DRIVER" == "mlx5_core" ]; then
+			echo "Skipping device with mlx5_core driver: $pci_dev"
+			continue
+	fi
 
 	if [ "$CUR_DRIVER" != "" ] && [ "$CUR_DRIVER" != "$UIO_DRV" ]; then
 	    echo "Un-binding port $port($PCI_ID) from driver $CUR_DRIVER"
