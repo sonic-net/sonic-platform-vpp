@@ -3,9 +3,16 @@
 # Add steps that build, run tests, deploy, and more:
 # https://aka.ms/yaml
 
-trigger: none
-pool:
-  vmImage: ubuntu-20.04
+pr:
+- main
+
+trigger:
+  batch: true
+  branches:
+    include:
+    - main
+
+pool: sonicbld
 
 schedules:
 - cron: "0 8 * * *"
