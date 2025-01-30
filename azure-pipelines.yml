@@ -38,7 +38,10 @@ variables:
     ${{ else }}:
       value: $(Build.SourceBranchName)
   - name: SONIC_BRANCH
-    value: $[eq(variables['BUILD_BRANCH'], 'main') ? 'master' : variables['BUILD_BRANCH']]    
+    ${{ if eq(variables['BUILD_BRANCH'], 'main') }}:
+      value: master
+    ${{ else }}:
+      value: $(BUILD_BRANCH)
 stages:
 - stage: BuildVpp
   
