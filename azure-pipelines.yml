@@ -1,9 +1,4 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
-pr:    
+pr:
 - main
 
 trigger:
@@ -12,48 +7,21 @@ trigger:
     include:
     - main
 
-parameters:
-  - name: debian_version
-    type: string
-    default: bookworm
-  - name: arch
-    type: string
-    default: amd64
-   
-variables:
-  - name: BUILD_BRANCH
-    ${{ if eq(variables['Build.Reason'], 'PullRequest') }}:
-      value: $(System.PullRequest.TargetBranch)
-    ${{ else }}:
-      value: $(Build.SourceBranchName)
-
 stages:
-- stage: BuildVpp
-  
+- stage: Build
   jobs:
-  - job:
-    displayName: amd64
-    timeoutInMinutes: 300
+  - job: build
     pool: sonicbld
-    container:
-      image: sonicdev-microsoft.azurecr.io:443/sonic-slave-${{ parameters.debian_version }}:latest
-      options:  "--privileged"
+    timeoutInMinutes: 360
     steps:
+    - bash: |
+        sudo rm -rf build/sonic-buildimage/fsroot-vpp
     - checkout: self
       clean: true
-    - script: |
+    - bash: |
         set -ex
-        git clone https://github.com/sonic-net/sonic-platform-vpp.git
-        mkdir repo
-        git clone https://gerrit.fd.io/r/vpp repo
-        cp -vr sonic-platform-vpp/vppbld/plugins/* repo/src/packages
-        cd repo
-        git apply ../sonic-platform-vpp/vppbld/vpp.patch
-        make UNATTENDED=y PLATFORM=vpp install-deps install-ext-deps
-        make UNATTENDED=y PLATFORM=vpp -j4 pkg-deb
-        mkdir artifacts
-        mv build-root/*.deb artifacts/
-      displayName: "Build VPP packages from source"
-    - publish: $(System.DefaultWorkingDirectory)/repo/artifacts
-      artifact: vpp
-      displayName: "Archive vpp debian packages"
+        make sonic_vm DEFAULT_CONTAINER_REGISTRY=publicmirror.azurecr.io MIRROR_SNAPSHOT=y SONIC_VERSION_CONTROL_COMPONENTS=all DOCKER_BUILDKIT=0 SONIC_BUILD_RETRY_INTERVAL=600 SONIC_BUILD_RETRY_COUNT=3 ENABLE_DOCKER_BASE_PULL=y
+        cp build/sonic-buildimage/target/docker-sonic-vpp.gz $(Build.ArtifactStagingDirectory)
+        cp build/sonic-buildimage/target/sonic-vpp.img.gz $(Build.ArtifactStagingDirectory)
+    - publish: $(Build.ArtifactStagingDirectory)/
+      artifact: sonic-platform-vpp
