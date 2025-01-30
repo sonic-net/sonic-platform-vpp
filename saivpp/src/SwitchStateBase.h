@@ -179,6 +179,31 @@ namespace saivpp
                     _In_ const sai_attribute_t *attr_list);
             sai_status_t vpp_delete_bvi_interface(
                     _In_ sai_object_id_t bvi_obj_id);
+            sai_status_t createLag(
+                    _In_ sai_object_id_t object_id,
+                    _In_ sai_object_id_t switch_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+            sai_status_t vpp_create_lag(
+                    _In_ sai_object_id_t lag_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+            sai_status_t removeLag(
+                    _In_ sai_object_id_t lag_oid);
+            sai_status_t vpp_remove_lag(
+                    _In_ sai_object_id_t lag_oid);
+	    sai_status_t createLagMember(
+                    _In_ sai_object_id_t object_id,
+                    _In_ sai_object_id_t switch_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+	    sai_status_t vpp_create_lag_member(
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list);
+	    sai_status_t removeLagMember(
+                    _In_ sai_object_id_t lag_member_oid);
+	    sai_status_t vpp_remove_lag_member(
+                    _In_ sai_object_id_t lag_member_oid);
 
             /*FDB Entry and Flush SAI Objects*/
             sai_status_t FdbEntryadd(
@@ -220,25 +245,24 @@ namespace saivpp
         private: // BFD related
             struct vpp_bfd_info_t {
                 //uint32_t sw_if_index;
-                bool multihop;
-                sai_ip_address_t local_addr;
+                bool multihop; sai_ip_address_t local_addr;
                 sai_ip_address_t peer_addr;
-            
+
                 // Define the < operator for comparison
                 bool operator<(const vpp_bfd_info_t& other) const {
-            
+
                     // compare local IP address first
                     int cmp = std::memcmp(&local_addr, &other.local_addr, sizeof(sai_ip_address_t));
                     if (cmp != 0) {
                         return cmp < 0;
                     }
-            
+
                     // compare peer IP address
                     cmp = std::memcmp(&peer_addr, &other.peer_addr, sizeof(sai_ip_address_t));
                     if (cmp != 0) {
                         return cmp < 0;
                     }
-            
+
                     // compare multihop flag
                     return multihop < other.multihop;
                 }
@@ -257,7 +281,7 @@ namespace saivpp
                     _In_ sai_bfd_session_state_t state);
 
             sai_status_t asyncBfdStateUpdate(vpp_bfd_state_notif_t *bfd_notif);
- 
+
         protected:
 
             virtual sai_status_t create_port_dependencies(
@@ -1295,6 +1319,8 @@ namespace saivpp
 	    void populate_if_mapping();
 	    const char *tap_to_hwif_name(const char *name);
             const char *hwif_to_tap_name(const char *name);
+            uint32_t lag_to_bond_if_idx (const sai_object_id_t lag_id);
+            int remove_lag_to_bond_entry (const sai_object_id_t lag_id);
 
             void vppProcessEvents ();
             void startVppEventsThread();
@@ -1306,6 +1332,7 @@ namespace saivpp
             bool m_run_vpp_events_thread = true;
             bool VppEventsThreadStarted = false;
 	    std::shared_ptr<std::thread> m_vpp_thread;
+	    std::map<sai_object_id_t, uint32_t> m_lag_bond_map;
 
         private:
             static int currentMaxInstance;
@@ -1323,10 +1350,12 @@ namespace saivpp
             std::shared_ptr<RealObjectIdManager> m_realObjectIdManager;
             
             friend class TunnelManager;
+            friend class TunnelManagerSRv6;
 
         private:
             SaiObjectDB m_object_db;
             TunnelManager m_tunnel_mgr;
+            TunnelManagerSRv6 m_tunnel_mgr_srv6;
         
     };
 }

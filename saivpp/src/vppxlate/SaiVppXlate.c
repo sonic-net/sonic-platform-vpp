@@ -56,10 +56,17 @@
 #include <vnet/l2/l2.api_enum.h>
 #include <vnet/l2/l2.api_types.h>
 
+#include <vnet/bonding/bond.api_enum.h>
+#include <vnet/bonding/bond.api_types.h>
+
 #include <vpp_plugins/vxlan/vxlan.api_enum.h>
 #include <vpp_plugins/vxlan/vxlan.api_types.h>
+
 #include <vnet/bfd/bfd.api_enum.h>
 #include <vnet/bfd/bfd.api_types.h>
+
+#include <vnet/srv6/sr.api_enum.h>
+#include <vnet/srv6/sr.api_types.h>
 
 /* l2 API inclusion */
 
@@ -125,6 +132,24 @@
 
 #define vl_api_version(n, v) static u32 interface_api_version = v;
 #include <vnet/interface.api.h>
+#undef vl_api_version
+
+/* SRv6 API inclusion */
+
+#define vl_typedefs
+#include <vnet/srv6/sr.api.h>
+#undef vl_typedefs
+
+#define  vl_endianfun
+#include <vnet/srv6/sr.api.h>
+#undef vl_endianfun
+
+#define vl_calcsizefun
+#include <vnet/srv6/sr.api.h>
+#undef vl_calcsizefun
+
+#define vl_api_version(n, v) static u32 sr_api_version = v;
+#include <vnet/srv6/sr.api.h>
 #undef vl_api_version
 
 /* ipv4 API inclusion */
@@ -211,6 +236,29 @@
 
 #define vl_api_version(n, v) static u32 acl_api_version = v;
 #include <vpp_plugins/acl/acl.api.h>
+#undef vl_api_version
+
+/* BOND API inclusion */
+/* BOND API inclusion */
+
+#define vl_typedefs
+#include <vnet/bonding/bond.api.h>
+#undef vl_typedefs
+
+#define  vl_endianfun
+#include <vnet/bonding/bond.api.h>
+#undef vl_endianfun
+
+#define vl_printfun
+#include <vnet/bonding/bond.api.h>
+#undef vl_printfun
+
+#define vl_calcsizefun
+#include <vnet/bonding/bond.api.h>
+#undef vl_calcsizefun
+
+#define vl_api_version(n, v) static u32 bond_api_version = v;
+#include <vnet/bonding/bond.api.h>
 #undef vl_api_version
 
 /* vxlan API inclusion */
@@ -499,6 +547,25 @@ static bool vpp_to_vl_api_ip_addr(vl_api_address_t *vpp_addr, vpp_ip_addr_t *ipa
         struct sockaddr_in6 *ip6 = &(ipaddr->addr.ip6);
         vpp_addr->af = ADDRESS_IP6;
         memcpy(&vpp_addr->un.ip6, &ip6->sin6_addr.s6_addr, sizeof(vpp_addr->un.ip6));
+    }
+    else
+    {
+        return false;
+    }
+    return ret;
+}
+
+static bool vpp_to_vl_api_ip6_address(vl_api_ip6_address_t *vpp_addr, vpp_ip_addr_t *ipaddr)
+{
+    bool ret = true;
+    if (ipaddr->sa_family == AF_INET)
+    {
+        return false;
+    }
+    else if (ipaddr->sa_family == AF_INET6)
+    {
+        struct sockaddr_in6 *ip6 = &(ipaddr->addr.ip6);
+        memcpy(vpp_addr, &ip6->sin6_addr.s6_addr, sizeof(vl_api_ip6_address_t));
     }
     else
     {
@@ -976,6 +1043,95 @@ vl_api_tunterm_acl_interface_add_del_reply_t_handler(vl_api_tunterm_acl_interfac
                  msg->retval);
 }
 
+static void
+vl_api_bond_create_reply_t_handler (vl_api_bond_create_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    if (msg->context) {
+      u32 *swif_idx = (u32 *) get_index_ptr(msg->context);
+      *swif_idx = ntohl(msg->sw_if_index);
+    }
+
+    SAIVPP_WARN("bond add %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+    if (!msg->retval)
+    {
+        uint32_t bond_if_index =  ntohl(msg->sw_if_index);
+        SAIVPP_WARN("created bond if index%d", bond_if_index);
+    }
+    //SAIVPP_ERROR("l2 add del reply handler called %s(%d)",msg->retval ? "failed" : "successful", msg->retval);
+
+}
+
+static void
+vl_api_bond_delete_reply_t_handler (vl_api_bond_delete_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_WARN("bond delete %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_bond_add_member_reply_t_handler (vl_api_bond_add_member_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_WARN("bond add member %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_bond_detach_member_reply_t_handler (vl_api_bond_detach_member_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_WARN("bond detach member %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_sr_localsid_add_del_reply_t_handler(vl_api_sr_localsid_add_del_reply_t *msg) 
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sr local sid add/del %s(%d)",
+                  msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_sr_policy_add_v2_reply_t_handler(vl_api_sr_policy_add_v2_reply_t *msg) 
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sr policy add %s(%d)",
+                  msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_sr_policy_del_reply_t_handler(vl_api_sr_policy_del_reply_t *msg) 
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sr policy del %s(%d)",
+                  msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_sr_steering_add_del_reply_t_handler(vl_api_sr_steering_add_del_reply_t *msg) 
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sr steer add/del %s(%d)",
+                  msg->retval ? "failed" : "successful", msg->retval);
+}
+
+static void
+vl_api_sr_set_encap_source_reply_t_handler(vl_api_sr_set_encap_source_reply_t *msg) 
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_DEBUG("sr set encap source %s(%d)",
+                  msg->retval ? "failed" : "successful", msg->retval);
+}
+
 #define vl_api_get_first_msg_id_reply_t_handler vl_noop_handler
 #define vl_api_get_first_msg_id_reply_t_handler_json vl_noop_handler
 
@@ -989,6 +1145,8 @@ static u16 interface_msg_id_base, memclnt_msg_id_base, __plugin_msg_base;
 static u16 l2_msg_id_base, vxlan_msg_id_base;
 static u16 tunterm_msg_id_base;
 static u16 bfd_msg_id_base;
+static u16 sr_msg_id_base;
+static u16 bond_msg_id_base;
 
 static void vpp_base_vpe_init(void)
 {
@@ -1019,6 +1177,9 @@ static void vpp_base_vpe_init(void)
 #define L2_MSG_ID(id) \
     (VL_API_##id + l2_msg_id_base)
 
+#define BOND_MSG_ID(id) \
+    (VL_API_##id + bond_msg_id_base)
+
 #define BFD_MSG_ID(id) \
     (VL_API_##id + bfd_msg_id_base)
 
@@ -1048,6 +1209,10 @@ static void vpp_base_vpe_init(void)
     _(L2_MSG_ID(BVI_CREATE_REPLY), bvi_create_reply) \
     _(L2_MSG_ID(BVI_DELETE_REPLY), bvi_delete_reply) \
     _(L2_MSG_ID(BRIDGE_FLAGS_REPLY), bridge_flags_reply) \
+    _(BOND_MSG_ID(BOND_CREATE_REPLY), bond_create_reply) \
+    _(BOND_MSG_ID(BOND_DELETE_REPLY), bond_delete_reply) \
+    _(BOND_MSG_ID(BOND_ADD_MEMBER_REPLY), bond_add_member_reply) \
+    _(BOND_MSG_ID(BOND_DETACH_MEMBER_REPLY), bond_detach_member_reply) \
     _(L2_MSG_ID(L2FIB_ADD_DEL_REPLY), l2fib_add_del_reply) \
     _(L2_MSG_ID(L2FIB_FLUSH_ALL_REPLY), l2fib_flush_all_reply) \
     _(L2_MSG_ID(L2FIB_FLUSH_INT_REPLY), l2fib_flush_int_reply) \
@@ -1134,6 +1299,9 @@ vl_api_acl_interface_add_del_reply_t_handler(vl_api_acl_interface_add_del_reply_
 #define VXLAN_MSG_ID(id) \
     (VL_API_##id + vxlan_msg_id_base)
 
+#define SR_MSG_ID(id) \
+    (VL_API_##id + sr_msg_id_base)
+
 #define foreach_vpe_plugin_api_reply_msg                                \
     _(LCP_MSG_ID(LCP_ITF_PAIR_ADD_DEL_REPLY), lcp_itf_pair_add_del_reply) \
     _(ACL_MSG_ID(ACL_ADD_REPLACE_REPLY), acl_add_replace_reply)        \
@@ -1143,7 +1311,13 @@ vl_api_acl_interface_add_del_reply_t_handler(vl_api_acl_interface_add_del_reply_
     _(VXLAN_MSG_ID(VXLAN_ADD_DEL_TUNNEL_V3_REPLY), vxlan_add_del_tunnel_v3_reply) \
     _(TUNTERM_MSG_ID(TUNTERM_ACL_INTERFACE_ADD_DEL_REPLY), tunterm_acl_interface_add_del_reply) \
     _(TUNTERM_MSG_ID(TUNTERM_ACL_DEL_REPLY), tunterm_acl_del_reply) \
-    _(TUNTERM_MSG_ID(TUNTERM_ACL_ADD_REPLACE_REPLY), tunterm_acl_add_replace_reply)
+    _(TUNTERM_MSG_ID(TUNTERM_ACL_ADD_REPLACE_REPLY), tunterm_acl_add_replace_reply) \
+    _(SR_MSG_ID(SR_LOCALSID_ADD_DEL_REPLY), sr_localsid_add_del_reply) \
+    _(SR_MSG_ID(SR_POLICY_ADD_V2_REPLY), sr_policy_add_v2_reply) \
+    _(SR_MSG_ID(SR_POLICY_DEL_REPLY), sr_policy_del_reply) \
+    _(SR_MSG_ID(SR_STEERING_ADD_DEL_REPLY), sr_steering_add_del_reply) \
+    _(SR_MSG_ID(SR_SET_ENCAP_SOURCE_REPLY), sr_set_encap_source_reply)
+
 static void vpp_plugin_vpe_init(void)
 {
 #define _(N,n)                                                  \
@@ -1189,9 +1363,17 @@ static void get_base_msg_id()
     //SAIVPP_ERROR("DELME: l2_msg_id_base %s msg_base_lookup_name:%s l2_api_version:%08x\n", l2_msg_id_base,msg_base_lookup_name,l2_api_version);
     //printf("DELME: New change added l2_msg_id_base %s\n", l2_msg_id_base);
 
+    msg_base_lookup_name = format (0, "bond_%08x%c", bond_api_version, 0);
+    bond_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
+    assert(bond_msg_id_base != (u16) ~0);
+
     msg_base_lookup_name = format (0, "bfd_%08x%c", bfd_api_version, 0);
     bfd_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
     assert(bfd_msg_id_base != (u16) ~0);
+
+    msg_base_lookup_name = format (0, "sr_%08x%c", sr_api_version, 0);
+    sr_msg_id_base = vl_client_get_first_plugin_msg_id ((char *) msg_base_lookup_name);
+    assert(sr_msg_id_base != (u16) ~0);
 
     memclnt_msg_id_base = 0;
 
@@ -1346,6 +1528,20 @@ static u32 get_swif_idx (vat_main_t *vam, const char *ifname)
                 if (strcmp((char *) name, ifname) == 0) return value;
             }));
     return ((u32) -1);
+}
+
+static const char * get_swif_name (vat_main_t *vam, const u32 swif_idx)
+{
+    hash_pair_t *p;
+    u8 *name;
+    u32 value;
+
+    hash_foreach_pair (p, vam->sw_if_index_by_interface_name, ({
+                name = (u8 *) (p->key);
+                value = (u32) p->value[0];
+                if (value == swif_idx) return name;
+            }));
+    return NULL;
 }
 
 static int config_lcp_hostif (vat_main_t *vam,
@@ -2912,6 +3108,7 @@ int vpp_ip_addr_t_to_string(vpp_ip_addr_t *ip_addr, char *buffer, size_t maxlen)
     }
     return 0;
 }
+
 int l2fib_add_del(const char *hwif_name, const uint8_t *mac, uint32_t bd_id, bool is_add, bool is_static_mac)
 {
 
@@ -3237,6 +3434,410 @@ static int vpp_bfd_udp_enable_multihop ()
 
     S (mp);
     W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int create_bond_interface(uint32_t bond_id, uint32_t mode, uint32_t lb, uint32_t  *swif_idx)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_bond_create_t * mp;
+    int ret;
+
+
+    SAIVPP_WARN("Creating bd interface: \n");
+    VPP_LOCK();
+
+    __plugin_msg_base = bond_msg_id_base;
+
+    M (BOND_CREATE, mp);
+
+    mp->id = htonl(bond_id);
+    mp->mode = htonl(mode);
+    mp->lb = htonl(lb);
+    mp->numa_only = false;
+    mp->use_custom_mac = false;
+    mp->context = store_ptr(swif_idx);
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int delete_bond_interface(const char *hwif_name)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_bond_delete_t * mp;
+    int ret;
+
+
+    SAIVPP_WARN("Removing bond interface: \n");
+    VPP_LOCK();
+
+    __plugin_msg_base = bond_msg_id_base;
+
+
+    M (BOND_DELETE, mp);
+
+    if (hwif_name) {
+	u32 idx;
+
+	idx = get_swif_idx(vam, hwif_name);
+	if (idx != (u32) -1) {
+	    mp->sw_if_index = htonl(idx);
+	} else {
+	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+	    VPP_UNLOCK();
+	    return -EINVAL;
+	}
+    } else {
+	VPP_UNLOCK();
+	return -EINVAL;
+    }
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+int create_bond_member(uint32_t bond_sw_if_index, const char *hwif_name, bool is_passive, bool is_long_timeout)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_bond_add_member_t * mp;
+    int ret;
+
+
+    SAIVPP_WARN("Adding member to bond interface: \n");
+    VPP_LOCK();
+
+    __plugin_msg_base = bond_msg_id_base;
+
+
+    M (BOND_ADD_MEMBER, mp);
+
+    if (hwif_name) {
+	u32 idx;
+
+	idx = get_swif_idx(vam, hwif_name);
+	if (idx != (u32) -1) {
+	    mp->sw_if_index = htonl(idx);
+	} else {
+	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+	    VPP_UNLOCK();
+	    return -EINVAL;
+	}
+    } else {
+	VPP_UNLOCK();
+	return -EINVAL;
+    }
+    mp->bond_sw_if_index = htonl(bond_sw_if_index);
+    mp->is_passive = is_passive;
+    mp->is_long_timeout = is_long_timeout;
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+const char * vpp_get_swif_name (const u32 swif_idx)
+{
+    vat_main_t *vam = &vat_main;
+    return get_swif_name(vam, swif_idx);
+}
+
+
+int delete_bond_member(const char * hwif_name)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_bond_detach_member_t *mp;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = bond_msg_id_base;
+
+    M (BOND_DETACH_MEMBER, mp);
+
+    if (hwif_name) {
+	u32 idx;
+
+	idx = get_swif_idx(vam, hwif_name);
+	if (idx != (u32) -1) {
+	    mp->sw_if_index = htonl(idx);
+	} else {
+	    SAIVPP_ERROR("Unable to get sw_index for %s\n", hwif_name);
+	    VPP_UNLOCK();
+	    return -EINVAL;
+	}
+    } else {
+	VPP_UNLOCK();
+	return -EINVAL;
+    }
+
+    S (mp);
+
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+static u8 translate_sr_behavior(u32 behavior)
+{
+    switch(behavior) {
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_E:
+            return SR_BEHAVIOR_API_END;
+            break;
+        // case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_X:
+        //     return SR_BEHAVIOR_API_X;
+        //     break;
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_T:
+            return SR_BEHAVIOR_API_T;
+            break;
+        // case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_DX6:
+        //     return SR_BEHAVIOR_API_DX6;
+        //     break;
+        // case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_DX4:
+        //     return SR_BEHAVIOR_API_DX4;
+        //     break;
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_DT6:
+            return SR_BEHAVIOR_API_DT6;
+            break;
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_DT4:
+            return SR_BEHAVIOR_API_DT4;
+            break;
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_UN:
+            return SR_BEHAVIOR_API_END_UN_PERF;
+            break;
+        case SAI_MY_SID_ENTRY_ENDPOINT_BEHAVIOR_UA:
+            return SR_BEHAVIOR_API_UA;
+            break;
+        default:
+            return SR_BEHAVIOR_API_LAST;
+            break;
+    }
+}
+
+int vpp_my_sid_entry_add_del (vpp_my_sid_entry_t *my_sid, bool is_del)
+{
+    int                           ret;
+    vat_main_t                   *vam = &vat_main;
+    vl_api_sr_localsid_add_del_t *mp;
+
+    init_vpp_client();
+
+    VPP_LOCK();
+
+    __plugin_msg_base = sr_msg_id_base;
+
+    M (SR_LOCALSID_ADD_DEL, mp);
+
+    if (!vpp_to_vl_api_ip6_address(&mp->localsid, &my_sid->localsid)) {
+        SAIVPP_ERROR("Unknown protocol in local sid");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    u8 behavior = translate_sr_behavior(my_sid->behavior);
+    if (behavior == SR_BEHAVIOR_API_LAST && !is_del) {
+        SAIVPP_ERROR("Unsupported behavior %u in local sid", behavior);
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    if (behavior == SR_BEHAVIOR_API_UA && !is_del) {
+        if (!vpp_to_vl_api_ip_addr(&mp->nh_addr, &my_sid->nh_addr)) {
+            SAIVPP_ERROR("Unknown protocol in nh address");
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+
+        u32 idx = get_swif_idx(vam, my_sid->hwif_name);
+        if (idx != (u32) -1) {
+            mp->sw_if_index = htonl(idx);
+        } else {
+            SAIVPP_ERROR("Unable to get sw_index for %s\n", my_sid->hwif_name);
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    }    
+
+    mp->is_del =  is_del;
+    mp->end_psp = my_sid->end_psp;
+    mp->behavior = behavior;
+    mp->vlan_index = htonl(my_sid->vlan_index);
+    mp->fib_table = htonl(my_sid->fib_table);
+
+    S (mp);
+
+    WR (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int vpp_sidlist_add(vpp_sidlist_t *sidlist)
+{
+    int                           ret;
+    vat_main_t                   *vam = &vat_main;
+    vl_api_sr_policy_add_v2_t    *mp;
+
+    init_vpp_client();
+
+    VPP_LOCK();
+
+    __plugin_msg_base = sr_msg_id_base;
+
+    M (SR_POLICY_ADD_V2, mp);
+
+    mp->weight = htonl(sidlist->weight);
+    mp->is_encap = sidlist->is_encap;
+    mp->type = sidlist->type;
+    mp->fib_table = htonl(sidlist->fib_table);
+    mp->sids.num_sids = sidlist->sids.num_sids;
+
+    if (!vpp_to_vl_api_ip6_address(&mp->bsid_addr, &sidlist->bsid)) {
+        SAIVPP_ERROR("Unknown protocol in bsid");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    if (!vpp_to_vl_api_ip6_address(&mp->encap_src, &sidlist->encap_src)) {
+        SAIVPP_ERROR("Unknown protocol in encap src");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    for(uint8_t i = 0; i<mp->sids.num_sids; i++) {
+        if (!vpp_to_vl_api_ip6_address(&mp->sids.sids[i], &sidlist->sids.sids[i])) {
+            SAIVPP_ERROR("Unknown protocol in sid");
+            VPP_UNLOCK();
+            return -EINVAL;
+        }
+    }
+
+    S (mp);
+
+    WR (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int vpp_sidlist_del(vpp_ip_addr_t *bsid)
+{
+    int                     ret;
+    vat_main_t             *vam = &vat_main;
+    vl_api_sr_policy_del_t *mp;
+
+    init_vpp_client();
+
+    VPP_LOCK();
+
+    __plugin_msg_base = sr_msg_id_base;
+
+    M (SR_POLICY_DEL, mp);
+
+    mp->sr_policy_index = htonl((uint32_t)~0);
+    if (!vpp_to_vl_api_ip6_address(&mp->bsid_addr, bsid)) {
+        SAIVPP_ERROR("Unknown protocol in bsid");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    S (mp);
+
+    WR (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int  vpp_sr_steer_add_del(vpp_sr_steer_t *sr_steer, bool is_del)
+{
+    int                     ret;
+    vat_main_t             *vam = &vat_main;
+    vl_api_sr_steering_add_del_t *mp;
+
+    init_vpp_client();
+
+    VPP_LOCK();
+
+    __plugin_msg_base = sr_msg_id_base;
+
+    M (SR_STEERING_ADD_DEL, mp);
+
+    mp->is_del = is_del;
+    mp->sr_policy_index = htonl((uint32_t)~0);
+    mp->table_id = htonl(sr_steer->fib_table);
+    mp->sw_if_index =  htonl((uint32_t)~0);   //L2 currently unsupported
+    mp->prefix.len = sr_steer->prefix.prefix_len;
+    mp->traffic_type = SR_STEER_API_IPV4;
+    if (sr_steer->prefix.address.sa_family == AF_INET6) {
+        mp->traffic_type = SR_STEER_API_IPV6;
+    }
+
+    if (!vpp_to_vl_api_ip6_address(&mp->bsid_addr, &sr_steer->bsid)) {
+        SAIVPP_ERROR("Unknown protocol in bsid");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    if (!vpp_to_vl_api_ip_addr(&mp->prefix.address, &sr_steer->prefix.address)) {
+        SAIVPP_ERROR("Unknown protocol in nh address");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+
+    S (mp);
+
+    WR (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
+int vpp_sr_set_encap_source(vpp_ip_addr_t *encap_src)
+{
+    int                     ret;
+    vat_main_t             *vam = &vat_main;
+    vl_api_sr_set_encap_source_t *mp;
+
+    init_vpp_client();
+
+    VPP_LOCK();
+
+    __plugin_msg_base = sr_msg_id_base;
+
+    M (SR_SET_ENCAP_SOURCE, mp);
+
+    if (!vpp_to_vl_api_ip6_address(&mp->encaps_source, encap_src)) {
+        SAIVPP_ERROR("Unknown protocol in encap_src");
+        VPP_UNLOCK();
+        return -EINVAL;
+    }
+    
+    S (mp);
+
+    WR (ret);
 
     VPP_UNLOCK();
 
