@@ -3,26 +3,14 @@
 # Add steps that build, run tests, deploy, and more:
 # https://aka.ms/yaml
 
-pr:
-  branches:
-    include:
-    - main
+pr:    
+- main
 
 trigger:
   batch: true
   branches:
     include:
     - main
-
-pool: sonicbld
-
-schedules:
-- cron: "0 8 * * *"
-  displayName: Daily midnight build
-  branches:
-    include:
-    - main
-  always: true
 
 parameters:
   - name: debian_version
@@ -38,14 +26,6 @@ variables:
       value: $(System.PullRequest.TargetBranch)
     ${{ else }}:
       value: $(Build.SourceBranchName)
-    
-resources:
-  repositories:
-  - repository: sonic-platform-vpp
-    type: github
-    name: sonic-net/sonic-platform-vpp
-    ref: main
-    endpoint: sonic-net
 
 stages:
 - stage: BuildVpp
@@ -54,6 +34,7 @@ stages:
   - job:
     displayName: amd64
     timeoutInMinutes: 300
+    pool: sonicbld
     container:
       image: sonicdev-microsoft.azurecr.io:443/sonic-slave-${{ parameters.debian_version }}:latest
       options:  "--privileged"
