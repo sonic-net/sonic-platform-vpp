@@ -12,7 +12,7 @@ trigger:
     include:
     - main
 
-pool:
+pool: 
   vmImage: ubuntu-20.04
 
 schedules:
@@ -37,7 +37,8 @@ variables:
       value: $(System.PullRequest.TargetBranch)
     ${{ else }}:
       value: $(Build.SourceBranchName)
-    
+  - name: SONIC_BRANCH
+    value: $[eq(variables['BUILD_BRANCH'], 'main') ? 'master' : variables['BUILD_BRANCH']]    
 stages:
 - stage: BuildVpp
   
@@ -57,7 +58,7 @@ stages:
         project: build
         pipeline: Azure.sonic-buildimage.common_libs
         runVersion: 'latestFromBranch'
-        runBranch: 'refs/heads/$(BUILD_BRANCH)'
+        runBranch: 'refs/heads/$(SONIC_BRANCH)'
         path: $(Build.ArtifactStagingDirectory)/download
         artifact: common-lib
         patterns: |
