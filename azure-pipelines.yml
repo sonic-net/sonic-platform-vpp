@@ -61,7 +61,7 @@ stages:
         project: build
         pipeline: Azure.sonic-buildimage.common_libs
         runVersion: 'latestFromBranch'
-        runBranch: 'refs/heads/$(SONIC_BRANCH)'
+        runBranch: 'refs/heads/master'
         path: $(Build.ArtifactStagingDirectory)/download
         artifact: common-lib
         patterns: |
@@ -72,6 +72,7 @@ stages:
       displayName: "Download common libs"
     - script: |
         set -ex
+        echo "SONIC_BRANCH: $(SONIC_BRANCH), BUILD_BRANCH: $(BUILD_BRANCH)"
         # install libyang before install libswsscommon
         sudo dpkg -i $(find ./download -name *.deb)
         rm -rf download || true
