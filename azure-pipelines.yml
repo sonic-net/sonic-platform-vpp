@@ -12,8 +12,7 @@ trigger:
     include:
     - main
 
-pool: 
-  vmImage: ubuntu-20.04
+pool: sonicbld-1es
 
 schedules:
 - cron: "0 8 * * *"
@@ -22,6 +21,19 @@ schedules:
     include:
     - main
   always: true
+
+resources:
+  repositories:
+  - repository: sonic-platform-vpp
+    type: github
+    name: sonic-net/sonic-platform-vpp
+    ref: master
+    endpoint: sonic-net
+  - repository: buildimage
+    type: github
+    name: sonic-net/sonic-buildimage
+    endpoint: sonic-net
+    ref: master
 
 parameters:
   - name: debian_version
@@ -38,13 +50,33 @@ variables:
     ${{ else }}:
       value: $(Build.SourceBranchName)
   - name: SONIC_BRANCH
-    ${{ if eq(variables['BUILD_BRANCH'], 'main') }}:
-      value: master
-    ${{ else }}:
-      value: $(BUILD_BRANCH)
+    value: master
+  - name: CACHE_OPTIONS
+    value: SONIC_DPKG_CACHE_METHOD=cache SONIC_DPKG_CACHE_SOURCE=/nfs/dpkg_cache/vpp
+  - name: BUILD_OPTIONS
+    value: ENABLE_DOCKER_BASE_PULL=y USERNAME=admin SONIC_BUILD_JOBS=$(nproc) PLATFORM=vpp SONIC_VERSION_CONTROL_COMPONENTS=py2,py3,web,git,docker
 stages:
+- stage: prestage
+  jobs:
+  - job:
+    timeoutInMinutes: 30
+    steps:
+    - checkout: buildimage
+      submodules: recursive
+      fetchDepth: 0
+      clean: true
+      displayName: 'checkout sonic-buildimage'
+    - script: |
+      set -ex
+      git checkout $(SONIC_BRANCH)
+      make init
+      rm -rf platform/vpp
+    - checkout: self
+      path: platform/vpp
+      displayName: 'checkout sonic-platform-vpp'
+    - script: |
+      $(BUILD_OPTIONS) $(CACHE_OPTIONS) make configure PLATFORM=vpp
 - stage: BuildVpp
-  
   jobs:
   - job:
     displayName: amd64
@@ -53,46 +85,23 @@ stages:
       image: sonicdev-microsoft.azurecr.io:443/sonic-slave-${{ parameters.debian_version }}:latest
       options:  "--privileged"
     steps:
-    - checkout: self
-      clean: true
-    - task: DownloadPipelineArtifact@2
-      inputs:
-        source: specific
-        project: build
-        pipeline: Azure.sonic-buildimage.common_libs
-        runVersion: 'latestFromBranch'
-        runBranch: 'refs/heads/master'
-        path: $(Build.ArtifactStagingDirectory)/download
-        artifact: common-lib
-        patterns: |
-            target/debs/${{ parameters.debian_version }}/libnl-3*.deb
-            target/debs/${{ parameters.debian_version }}/libnl-genl*.deb
-            target/debs/${{ parameters.debian_version }}/libnl-route*.deb
-            target/debs/${{ parameters.debian_version }}/libnl-nf*.deb
-      displayName: "Download common libs"
     - script: |
-        set -ex
-        echo "SONIC_BRANCH: $(SONIC_BRANCH), BUILD_BRANCH: $(BUILD_BRANCH)"
-        # install libyang before install libswsscommon
-        sudo dpkg -i $(find ./download -name *.deb)
-        rm -rf download || true
-        cat /etc/apt/sources.list
-        dpkg --list |grep libnl
-      workingDirectory: $(Build.ArtifactStagingDirectory)
-      displayName: "Install libnl3"
-    - script: |
-        set -ex
-        git clone https://github.com/sonic-net/sonic-platform-vpp.git
-        mkdir repo
-        git clone https://gerrit.fd.io/r/vpp repo
-        cp -vr sonic-platform-vpp/vppbld/plugins/* repo/src/packages
-        cd repo
-        git apply ../sonic-platform-vpp/vppbld/vpp.patch
-        make UNATTENDED=y PLATFORM=vpp install-deps install-ext-deps
-        make UNATTENDED=y PLATFORM=vpp -j4 pkg-deb
-        mkdir artifacts
-        mv build-root/*.deb artifacts/
+      $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/debs/${{ parameters.debian_version }}/libvppinfra_main-release_amd64.deb
+      find target/debs/${{ parameters.debian_version }}/ -name "*vpp*.deb" -exec cp {} /$(System.DefaultWorkingDirectory)/artifacts \; 
       displayName: "Build VPP packages from source"
-    - publish: $(System.DefaultWorkingDirectory)/repo/artifacts
+    - publish: $(System.DefaultWorkingDirectory)/artifacts
       artifact: vpp
       displayName: "Archive vpp debian packages"
+- stage: BuildSonicVpp
+  jobs:
+  - job:
+    displayName: amd64
+    timeoutInMinutes: 300
+    steps:
+    - script: |
+       $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/sonic-vpp.img.gz
+      displayName: "Build sonic-vpp image"
+    - publish: $(System.DefaultWorkingDirectory)/target/sonic-vpp.img.gz
+      artifact: sonic-vpp
+      displayName: "Archive sonic-vpp image"
+
