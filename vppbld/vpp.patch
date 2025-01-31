@@ -1,8 +1,8 @@
 diff --git a/Makefile b/Makefile
-index 98866e9be..f9d5b349e 100644
+index 3144905f3..04560cf2c 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -76,7 +76,7 @@ DEB_DEPENDS += libffi-dev python3-ply libunwind-dev
+@@ -78,7 +78,7 @@ DEB_DEPENDS += libffi-dev python3-ply libunwind-dev
  DEB_DEPENDS += cmake ninja-build python3-jsonschema python3-yaml
  DEB_DEPENDS += python3-venv  # ensurepip
  DEB_DEPENDS += python3-dev python3-pip
@@ -11,7 +11,7 @@ index 98866e9be..f9d5b349e 100644
  # DEB_DEPENDS += enchant  # for docs
  DEB_DEPENDS += python3-virtualenv
  DEB_DEPENDS += libssl-dev
-@@ -85,7 +85,7 @@ DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
+@@ -87,7 +87,7 @@ DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
  DEB_DEPENDS += nasm
  DEB_DEPENDS += iperf ethtool  # for 'make test TEST=vm_vpp_interfaces'
  DEB_DEPENDS += libpcap-dev
@@ -21,10 +21,10 @@ index 98866e9be..f9d5b349e 100644
  
  LIBFFI=libffi6 # works on all but 20.04 and debian-testing
 diff --git a/build/external/packages/xdp-tools.mk b/build/external/packages/xdp-tools.mk
-index b9285971f..c38acc598 100644
+index 08d94e424..1fbbef9b7 100644
 --- a/build/external/packages/xdp-tools.mk
 +++ b/build/external/packages/xdp-tools.mk
-@@ -24,7 +24,7 @@ define  xdp-tools_config_cmds
+@@ -25,7 +25,7 @@ define  xdp-tools_config_cmds
  endef
  
  define  xdp-tools_build_cmds
@@ -33,6 +33,164 @@ index b9285971f..c38acc598 100644
  endef
  
  define  xdp-tools_install_cmds
+diff --git a/src/plugins/linux-cp/lcp_node.c b/src/plugins/linux-cp/lcp_node.c
+index 241cc5e4b..5438d536d 100644
+--- a/src/plugins/linux-cp/lcp_node.c
++++ b/src/plugins/linux-cp/lcp_node.c
+@@ -1033,6 +1033,153 @@ VNET_FEATURE_INIT (lcp_arp_host_arp_feat, static) = {
+   .runs_before = VNET_FEATURES ("arp-reply"),
+ };
+ 
++typedef struct l2_punt_trace_t_
++{
++  u8 direction; // 0 = punt, 1 = inject
++  u32 phy_sw_if_index;
++  u32 host_sw_if_index;
++} l2_punt_trace_t;
++
++static u8 *
++format_l2_punt_trace (u8 *s, va_list *args)
++{
++  CLIB_UNUSED (vlib_main_t * vm) = va_arg (*args, vlib_main_t *);
++  CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
++  l2_punt_trace_t *t = va_arg (*args, l2_punt_trace_t *);
++
++  if (t->direction)
++    {
++      s = format (s, "l2-punt: %u -> %u", t->host_sw_if_index,
++		  t->phy_sw_if_index);
++    }
++  else
++    {
++      s = format (s, "l2-punt: %u -> %u", t->phy_sw_if_index,
++		  t->host_sw_if_index);
++    }
++
++  return s;
++}
++
++VLIB_NODE_FN (l2_punt_node)
++(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
++{
++  u32 n_left_from, *from, *to_next, n_left_to_next;
++  lip_punt_next_t next_index;
++
++  next_index = node->cached_next_index;
++  n_left_from = frame->n_vectors;
++  from = vlib_frame_vector_args (frame);
++
++  while (n_left_from > 0)
++    {
++      vlib_get_next_frame (vm, node, next_index, to_next, n_left_to_next);
++
++      while (n_left_from > 0 && n_left_to_next > 0)
++	{
++	  vlib_buffer_t *b0;
++	  const lcp_itf_pair_t *lip0 = NULL;
++	  u32 next0 = ~0;
++	  u32 bi0, lipi0;
++	  u32 sw_if_index0;
++	  u8 direction = 0;
++	  u8 len0;
++
++	  bi0 = to_next[0] = from[0];
++
++	  from += 1;
++	  to_next += 1;
++	  n_left_from -= 1;
++	  n_left_to_next -= 1;
++	  next0 = LIP_PUNT_NEXT_DROP;
++
++	  b0 = vlib_get_buffer (vm, bi0);
++
++	  sw_if_index0 = vnet_buffer (b0)->sw_if_index[VLIB_RX];
++	  // check if RX sw_if_index is a phy (meaning this could require a punt, direction = 0)
++	  lipi0 = lcp_itf_pair_find_by_phy (sw_if_index0);
++	  if (lipi0 == INDEX_INVALID)
++	    {
++	      // check if RX sw_if_index is a host (meaning this could require an inject, direction = 1)
++	      lipi0 = lcp_itf_pair_find_by_host (sw_if_index0);
++	      if (lipi0 == INDEX_INVALID)
++		goto trace0;
++
++	      direction = 1;
++	    }
++
++	  lip0 = lcp_itf_pair_get (lipi0);
++	  next0 = LIP_PUNT_NEXT_IO;
++	  // if direction is 1 (inject), set TX to phy
++	  // if direction is 0 (punt), set TX to host
++	  vnet_buffer (b0)->sw_if_index[VLIB_TX] =
++	    direction ? lip0->lip_phy_sw_if_index : lip0->lip_host_sw_if_index;
++
++	  if (PREDICT_TRUE (lip0->lip_host_type == LCP_ITF_HOST_TAP))
++	    {
++	      /*
++	       * rewind to ethernet header
++	       */
++	      len0 = ((u8 *) vlib_buffer_get_current (b0) -
++		      (u8 *) ethernet_buffer_get_header (b0));
++	      vlib_buffer_advance (b0, -len0);
++	    }
++
++	trace0:
++	  if (PREDICT_FALSE ((b0->flags & VLIB_BUFFER_IS_TRACED)))
++	    {
++	      l2_punt_trace_t *t = vlib_add_trace (vm, node, b0, sizeof (*t));
++	      t->direction = direction;
++	      if (direction)
++		{
++		  t->phy_sw_if_index =
++		    (lipi0 == INDEX_INVALID) ? ~0 : lip0->lip_phy_sw_if_index;
++		  t->host_sw_if_index = sw_if_index0;
++		}
++	      else
++		{
++
++		  t->phy_sw_if_index = sw_if_index0;
++		  t->host_sw_if_index =
++		    (lipi0 == INDEX_INVALID) ? ~0 : lip0->lip_host_sw_if_index;
++		}
++	    }
++
++	  vlib_validate_buffer_enqueue_x1 (vm, node, next_index, to_next,
++					   n_left_to_next, bi0, next0);
++	}
++
++      vlib_put_next_frame (vm, node, next_index, n_left_to_next);
++    }
++
++  return frame->n_vectors;
++}
++
++VLIB_REGISTER_NODE (l2_punt_node) = {
++    .name = "linux-cp-punt-l2",
++    .vector_size = sizeof (u32),
++    .format_trace = format_l2_punt_trace,
++    .type = VLIB_NODE_TYPE_INTERNAL,
++
++    .n_next_nodes = LIP_PUNT_N_NEXT,
++    .next_nodes = {
++      [LIP_PUNT_NEXT_DROP] = "error-drop",
++      [LIP_PUNT_NEXT_IO] = "interface-output",
++    },
++  };
++
++static clib_error_t *
++lcp_lacp_init (vlib_main_t *vm)
++{
++  ethernet_register_input_type (vm, ETHERNET_TYPE_SLOW_PROTOCOLS /* LACP */ ,
++				l2_punt_node.index);
++  icmp6_register_type (vm, ICMP6_router_solicitation, l2_punt_node.index);
++  icmp6_register_type (vm, ICMP6_router_advertisement, l2_punt_node.index);
++  
++  return NULL;
++}
++
++VLIB_INIT_FUNCTION (lcp_lacp_init); 
+ /*
+  * fd.io coding-style-patch-verification: ON
+  *
 diff --git a/src/plugins/vxlan/vxlan.c b/src/plugins/vxlan/vxlan.c
 index 0885550d2..8b8cd66e4 100644
 --- a/src/plugins/vxlan/vxlan.c
