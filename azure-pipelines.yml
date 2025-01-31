@@ -12,7 +12,7 @@ trigger:
     include:
     - main
 
-pool:
+pool: 
   vmImage: ubuntu-20.04
 
 schedules:
@@ -37,7 +37,11 @@ variables:
       value: $(System.PullRequest.TargetBranch)
     ${{ else }}:
       value: $(Build.SourceBranchName)
-    
+  - name: SONIC_BRANCH
+    ${{ if eq(variables['BUILD_BRANCH'], 'main') }}:
+      value: master
+    ${{ else }}:
+      value: $(BUILD_BRANCH)
 stages:
 - stage: BuildVpp
   
@@ -57,7 +61,7 @@ stages:
         project: build
         pipeline: Azure.sonic-buildimage.common_libs
         runVersion: 'latestFromBranch'
-        runBranch: 'refs/heads/$(BUILD_BRANCH)'
+        runBranch: 'refs/heads/master'
         path: $(Build.ArtifactStagingDirectory)/download
         artifact: common-lib
         patterns: |
@@ -68,6 +72,7 @@ stages:
       displayName: "Download common libs"
     - script: |
         set -ex
+        echo "SONIC_BRANCH: $(SONIC_BRANCH), BUILD_BRANCH: $(BUILD_BRANCH)"
         # install libyang before install libswsscommon
         sudo dpkg -i $(find ./download -name *.deb)
         rm -rf download || true
