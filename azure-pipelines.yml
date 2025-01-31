@@ -27,7 +27,7 @@ resources:
   - repository: sonic-platform-vpp
     type: github
     name: sonic-net/sonic-platform-vpp
-    ref: master
+    ref: main
     endpoint: sonic-net
   - repository: buildimage
     type: github
