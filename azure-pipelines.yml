@@ -67,15 +67,15 @@ stages:
       clean: true
       displayName: 'checkout sonic-buildimage'
     - script: |
-      set -ex
-      git checkout $(SONIC_BRANCH)
-      make init
-      rm -rf platform/vpp
+        set -ex
+        git checkout $(SONIC_BRANCH)
+        make init
+        rm -rf platform/vpp
     - checkout: self
       path: platform/vpp
       displayName: 'checkout sonic-platform-vpp'
     - script: |
-      $(BUILD_OPTIONS) $(CACHE_OPTIONS) make configure PLATFORM=vpp
+        $(BUILD_OPTIONS) $(CACHE_OPTIONS) make configure PLATFORM=vpp
 - stage: BuildVpp
   jobs:
   - job:
@@ -86,8 +86,8 @@ stages:
       options:  "--privileged"
     steps:
     - script: |
-      $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/debs/${{ parameters.debian_version }}/libvppinfra_main-release_amd64.deb
-      find target/debs/${{ parameters.debian_version }}/ -name "*vpp*.deb" -exec cp {} /$(System.DefaultWorkingDirectory)/artifacts \; 
+        $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/debs/${{ parameters.debian_version }}/libvppinfra_main-release_amd64.deb
+        find target/debs/${{ parameters.debian_version }}/ -name "*vpp*.deb" -exec cp {} /$(System.DefaultWorkingDirectory)/artifacts \; 
       displayName: "Build VPP packages from source"
     - publish: $(System.DefaultWorkingDirectory)/artifacts
       artifact: vpp
@@ -99,7 +99,7 @@ stages:
     timeoutInMinutes: 300
     steps:
     - script: |
-       $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/sonic-vpp.img.gz
+        $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/sonic-vpp.img.gz
       displayName: "Build sonic-vpp image"
     - publish: $(System.DefaultWorkingDirectory)/target/sonic-vpp.img.gz
       artifact: sonic-vpp
