@@ -73,7 +73,7 @@ stages:
         rm -rf platform/vpp
       workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
     - checkout: self
-      path: sonic-buildimage/platform/vpp
+      path: $(System.DefaultWorkingDirectory)/sonic-buildimage/platform/vpp
       displayName: 'checkout sonic-platform-vpp'
     - script: |
         set -ex
