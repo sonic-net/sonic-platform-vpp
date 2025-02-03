@@ -12,8 +12,8 @@ trigger:
     include:
     - main
 
-pool: sonicbld-1es
-
+pool:
+  vmImage: ubuntu-22.04
 schedules:
 - cron: "0 8 * * *"
   displayName: Daily midnight build
@@ -54,7 +54,7 @@ variables:
   - name: CACHE_OPTIONS
     value: SONIC_DPKG_CACHE_METHOD=cache SONIC_DPKG_CACHE_SOURCE=/nfs/dpkg_cache/vpp
   - name: BUILD_OPTIONS
-    value: ENABLE_DOCKER_BASE_PULL=y USERNAME=admin SONIC_BUILD_JOBS=$(nproc) PLATFORM=vpp SONIC_VERSION_CONTROL_COMPONENTS=py2,py3,web,git,docker
+    value: ENABLE_DOCKER_BASE_PULL=y USERNAME=admin SONIC_BUILD_JOBS=$(nproc) SONIC_VERSION_CONTROL_COMPONENTS=py2,py3,web,git,docker
 stages:
 - stage: build
   jobs:
