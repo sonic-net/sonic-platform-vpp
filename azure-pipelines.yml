@@ -73,12 +73,12 @@ stages:
         rm -rf platform/vpp
       workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
     - checkout: self
-      path: $(System.DefaultWorkingDirectory)/sonic-buildimage/platform/vpp
       displayName: 'checkout sonic-platform-vpp'
-    - script: |
+    - script: | 
         set -ex
+        mv $(System.DefaultWorkingDirectory)/sonic-platform-vpp $(System.DefaultWorkingDirectory)/sonic-buildimage/platform/vpp
+        cd $(System.DefaultWorkingDirectory)/sonic-buildimage/platform/vpp
         git revert 67edf2f39c -n
-      workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage/platform/vpp
       displayName: 'revert 67edf2f39c'
     - script: |
         $(BUILD_OPTIONS) $(CACHE_OPTIONS) make configure PLATFORM=vpp
