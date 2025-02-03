@@ -71,11 +71,14 @@ stages:
         git checkout $(SONIC_BRANCH)
         make init
         rm -rf platform/vpp
+      workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
     - checkout: self
-      path: platform/vpp
+      path: sonic-buildimage/platform/vpp
       displayName: 'checkout sonic-platform-vpp'
     - script: |
         $(BUILD_OPTIONS) $(CACHE_OPTIONS) make configure PLATFORM=vpp
+      workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
+      displayName: 'make configure'
 - stage: BuildVpp
   jobs:
   - job:
@@ -88,6 +91,7 @@ stages:
     - script: |
         $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/debs/${{ parameters.debian_version }}/libvppinfra_main-release_amd64.deb
         find target/debs/${{ parameters.debian_version }}/ -name "*vpp*.deb" -exec cp {} /$(System.DefaultWorkingDirectory)/artifacts \; 
+      workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
       displayName: "Build VPP packages from source"
     - publish: $(System.DefaultWorkingDirectory)/artifacts
       artifact: vpp
@@ -100,6 +104,7 @@ stages:
     steps:
     - script: |
         $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/sonic-vpp.img.gz
+      workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
       displayName: "Build sonic-vpp image"
     - publish: $(System.DefaultWorkingDirectory)/target/sonic-vpp.img.gz
       artifact: sonic-vpp
