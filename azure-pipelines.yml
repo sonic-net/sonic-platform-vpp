@@ -81,6 +81,10 @@ stages:
         git revert 67edf2f39c -n
       displayName: 'revert 67edf2f39c'
     - script: |
+        set -ex
+        sudo modprobe overlay
+        sudo apt-get install -y acl
+        sudo bash -c "echo 1 > /proc/sys/vm/compact_memory"
         $(BUILD_OPTIONS) $(CACHE_OPTIONS) make configure PLATFORM=vpp
       workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
       displayName: 'make configure'
