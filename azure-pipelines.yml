@@ -56,10 +56,10 @@ variables:
   - name: BUILD_OPTIONS
     value: ENABLE_DOCKER_BASE_PULL=y USERNAME=admin SONIC_BUILD_JOBS=$(nproc) PLATFORM=vpp SONIC_VERSION_CONTROL_COMPONENTS=py2,py3,web,git,docker
 stages:
-- stage: prestage
+- stage: build
   jobs:
   - job:
-    timeoutInMinutes: 30
+    timeoutInMinutes: 450
     steps:
     - checkout: buildimage
       submodules: recursive
@@ -76,18 +76,14 @@ stages:
       path: sonic-buildimage/platform/vpp
       displayName: 'checkout sonic-platform-vpp'
     - script: |
+        set -ex
+        git revert 67edf2f39c -n
+      workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage/platform/vpp
+      displayName: 'revert 67edf2f39c'
+    - script: |
         $(BUILD_OPTIONS) $(CACHE_OPTIONS) make configure PLATFORM=vpp
       workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
       displayName: 'make configure'
-- stage: BuildVpp
-  jobs:
-  - job:
-    displayName: amd64
-    timeoutInMinutes: 300
-    container:
-      image: sonicdev-microsoft.azurecr.io:443/sonic-slave-${{ parameters.debian_version }}:latest
-      options:  "--privileged"
-    steps:
     - script: |
         $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/debs/${{ parameters.debian_version }}/libvppinfra_main-release_amd64.deb
         find target/debs/${{ parameters.debian_version }}/ -name "*vpp*.deb" -exec cp {} /$(System.DefaultWorkingDirectory)/artifacts \; 
@@ -96,12 +92,6 @@ stages:
     - publish: $(System.DefaultWorkingDirectory)/artifacts
       artifact: vpp
       displayName: "Archive vpp debian packages"
-- stage: BuildSonicVpp
-  jobs:
-  - job:
-    displayName: amd64
-    timeoutInMinutes: 300
-    steps:
     - script: |
         $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/sonic-vpp.img.gz
       workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
