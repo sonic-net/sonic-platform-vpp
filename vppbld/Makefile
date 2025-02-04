@@ -83,8 +83,19 @@ vppbld-docker/Dockerfile-$(BLDENV): vppbld-docker/Dockerfile-$(BLDENV).j2
 	export VPP_DOCKER_DEBS="$(VPP_DOCKER_DEBS)"
 	j2 vppbld-docker/Dockerfile-$(BLDENV).j2 > vppbld-docker/Dockerfile-$(BLDENV)
 
+DOCKER_CHECK := $(shell docker info >/dev/null 2>&1 && echo running || echo stopped)
+.PHONY: start-docker
+start-docker:
+ifeq ($(DOCKER_CHECK), stopped)
+	@echo "Docker is not running. Starting Docker daemon..."
+	@sudo -E dockerd > /dev/null 2>&1 &
+	@sleep 5  # Wait for Docker to start
+else
+	@echo "Docker is already running."
+endif
+
 .PHONY: docker_build
-docker_build:  vppbld-docker/Dockerfile-$(BLDENV)
+docker_build:  vppbld-docker/Dockerfile-$(BLDENV) start-docker
 	pushd vppbld-docker
 	rm -rf debs
 	mkdir debs
