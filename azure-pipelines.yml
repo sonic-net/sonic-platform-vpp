@@ -52,7 +52,7 @@ variables:
   - name: CACHE_OPTIONS
     value: SONIC_DPKG_CACHE_METHOD=cache SONIC_DPKG_CACHE_SOURCE=/nfs/dpkg_cache/vpp
   - name: BUILD_OPTIONS
-    value: ENABLE_DOCKER_BASE_PULL=y USERNAME=admin SONIC_BUILD_JOBS=2 SONIC_VERSION_CONTROL_COMPONENTS=py2,py3,web,git,docker
+    value: ENABLE_DOCKER_BASE_PULL=y USERNAME=admin SONIC_VERSION_CONTROL_COMPONENTS=py2,py3,web,git,docker
 
 stages:
 - stage: build
