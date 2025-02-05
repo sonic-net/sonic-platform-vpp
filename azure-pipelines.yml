@@ -52,7 +52,7 @@ variables:
   - name: CACHE_OPTIONS
     value: SONIC_DPKG_CACHE_METHOD=cache SONIC_DPKG_CACHE_SOURCE=/nfs/dpkg_cache/vpp
   - name: BUILD_OPTIONS
-    value: ENABLE_DOCKER_BASE_PULL=y USERNAME=admin SONIC_VERSION_CONTROL_COMPONENTS=py2,py3,web,git,docker
+    value: USERNAME=admin SONIC_VERSION_CONTROL_COMPONENTS=py2,py3,web,git,docker
 
 stages:
 - stage: build
@@ -76,20 +76,22 @@ stages:
       displayName: 'checkout sonic-platform-vpp'
     - script: | 
         set -ex
+        free -g
         mv $(System.DefaultWorkingDirectory)/sonic-platform-vpp $(System.DefaultWorkingDirectory)/sonic-buildimage/platform/vpp
         cd $(System.DefaultWorkingDirectory)/sonic-buildimage/platform/vpp
         git revert 67edf2f39c -n
       displayName: 'revert 67edf2f39c'
     - script: |
         set -ex
+        free -g
         sudo modprobe overlay
         sudo apt-get install -y acl
         sudo bash -c "echo 1 > /proc/sys/vm/compact_memory"
-        $(BUILD_OPTIONS) $(CACHE_OPTIONS) make configure PLATFORM=vpp
+        NOBUSTER=1 NOBULLSEYE=1 ENABLE_DOCKER_BASE_PULL=y make $(BUILD_OPTIONS) $(CACHE_OPTIONS) configure PLATFORM=vpp
       workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
       displayName: 'make configure'
     - script: |
-        $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/debs/${{ parameters.debian_version }}/libvppinfra_main-release_amd64.deb
+        NOBUSTER=1 NOBULLSEYE=1 ENABLE_DOCKER_BASE_PULL=y make $(BUILD_OPTIONS) $(CACHE_OPTIONS) target/debs/${{ parameters.debian_version }}/libvppinfra_main-release_amd64.deb
         find target/debs/${{ parameters.debian_version }}/ -name "*vpp*.deb" -exec cp {} /$(System.DefaultWorkingDirectory)/artifacts \; 
       workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
       displayName: "Build VPP packages from source"
@@ -97,7 +99,7 @@ stages:
       artifact: vpp
       displayName: "Archive vpp debian packages"
     - script: |
-        $(BUILD_OPTIONS) $(CACHE_OPTIONS) make target/sonic-vpp.img.gz
+        NOBUSTER=1 NOBULLSEYE=1 ENABLE_DOCKER_BASE_PULL=y make $(BUILD_OPTIONS) $(CACHE_OPTIONS) target/sonic-vpp.img.gz
       workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
       displayName: "Build sonic-vpp image"
     - publish: $(System.DefaultWorkingDirectory)/target/sonic-vpp.img.gz
