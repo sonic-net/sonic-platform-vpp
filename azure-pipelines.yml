@@ -12,9 +12,6 @@ trigger:
     include:
     - main
 
-pool: 
-  vmImage: ubuntu-20.04
-
 schedules:
 - cron: "0 8 * * *"
   displayName: Daily midnight build
@@ -22,6 +19,19 @@ schedules:
     include:
     - main
   always: true
+
+resources:
+  repositories:
+  - repository: sonic-platform-vpp
+    type: github
+    name: sonic-net/sonic-platform-vpp
+    ref: main
+    endpoint: sonic-net
+  - repository: buildimage
+    type: github
+    name: sonic-net/sonic-buildimage
+    endpoint: sonic-net
+    ref: master
 
 parameters:
   - name: debian_version
@@ -38,61 +48,61 @@ variables:
     ${{ else }}:
       value: $(Build.SourceBranchName)
   - name: SONIC_BRANCH
-    ${{ if eq(variables['BUILD_BRANCH'], 'main') }}:
-      value: master
-    ${{ else }}:
-      value: $(BUILD_BRANCH)
+    value: master
+  - name: CACHE_OPTIONS
+    value: SONIC_DPKG_CACHE_METHOD=cache SONIC_DPKG_CACHE_SOURCE=/nfs/dpkg_cache/vpp
+  - name: BUILD_OPTIONS
+    value: USERNAME=admin SONIC_VERSION_CONTROL_COMPONENTS=py2,py3,web,git,docker
+
 stages:
-- stage: BuildVpp
-  
+- stage: build
+  pool: sonicbld-1es
   jobs:
   - job:
-    displayName: amd64
-    timeoutInMinutes: 300
-    container:
-      image: sonicdev-microsoft.azurecr.io:443/sonic-slave-${{ parameters.debian_version }}:latest
-      options:  "--privileged"
+    timeoutInMinutes: 450
     steps:
-    - checkout: self
+    - checkout: buildimage
+      submodules: recursive
+      fetchDepth: 0
       clean: true
-    - task: DownloadPipelineArtifact@2
-      inputs:
-        source: specific
-        project: build
-        pipeline: Azure.sonic-buildimage.common_libs
-        runVersion: 'latestFromBranch'
-        runBranch: 'refs/heads/master'
-        path: $(Build.ArtifactStagingDirectory)/download
-        artifact: common-lib
-        patterns: |
-            target/debs/${{ parameters.debian_version }}/libnl-3*.deb
-            target/debs/${{ parameters.debian_version }}/libnl-genl*.deb
-            target/debs/${{ parameters.debian_version }}/libnl-route*.deb
-            target/debs/${{ parameters.debian_version }}/libnl-nf*.deb
-      displayName: "Download common libs"
+      displayName: 'checkout sonic-buildimage'
     - script: |
         set -ex
-        echo "SONIC_BRANCH: $(SONIC_BRANCH), BUILD_BRANCH: $(BUILD_BRANCH)"
-        # install libyang before install libswsscommon
-        sudo dpkg -i $(find ./download -name *.deb)
-        rm -rf download || true
-        cat /etc/apt/sources.list
-        dpkg --list |grep libnl
-      workingDirectory: $(Build.ArtifactStagingDirectory)
-      displayName: "Install libnl3"
+        git checkout $(SONIC_BRANCH)
+        make init
+        rm -rf platform/vpp
+      workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
+    - checkout: self
+      displayName: 'checkout sonic-platform-vpp'
+    - script: | 
+        set -ex
+        free -g
+        mv $(System.DefaultWorkingDirectory)/sonic-platform-vpp $(System.DefaultWorkingDirectory)/sonic-buildimage/platform/vpp
+        cd $(System.DefaultWorkingDirectory)/sonic-buildimage/platform/vpp
+        git revert 67edf2f39c -n
+      displayName: 'revert 67edf2f39c'
     - script: |
         set -ex
-        git clone https://github.com/sonic-net/sonic-platform-vpp.git
-        mkdir repo
-        git clone https://gerrit.fd.io/r/vpp repo
-        cp -vr sonic-platform-vpp/vppbld/plugins/* repo/src/packages
-        cd repo
-        git apply ../sonic-platform-vpp/vppbld/vpp.patch
-        make UNATTENDED=y PLATFORM=vpp install-deps install-ext-deps
-        make UNATTENDED=y PLATFORM=vpp -j4 pkg-deb
-        mkdir artifacts
-        mv build-root/*.deb artifacts/
+        free -g
+        sudo modprobe overlay
+        sudo apt-get install -y acl
+        sudo bash -c "echo 1 > /proc/sys/vm/compact_memory"
+        NOBUSTER=1 NOBULLSEYE=1 ENABLE_DOCKER_BASE_PULL=y make $(BUILD_OPTIONS) $(CACHE_OPTIONS) configure PLATFORM=vpp
+      workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
+      displayName: 'make configure'
+    - script: |
+        NOBUSTER=1 NOBULLSEYE=1 ENABLE_DOCKER_BASE_PULL=y make $(BUILD_OPTIONS) $(CACHE_OPTIONS) target/debs/${{ parameters.debian_version }}/libvppinfra_main-release_amd64.deb
+        find target/debs/${{ parameters.debian_version }}/ -name "*vpp*.deb" -exec cp {} /$(System.DefaultWorkingDirectory)/artifacts \; 
+      workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
       displayName: "Build VPP packages from source"
-    - publish: $(System.DefaultWorkingDirectory)/repo/artifacts
+    - publish: $(System.DefaultWorkingDirectory)/artifacts
       artifact: vpp
       displayName: "Archive vpp debian packages"
+    - script: |
+        NOBUSTER=1 NOBULLSEYE=1 ENABLE_DOCKER_BASE_PULL=y make $(BUILD_OPTIONS) $(CACHE_OPTIONS) target/sonic-vpp.img.gz
+      workingDirectory: $(System.DefaultWorkingDirectory)/sonic-buildimage
+      displayName: "Build sonic-vpp image"
+    - publish: $(System.DefaultWorkingDirectory)/target/sonic-vpp.img.gz
+      artifact: sonic-vpp
+      displayName: "Archive sonic-vpp image"
+
