@@ -18,6 +18,7 @@
 
 #include "swss/logger.h"
 #include "swss/select.h"
+#include "swss/exec.h"
 
 #include "sai_serialize.h"
 #include "NotificationFdbEvent.h"
@@ -723,7 +724,9 @@ sai_status_t SwitchStateBase::vpp_create_vlan_member(
             return SAI_STATUS_FAILURE;
         }
     } else if (obj_type == SAI_OBJECT_TYPE_LAG) {
-        lag_swif_idx = lag_to_bond_if_idx(port_id);
+        platform_bond_info_t bond_info;
+        CHECK_STATUS(get_lag_bond_info(port_id, bond_info));
+        lag_swif_idx = bond_info.sw_if_index;
         SWSS_LOG_NOTICE("lag swif idx :%d",lag_swif_idx);
 	    hwifname =  vpp_get_swif_name(lag_swif_idx);
         SWSS_LOG_NOTICE("lag swif idx :%d swif_name:%s",lag_swif_idx, hwifname);
@@ -908,7 +911,9 @@ sai_status_t SwitchStateBase::vpp_remove_vlan_member(
             return SAI_STATUS_FAILURE;
         }
     } else if (obj_type == SAI_OBJECT_TYPE_LAG) {
-        uint32_t  lag_swif_idx = lag_to_bond_if_idx(port_id);
+        platform_bond_info_t bond_info;
+        CHECK_STATUS(get_lag_bond_info(port_id, bond_info));
+        uint32_t lag_swif_idx = bond_info.sw_if_index;
         SWSS_LOG_NOTICE("lag swif idx :%d",lag_swif_idx);
 	    hw_ifname =  vpp_get_swif_name(lag_swif_idx);
         SWSS_LOG_NOTICE("lag swif idx :%d swif_name:%s",lag_swif_idx, hw_ifname);
@@ -1118,16 +1123,16 @@ sai_status_t SwitchStateBase::vpp_delete_bvi_interface(
     return SAI_STATUS_SUCCESS;
 }
 
-uint32_t SwitchStateBase::lag_to_bond_if_idx (const sai_object_id_t lag_id)
+sai_status_t SwitchStateBase::get_lag_bond_info(const sai_object_id_t lag_id, platform_bond_info_t &bond_info)
 {
     auto it = m_lag_bond_map.find(lag_id);
-
     if (it == m_lag_bond_map.end())
     {
-        SWSS_LOG_ERROR("failed to find bond if idx for lag id: %x",lag_id);
-	return ~0;
+        SWSS_LOG_ERROR("failed to find bond info for lag id: %s", sai_serialize_object_id(lag_id).c_str());
+        return SAI_STATUS_ITEM_NOT_FOUND;
     }
-    return it->second;
+    bond_info = it->second;
+    return SAI_STATUS_SUCCESS;
 }
 
 int SwitchStateBase::remove_lag_to_bond_entry(const sai_object_id_t lag_oid)
@@ -1159,28 +1164,86 @@ sai_status_t SwitchStateBase:: createLag(
 
 }
 
+uint32_t SwitchStateBase::find_bond_id()
+{
+    std::stringstream cmd;
+    std::string res;
+    uint32_t bond_id = ~0;
+
+    // Get list of PortChannels from ip command
+    cmd << IP_CMD << " -o link show | awk -F': ' '{print $2}' | grep " << PORTCHANNEL_PREFIX;
+
+    int ret = swss::exec(cmd.str(), res);
+    if (ret) {
+        SWSS_LOG_ERROR("Command '%s' failed with rc %d", cmd.str().c_str(), ret);
+        return ~0;
+    }
+
+    if (res.length() == 0) {
+        SWSS_LOG_ERROR("No PortChannels found in output of command '%s': %s", cmd.str().c_str(), res.c_str());
+        return ~0;
+    }
+
+    SWSS_LOG_DEBUG("Output of ip command: %s", res.c_str());
+
+    std::unordered_set<uint32_t> existing_bond_ids;
+    for (const auto& entry : m_lag_bond_map) {
+        existing_bond_ids.insert(entry.second.id);
+    }
+
+    std::istringstream iss(res);
+    std::string line;
+    bool found_new_bond_id = false;
+    while (std::getline(iss, line)) {
+        std::string portchannel_name = line.substr(0, line.find('\n'));
+        bond_id = std::stoi(portchannel_name.substr(strlen(PORTCHANNEL_PREFIX)));
+
+        if (existing_bond_ids.find(bond_id) == existing_bond_ids.end()) {
+            SWSS_LOG_NOTICE("Found new bond id from PortChannel name: %d", bond_id);
+            found_new_bond_id = true;
+            break;
+        }
+    }
+
+    return found_new_bond_id ? bond_id : ~0;
+}
+
 sai_status_t SwitchStateBase::vpp_create_lag(
-	_In_ sai_object_id_t lag_id,
+        _In_ sai_object_id_t lag_id,
         _In_ uint32_t attr_count,
         _In_ const sai_attribute_t *attr_list)
 {
-    uint32_t bond_id, mode, lb;
+    uint32_t mode, lb;
+    uint32_t bond_id = ~0;
     uint32_t swif_idx = ~0;
     const char *hw_ifname;
     SWSS_LOG_ENTER();
 
-    //set mode and lb. ONiC config does not have provision to pass mode and load balancing algorithm
-    mode = VPP_BOND_API_MODE_ROUND_ROBIN;
+    LAG_MUTEX;
 
-    //if LACP is to be enabled in VPP
-    //mode = VPP_BOND_API_MODE_LACP;
+    // Extract bond_id from PortChannel name
+    bond_id = find_bond_id();
+    if (bond_id == ~0)
+    {
+        SWSS_LOG_ERROR("Bond id could not be found");
+        return SAI_STATUS_FAILURE;
+    }
+
+    // Set mode and lb. SONiC config does not have provision to pass mode and load balancing algorithm
+    mode = VPP_BOND_API_MODE_XOR;
     lb = VPP_BOND_API_LB_ALGO_L23;
-    bond_id = ~0;
 
     create_bond_interface(bond_id, mode, lb, &swif_idx);
-    SWSS_LOG_NOTICE("vpp bond interfae created if index:%d\n", swif_idx);
-    //update the lag to bond map
-    m_lag_bond_map[lag_id] = swif_idx;
+    if (swif_idx == ~0)
+    {
+        SWSS_LOG_ERROR("failed to create bond interface in VPP for %s", sai_serialize_object_id(lag_id).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    // Update the lag to bond map
+    platform_bond_info_t bond_info = {swif_idx, bond_id, false};
+    m_lag_bond_map[lag_id] = bond_info;
+    SWSS_LOG_NOTICE("vpp bond interface created for lag_id:%s, swif index:%d, bond_id:%d\n", sai_serialize_object_id(lag_id).c_str(), swif_idx, bond_id);
     refresh_interfaces_list();
 
     // Set the bond interface state up
@@ -1190,12 +1253,14 @@ sai_status_t SwitchStateBase::vpp_create_lag(
     return SAI_STATUS_SUCCESS;
 }
 
-sai_status_t SwitchStateBase:: removeLag(
+sai_status_t SwitchStateBase::removeLag(
         _In_ sai_object_id_t lag_oid)
 {
     SWSS_LOG_ENTER();
 
-    vpp_remove_lag(lag_oid);
+    LAG_MUTEX;
+
+    CHECK_STATUS_QUIET(vpp_remove_lag(lag_oid));
     auto sid = sai_serialize_object_id(lag_oid);
     CHECK_STATUS(remove_internal(SAI_OBJECT_TYPE_LAG, sid));
     return SAI_STATUS_SUCCESS;
@@ -1204,10 +1269,12 @@ sai_status_t SwitchStateBase:: removeLag(
 sai_status_t SwitchStateBase::vpp_remove_lag(
         _In_ sai_object_id_t lag_oid)
 {
+    int ret;
     SWSS_LOG_ENTER();
 
-    uint32_t lag_swif_idx = lag_to_bond_if_idx(lag_oid);
-    SWSS_LOG_NOTICE("lag swif idx :%d",lag_swif_idx);
+    platform_bond_info_t bond_info;
+    CHECK_STATUS(get_lag_bond_info(lag_oid, bond_info));
+    uint32_t lag_swif_idx = bond_info.sw_if_index;
     auto lag_ifname =  vpp_get_swif_name(lag_swif_idx);
     SWSS_LOG_NOTICE("lag swif idx :%d swif_name:%s",lag_swif_idx, lag_ifname);
     if (lag_ifname == NULL)
@@ -1216,8 +1283,13 @@ sai_status_t SwitchStateBase::vpp_remove_lag(
         return SAI_STATUS_FAILURE;
     }
 
-    //Delete the Bond interface
-    delete_bond_interface(lag_ifname);
+    //Delete the Bond interface (also deletes the lcp pair)
+    ret = delete_bond_interface(lag_ifname);
+    if (ret != 0)
+    {
+        SWSS_LOG_ERROR("failed to delete bond interface in VPP for %s", sai_serialize_object_id(lag_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
     remove_lag_to_bond_entry(lag_oid);
     refresh_interfaces_list();
 
@@ -1245,7 +1317,9 @@ sai_status_t SwitchStateBase::vpp_create_lag_member(
 {
     bool is_long_timeout = false;
     bool is_passive = false;
+    int ret;
     uint32_t bond_if_idx;
+    uint32_t bond_id;
     sai_object_id_t lag_oid, lag_port_oid;
     SWSS_LOG_ENTER();
 
@@ -1266,15 +1340,18 @@ sai_status_t SwitchStateBase::vpp_create_lag_member(
                 sai_serialize_object_type(obj_type).c_str());
         return SAI_STATUS_FAILURE;
     }
-    bond_if_idx = lag_to_bond_if_idx(lag_oid);
-    SWSS_LOG_NOTICE("bond if index is %d\n",bond_if_idx);
+
+    platform_bond_info_t bond_info;
+    CHECK_STATUS(get_lag_bond_info(lag_oid, bond_info));
+    bond_if_idx = bond_info.sw_if_index;
+    SWSS_LOG_NOTICE("bond if index is %d\n", bond_if_idx);
 
     attr_type = sai_metadata_get_attr_by_id(SAI_LAG_MEMBER_ATTR_PORT_ID, attr_count, attr_list);
 
     if (attr_type == NULL)
     {
         SWSS_LOG_ERROR("attr SAI_LAG_MEMBER_ATTR_PORT_ID was not present\n");
-	return SAI_STATUS_FAILURE;
+        return SAI_STATUS_FAILURE;
     }
 
     lag_port_oid = attr_type->value.oid;
@@ -1294,13 +1371,53 @@ sai_status_t SwitchStateBase::vpp_create_lag_member(
     if (found == true)
     {
         hwifname = tap_to_hwif_name(if_name.c_str());
-	SWSS_LOG_NOTICE("hwif name for port is %s",hwifname);
+        SWSS_LOG_NOTICE("hwif name for port is %s",hwifname);
     }else {
         SWSS_LOG_NOTICE("No ports found for lag port id :%s",sai_serialize_object_id(lag_port_oid).c_str());
         return SAI_STATUS_FAILURE;
     }
 
-    create_bond_member(bond_if_idx, hwifname,is_passive,is_long_timeout);
+    ret = create_bond_member(bond_if_idx, hwifname, is_passive, is_long_timeout);
+    if (ret != 0)
+    {
+        SWSS_LOG_ERROR("failed to add bond member in VPP for %s", sai_serialize_object_id(lag_port_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
+    if (!bond_info.lcp_created) {
+        // create tap and lcp for the Bond intf after first member is added to ensure tap mac = member mac = bond mac
+        std::ostringstream tap_stream;
+        bond_id = bond_info.id;
+        tap_stream << "be" << bond_id;
+        std::string tap = tap_stream.str();
+
+        const char *hw_ifname;
+        hw_ifname = vpp_get_swif_name(bond_if_idx);
+        configure_lcp_interface(hw_ifname, tap.c_str(), true);
+
+        // add tc filter to redirect traffic from tap to PortChannel
+        std::stringstream cmd;
+        std::string res;
+
+        cmd << "tc qdisc add dev be" << bond_id << " ingress";
+        ret = swss::exec(cmd.str(), res);
+        if (ret) {
+            SWSS_LOG_ERROR("Command '%s' failed with rc %d", cmd.str().c_str(), ret);
+        }
+
+        cmd.str("");
+        cmd.clear();
+        cmd << "tc filter add dev be" << bond_id << " parent ffff: protocol all prio 2 u32 match u32 0 0 flowid 1:1 action mirred ingress redirect dev PortChannel" << bond_id;
+        ret = swss::exec(cmd.str(), res);
+        if (ret) {
+            SWSS_LOG_ERROR("Command '%s' failed with rc %d", cmd.str().c_str(), ret);
+        }
+
+        // update the lag to bond map
+        bond_info.lcp_created = true;
+        m_lag_bond_map[lag_oid] = bond_info;
+    }
+
     return SAI_STATUS_SUCCESS;
 }
 
@@ -1309,7 +1426,7 @@ sai_status_t SwitchStateBase::removeLagMember(
 {
     SWSS_LOG_ENTER();
 
-    vpp_remove_lag_member(lag_member_oid);
+    CHECK_STATUS_QUIET(vpp_remove_lag_member(lag_member_oid));
 
     auto sid = sai_serialize_object_id(lag_member_oid);
 
@@ -1321,6 +1438,7 @@ sai_status_t SwitchStateBase::removeLagMember(
 sai_status_t SwitchStateBase::vpp_remove_lag_member(
         _In_ sai_object_id_t lag_member_oid)
 {
+    int ret;
     SWSS_LOG_ENTER();
 
     sai_attribute_t attr;
@@ -1377,7 +1495,13 @@ sai_status_t SwitchStateBase::vpp_remove_lag_member(
         return SAI_STATUS_FAILURE;
     }
 
-    delete_bond_member(lag_member_ifname);
+    ret = delete_bond_member(lag_member_ifname);
+    if (ret != 0)
+    {
+        SWSS_LOG_ERROR("failed to delete bond member in VPP for %s", sai_serialize_object_id(port_oid).c_str());
+        return SAI_STATUS_FAILURE;
+    }
+
     return SAI_STATUS_SUCCESS;
 }
 

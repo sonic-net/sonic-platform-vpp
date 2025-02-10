@@ -309,9 +309,10 @@
 void classify_get_trace_chain(void ){}
 void os_exit(int code) {}
 
-#define SAIVPP_DEBUG(format,args...) {}
-#define SAIVPP_WARN clib_warning
-#define SAIVPP_ERROR clib_error
+//#define SAIVPP_DEBUG(format,args...) {}
+#define SAIVPP_DEBUG(format,args...) clib_warning("PID: %d, TID: %ld, " format, getpid(), syscall(SYS_gettid), ##args)
+#define SAIVPP_WARN(format,args...) clib_warning("PID: %d, TID: %ld, " format, getpid(), syscall(SYS_gettid), ##args)
+#define SAIVPP_ERROR(format,args...) clib_error("PID: %d, TID: %ld, " format, getpid(), syscall(SYS_gettid), ##args)
 
 /**
  * Wait for result and retry if necessary. The retry is necessary because there could be unsolicited
@@ -3364,7 +3365,7 @@ int create_bond_interface(uint32_t bond_id, uint32_t mode, uint32_t lb, uint32_t
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -3404,7 +3405,7 @@ int delete_bond_interface(const char *hwif_name)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -3417,7 +3418,7 @@ int create_bond_member(uint32_t bond_sw_if_index, const char *hwif_name, bool is
     int ret;
 
 
-    SAIVPP_WARN("Adding member to bond interface: \n");
+    SAIVPP_WARN("Adding member %s to bond interface %u \n", hwif_name, bond_sw_if_index);
     VPP_LOCK();
 
     __plugin_msg_base = bond_msg_id_base;
@@ -3446,7 +3447,7 @@ int create_bond_member(uint32_t bond_sw_if_index, const char *hwif_name, bool is
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -3490,7 +3491,7 @@ int delete_bond_member(const char * hwif_name)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 

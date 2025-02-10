@@ -39,12 +39,19 @@
 #include "SwitchStateBaseAcl.h"
 
 #define BFD_MUTEX std::lock_guard<std::mutex> lock(bfdMapMutex);
+#define LAG_MUTEX std::lock_guard<std::mutex> lock(LagMutex);
 
 #define SAI_VPP_FDB_INFO "SAI_VPP_FDB_INFO"
 
 #define DEFAULT_VLAN_NUMBER 1
 
 #define MAX_OBJLIST_LEN 128
+
+#define IP_CMD "/sbin/ip"
+
+#define PORTCHANNEL_PREFIX "PortChannel"
+
+#define BONDETHERNET_PREFIX "BondEthernet"
 
 #define CHECK_STATUS(status) {                                  \
     sai_status_t _status = (status);                            \
@@ -65,6 +72,12 @@ typedef struct vpp_ace_cntr_info_ {
     uint32_t acl_index;
     uint32_t ace_index;
 } vpp_ace_cntr_info_t;
+
+typedef struct platform_bond_info_ {
+    uint32_t sw_if_index;
+    uint32_t id;
+    bool lcp_created;
+} platform_bond_info_t;
 
 namespace saivpp
 {
@@ -895,6 +908,12 @@ namespace saivpp
             sai_status_t removeRouterif(
                     _In_ sai_object_id_t objectId);
 
+            sai_status_t vpp_set_interface_attributes(
+		    _In_ sai_object_id_t obj_id,
+                    _In_ uint32_t attr_count,
+                    _In_ const sai_attribute_t *attr_list,
+                    _In_ uint16_t vlan_id);
+
 	    sai_status_t vpp_create_router_interface(
 		    _In_ uint32_t attr_count,
 		    _In_ const sai_attribute_t *attr_list);
@@ -1319,7 +1338,11 @@ namespace saivpp
 	    void populate_if_mapping();
 	    const char *tap_to_hwif_name(const char *name);
             const char *hwif_to_tap_name(const char *name);
-            uint32_t lag_to_bond_if_idx (const sai_object_id_t lag_id);
+
+            std::mutex LagMutex;
+
+            uint32_t find_bond_id();
+            sai_status_t get_lag_bond_info(const sai_object_id_t lag_id, platform_bond_info_t &bond_info);
             int remove_lag_to_bond_entry (const sai_object_id_t lag_id);
 
             void vppProcessEvents ();
@@ -1332,7 +1355,7 @@ namespace saivpp
             bool m_run_vpp_events_thread = true;
             bool VppEventsThreadStarted = false;
 	    std::shared_ptr<std::thread> m_vpp_thread;
-	    std::map<sai_object_id_t, uint32_t> m_lag_bond_map;
+	    std::map<sai_object_id_t, platform_bond_info_t> m_lag_bond_map;
 
         private:
             static int currentMaxInstance;
