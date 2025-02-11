@@ -124,36 +124,32 @@ As such, we need to call `configure_lcp_pair` for the BondEthernet interface to 
 
 To resolve (1), we defer calling `configure_lcp_pair` until the first member is added, and then delete the pair when the LAG itself is deleted
 
-Addressing (2) is a little more complicated. The solution that worked is to use the Traffic Control (tc) utility in the syncd container to create a filter and mirror packets from the tap interface to the PortChannel. This resolves the ARP entry and ping. However, we notice the ping packets are duplicated in this case, so we can limit the filter to only mirror ARP and ND packets.
+Addressing (2) is a little more complicated. The solution that worked is to use the Traffic Control (tc) utility in the syncd container to create a filter and mirror packets from the tap interface to the PortChannel. This resolves the ARP entry and ping. 
 
 ```
 tc qdisc add dev <bond-tap-interface> ingress
 tc filter add dev <bond-tap-interface> parent ffff: \
    protocol arp prio 2 u32 \
    match u32 0 0 flowid 1:1 \
-   action mirred ingress mirror dev <port-channel-interface>
+   action mirred ingress redirect dev <port-channel-interface>
 ```
 
-
-### Next
-- Experiment with tc filtering to nail down select traffic mirroring or explore alternative designs.
 
 <a id="item-8"></a>
 ## Status
 
-So far, with the abovementioned changes, the PortChannel comes up, and v4/v6 ping work. However, in addition to productizing the solution above, there are additional items to be addressed:
 
 Item | Done | Remaining
 --- | --- | ---
-LACP punt/inject support in VPP | Coded and submitted for review in VPP https://gerrit.fd.io/r/c/vpp/+/42124 | <li>Complete review and commit</li><li> WIP: Add ethertype API/CLI</li>
-Add IP to PortChannel | Coded solution using `ip` command to detect newly added PortChannel and create BondEthernet with same id | Productize solution
-Ping between PortChannels | Coded solution using `tc` utility to redirect ARP/ND traffic between tap and Sonic intf | <li>[DONE] Address duplicate packets if continuing with `tc` solution</li><li>Explore alternative design using common punt port (Potentially larger project)</li><li>Productize</ul>
-Port Channel config | Works with sudo config with delay. | Fix bug when all applied at once... Ensure json works |
-PortChannel Subinterfaces | Identified changes required to provision PortChannel subintf in VPP and apply IP | <li>Ping fails</li><li>Code/Productize solution</li>
-Punt/Inject | | Verify and fix Non-ARP/ping punt/inject path
-Testing | Simple Bring-up and Ping of PortChannel with 2 members | <li>Add/remove members, v4/v6/subif/multiple-members/mutiple-portchannel/full lifecycle tests</li><li>Any sonic-mgmt tests?</li>
-Bug Fixing | | <li>Occasional PortCannel configuration failure when all configs copy/pasted at once</li><li>orchagent crash when running tcpdump on PortChannel</li>
-Hashing algo selection | Coded using XOR & L2L3 | (Optional, from review comments) Ability to switchover between L2L3 and L3L4 depending on presence of IP?
+LACP punt/inject support in VPP | Coded and submitted for review in VPP https://gerrit.fd.io/r/c/vpp/+/42124. Addressed first round of review comments. | <li>Complete review and commit</li>
+Add IP to PortChannel | Coded solution using `ip` command to detect newly added PortChannel and create BondEthernet with same id | <li>Complete review and commit</li>
+Ping between PortChannels | Coded solution using `tc` utility to redirect traffic between tap and Sonic intf | <li>(Future) Explore alternative design using common punt port (Potentially larger project)</li>
+Testing | Bring-up, ping of PortChannel with 2 members, add/remove members, v4/v6/multiple-members, multiple-portchannels | Sonic-mgmt testing
+Sonic-mgmt t1-28-lag testing | Brought-up t1-28-lag TOPO. Ran LAG tests | <li> Debug and fix failing LAG TCs </li>
+Adapt to new LCP VPP API once upstreamed |  | Potentially Phase 2 given slow VPP review process. For now, we can commit the tested non-API version of the changes to the vpp.patch file.
+Hashing algo selection | Coded using XOR & L2L3 | (Optional, TBD) Ability to switchover between L2L3 and L3L4 depending on presence of IP (or other scheme)
+(Phase 2 - T0-lag) PortChannel Subinterfaces | Identified changes required to provision PortChannel subintf in VPP and apply IP | <li>Ping fails</li><li>May require redesign to add PortChannel support to existing interface APIs</li><li>Bring-up t0-lag topo and run LAG tests</li>
+
 
 
 ## References
