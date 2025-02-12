@@ -2,6 +2,7 @@ SUBDIRS = vppxlate
 
 SAI_PATH = /sonic/src/sonic-sairedis/SAI
 AM_CXXFLAGS = $(SAIINC) -I/usr/include/sai -I/usr/include/libnl3
+export AM_CXXFLAGS
 lib_LTLIBRARIES = libsai.la
 
 noinst_LIBRARIES = libSaiVPP.a
@@ -68,7 +69,8 @@ libSaiVPP_a_SOURCES = \
 					  VirtualSwitchSaiInterfaceFdb.cpp \
 					  VirtualSwitchSaiInterfacePort.cpp \
 					  SaiObjectDB.cpp \
-					  TunnelManager.cpp
+					  TunnelManager.cpp \
+					  SwitchStateBaseSRv6.cpp
 
 BUILT_SOURCES = sai_vpp.cpp
 
