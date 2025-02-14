@@ -1258,8 +1258,6 @@ sai_status_t SwitchStateBase::removeLag(
 {
     SWSS_LOG_ENTER();
 
-    LAG_MUTEX;
-
     CHECK_STATUS_QUIET(vpp_remove_lag(lag_oid));
     auto sid = sai_serialize_object_id(lag_oid);
     CHECK_STATUS(remove_internal(SAI_OBJECT_TYPE_LAG, sid));
@@ -1271,6 +1269,8 @@ sai_status_t SwitchStateBase::vpp_remove_lag(
 {
     int ret;
     SWSS_LOG_ENTER();
+
+    LAG_MUTEX;
 
     platform_bond_info_t bond_info;
     CHECK_STATUS(get_lag_bond_info(lag_oid, bond_info));
@@ -1376,6 +1376,8 @@ sai_status_t SwitchStateBase::vpp_create_lag_member(
         SWSS_LOG_NOTICE("No ports found for lag port id :%s",sai_serialize_object_id(lag_port_oid).c_str());
         return SAI_STATUS_FAILURE;
     }
+
+    LAG_MUTEX;
 
     ret = create_bond_member(bond_if_idx, hwifname, is_passive, is_long_timeout);
     if (ret != 0)

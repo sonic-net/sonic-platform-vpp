@@ -39,7 +39,7 @@
 #include "SwitchStateBaseAcl.h"
 
 #define BFD_MUTEX std::lock_guard<std::mutex> lock(bfdMapMutex);
-#define LAG_MUTEX std::lock_guard<std::mutex> lock(LagMutex);
+#define LAG_MUTEX std::lock_guard<std::mutex> lock(LagMapMutex);
 
 #define SAI_VPP_FDB_INFO "SAI_VPP_FDB_INFO"
 
@@ -1339,8 +1339,6 @@ namespace saivpp
 	    const char *tap_to_hwif_name(const char *name);
             const char *hwif_to_tap_name(const char *name);
 
-            std::mutex LagMutex;
-
             uint32_t find_bond_id();
             sai_status_t get_lag_bond_info(const sai_object_id_t lag_id, platform_bond_info_t &bond_info);
             int remove_lag_to_bond_entry (const sai_object_id_t lag_id);
@@ -1356,6 +1354,7 @@ namespace saivpp
             bool VppEventsThreadStarted = false;
 	    std::shared_ptr<std::thread> m_vpp_thread;
 	    std::map<sai_object_id_t, platform_bond_info_t> m_lag_bond_map;
+	    std::mutex LagMapMutex;
 
         private:
             static int currentMaxInstance;
