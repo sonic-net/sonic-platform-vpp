@@ -87,12 +87,12 @@ cpu {
 	## Skipped CPU core(s) are not used for pinning main thread and working thread(s).
 	## The main thread is automatically pinned to the first available CPU core and worker(s)
 	## are pinned to next free CPU core(s) after core assigned to main thread
-	# skip-cores 4
+	skip-cores 1
 
 	## Specify a number of workers to be created
 	## Workers are pinned to N consecutive CPU cores while skipping "skip-cores" CPU core(s)
 	## and main thread's CPU core
-	# workers 2
+	workers 2
 
 	## Set scheduling policy and priority of main and worker threads
 
