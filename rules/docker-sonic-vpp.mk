@@ -43,9 +43,9 @@ $(DOCKER_SONIC_VPP)_PYTHON_WHEELS += $(SWSSSDK_PY3) \
 
 ifeq ($(INSTALL_DEBUG_TOOLS), y)
 $(DOCKER_SONIC_VPP)_DEPENDS += $(LIBSWSSCOMMON_DBG) \
-                              $(LIBSAIREDIS_DBG) \
-                              $(LIBSAIVPP_DBG) \
-                              $(SYNCD_VPP_DBG)
+                              $(LIBSAIREDIS_DBGSYM) \
+                              $(LIBSAIVPP_DBGSYM) \
+                              $(SYNCD_VPP_DBGSYM)
 endif
 
 $(DOCKER_SONIC_VPP)_FILES += $(CONFIGDB_LOAD_SCRIPT) \
