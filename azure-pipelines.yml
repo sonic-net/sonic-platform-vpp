@@ -82,13 +82,12 @@ stages:
       displayName: "Install libnl3"
     - script: |
         set -ex
-        git clone https://github.com/sonic-net/sonic-platform-vpp.git
         mkdir repo
         git clone https://gerrit.fd.io/r/vpp repo
-        cp -vr sonic-platform-vpp/vppbld/plugins/* repo/src/plugins/
+        cp -vr $(System.DefaultWorkingDirectory)/vppbld/plugins/* repo/src/plugins/
         cd repo
         git checkout $(git log --until "7 days ago" -1 --format="%h")
-        git apply ../sonic-platform-vpp/vppbld/vpp.patch
+        git apply $(System.DefaultWorkingDirectory)/vppbld/vpp.patch
         make UNATTENDED=y PLATFORM=vpp install-deps install-ext-deps
         make UNATTENDED=y PLATFORM=vpp -j4 pkg-deb
         mkdir artifacts
