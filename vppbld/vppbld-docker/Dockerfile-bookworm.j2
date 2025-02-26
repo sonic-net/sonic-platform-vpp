@@ -17,7 +17,7 @@ COPY /debs/{{ pkg }} /app
 {% endfor %} 
 RUN apt-get update 
 
-RUN apt-get install -f -y make curl sudo git
+RUN apt-get install -f -y make curl sudo git clang
 
 {% for pkg in VPP_DOCKER_DEBS.split() %}
 RUN dpkg -i /app/{{ pkg }} || apt-get install -f -y
