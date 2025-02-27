@@ -526,7 +526,7 @@ sai_status_t SwitchStateBase::vpp_set_port_mtu (
 	_In_ uint32_t mtu)
 {
     if (is_ip_nbr_active() == false) {
-	return SAI_STATUS_SUCCESS;
+        return SAI_STATUS_SUCCESS;
     }
 
     std::string ifname;
@@ -534,21 +534,20 @@ sai_status_t SwitchStateBase::vpp_set_port_mtu (
     if (vpp_get_hwif_name(object_id, vlan_id, ifname) == true) {
         const char *hwif_name = ifname.c_str();
 
-	hw_interface_set_mtu(hwif_name, mtu);
-	SWSS_LOG_NOTICE("Updating router interface mtu %s to %u", hwif_name,
-			mtu);
+        hw_interface_set_mtu(hwif_name, mtu);
+        SWSS_LOG_NOTICE("Updating router interface mtu %s to %u", hwif_name,
+                mtu);
     }
     return SAI_STATUS_SUCCESS;
 }
 
 sai_status_t SwitchStateBase::vpp_set_interface_mtu (
         _In_ sai_object_id_t object_id,
-	_In_ uint32_t vlan_id,
-	_In_ uint32_t mtu,
-	int type)
+        _In_ uint32_t vlan_id,
+        _In_ uint32_t mtu)
 {
     if (is_ip_nbr_active() == false) {
-	return SAI_STATUS_SUCCESS;
+        return SAI_STATUS_SUCCESS;
     }
 
     std::string ifname;
@@ -556,9 +555,8 @@ sai_status_t SwitchStateBase::vpp_set_interface_mtu (
     if (vpp_get_hwif_name(object_id, vlan_id, ifname) == true) {
         const char *hwif_name = ifname.c_str();
 
-        sw_interface_set_mtu(hwif_name, mtu, type);
-	SWSS_LOG_NOTICE("Updating router interface mtu %s to %u", hwif_name,
-			mtu);
+        sw_interface_set_mtu(hwif_name, mtu);
+        SWSS_LOG_NOTICE("Updating router interface mtu %s to %u", hwif_name, mtu);
     }
     return SAI_STATUS_SUCCESS;
 }
@@ -1583,8 +1581,7 @@ sai_status_t SwitchStateBase::vpp_create_router_interface(
 
     if (attr_type_mtu != NULL)
     {
-        vpp_set_interface_mtu(obj_id, vlan_id, attr_type_mtu->value.u32, AF_INET);
-	vpp_set_interface_mtu(obj_id, vlan_id, attr_type_mtu->value.u32, AF_INET6);
+        vpp_set_interface_mtu(obj_id, vlan_id, attr_type_mtu->value.u32);
     }
 
     bool v4_is_up = false, v6_is_up = false;
@@ -1683,8 +1680,7 @@ sai_status_t SwitchStateBase::vpp_update_router_interface(
 
     if (attr_type_mtu != NULL)
     {
-        vpp_set_interface_mtu(obj_id, vlan_id, attr_type_mtu->value.u32, AF_INET);
-	vpp_set_interface_mtu(obj_id, vlan_id, attr_type_mtu->value.u32, AF_INET6);
+        vpp_set_interface_mtu(obj_id, vlan_id, attr_type_mtu->value.u32);
     }
 
     bool v4_is_up = false, v6_is_up = false;
