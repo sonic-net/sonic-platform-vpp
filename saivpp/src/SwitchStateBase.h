@@ -908,12 +908,6 @@ namespace saivpp
             sai_status_t removeRouterif(
                     _In_ sai_object_id_t objectId);
 
-            sai_status_t vpp_set_interface_attributes(
-		    _In_ sai_object_id_t obj_id,
-                    _In_ uint32_t attr_count,
-                    _In_ const sai_attribute_t *attr_list,
-                    _In_ uint16_t vlan_id);
-
 	    sai_status_t vpp_create_router_interface(
 		    _In_ uint32_t attr_count,
 		    _In_ const sai_attribute_t *attr_list);
