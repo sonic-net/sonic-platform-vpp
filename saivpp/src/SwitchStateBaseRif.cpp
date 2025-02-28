@@ -1633,6 +1633,13 @@ sai_status_t SwitchStateBase::vpp_create_router_interface(
     {
 	v6_is_up = attr_type_v6->value.booldata;
     }
+
+    if (attr_type_v4 != NULL || attr_type_v6 != NULL)
+    {
+        return vpp_set_interface_state(obj_id, vlan_id, (v4_is_up || v6_is_up));
+    } else {
+	return SAI_STATUS_SUCCESS;
+    }
 }
 
 sai_status_t SwitchStateBase::vpp_update_router_interface(
