@@ -87,6 +87,7 @@ stages:
         git clone https://gerrit.fd.io/r/vpp repo
         cp -vr sonic-platform-vpp/vppbld/plugins/* repo/src/plugins/
         cd repo
+        git checkout $(git log --until "21 days ago" -1 --format="%h")
         git apply ../sonic-platform-vpp/vppbld/vpp.patch
         make UNATTENDED=y PLATFORM=vpp install-deps install-ext-deps
         make UNATTENDED=y PLATFORM=vpp -j4 pkg-deb

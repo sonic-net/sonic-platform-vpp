@@ -971,15 +971,16 @@ namespace saivpp
                     _In_ sai_object_id_t object_id,
                     _In_ uint32_t vlan_id,
                     _In_ bool is_up);
+            // set ethernet interface mtu including L2 header
             sai_status_t vpp_set_port_mtu (
                     _In_ sai_object_id_t object_id,
                     _In_ uint32_t vlan_id,
                     _In_ uint32_t mtu);
+            // set sw interface mtu excluding L2 header
             sai_status_t vpp_set_interface_mtu (
                     _In_ sai_object_id_t object_id,
                     _In_ uint32_t vlan_id,
-                    _In_ uint32_t mtu,
-                    _In_ int type);
+                    _In_ uint32_t mtu);
 
             sai_status_t UpdatePort(
                    _In_ sai_object_id_t object_id,

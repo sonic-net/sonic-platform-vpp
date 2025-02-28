@@ -536,7 +536,7 @@ sai_status_t SwitchStateBase::vpp_set_port_mtu (
 	_In_ uint32_t mtu)
 {
     if (is_ip_nbr_active() == false) {
-	return SAI_STATUS_SUCCESS;
+        return SAI_STATUS_SUCCESS;
     }
 
     std::string ifname;
@@ -544,21 +544,20 @@ sai_status_t SwitchStateBase::vpp_set_port_mtu (
     if (vpp_get_hwif_name(object_id, vlan_id, ifname) == true) {
         const char *hwif_name = ifname.c_str();
 
-	hw_interface_set_mtu(hwif_name, mtu);
-	SWSS_LOG_NOTICE("Updating router interface mtu %s to %u", hwif_name,
-			mtu);
+        hw_interface_set_mtu(hwif_name, mtu);
+        SWSS_LOG_NOTICE("Updating router interface mtu %s to %u", hwif_name,
+                mtu);
     }
     return SAI_STATUS_SUCCESS;
 }
 
 sai_status_t SwitchStateBase::vpp_set_interface_mtu (
         _In_ sai_object_id_t object_id,
-	_In_ uint32_t vlan_id,
-	_In_ uint32_t mtu,
-	int type)
+        _In_ uint32_t vlan_id,
+        _In_ uint32_t mtu)
 {
     if (is_ip_nbr_active() == false) {
-	return SAI_STATUS_SUCCESS;
+        return SAI_STATUS_SUCCESS;
     }
 
     std::string ifname;
@@ -566,9 +565,8 @@ sai_status_t SwitchStateBase::vpp_set_interface_mtu (
     if (vpp_get_hwif_name(object_id, vlan_id, ifname) == true) {
         const char *hwif_name = ifname.c_str();
 
-        sw_interface_set_mtu(hwif_name, mtu, type);
-	SWSS_LOG_NOTICE("Updating router interface mtu %s to %u", hwif_name,
-			mtu);
+        sw_interface_set_mtu(hwif_name, mtu);
+        SWSS_LOG_NOTICE("Updating router interface mtu %s to %u", hwif_name, mtu);
     }
     return SAI_STATUS_SUCCESS;
 }
@@ -1481,43 +1479,6 @@ int SwitchStateBase::vpp_get_vrf_id (const char *linux_ifname, uint32_t *vrf_id)
     return 0;
 }
 
-sai_status_t SwitchStateBase::vpp_set_interface_attributes(
-        _In_ sai_object_id_t obj_id,
-        _In_ uint32_t attr_count,
-        _In_ const sai_attribute_t *attr_list,
-        _In_ uint16_t vlan_id)
-{
-    auto attr_type_mtu = sai_metadata_get_attr_by_id(SAI_ROUTER_INTERFACE_ATTR_MTU, attr_count, attr_list);
-
-    if (attr_type_mtu != NULL)
-    {
-        vpp_set_interface_mtu(obj_id, vlan_id, attr_type_mtu->value.u32, AF_INET);
-        vpp_set_interface_mtu(obj_id, vlan_id, attr_type_mtu->value.u32, AF_INET6);
-    }
-
-    bool v4_is_up = false, v6_is_up = false;
-
-    auto attr_type_v4 = sai_metadata_get_attr_by_id(SAI_ROUTER_INTERFACE_ATTR_ADMIN_V4_STATE, attr_count, attr_list);
-
-    if (attr_type_v4 != NULL)
-    {
-        v4_is_up = attr_type_v4->value.booldata;
-    }
-    auto attr_type_v6 = sai_metadata_get_attr_by_id(SAI_ROUTER_INTERFACE_ATTR_ADMIN_V6_STATE, attr_count, attr_list);
-
-    if (attr_type_v6 != NULL)
-    {
-        v6_is_up = attr_type_v6->value.booldata;
-    }
-
-    if (attr_type_v4 != NULL || attr_type_v6 != NULL)
-    {
-        return vpp_set_interface_state(obj_id, vlan_id, (v4_is_up || v6_is_up));
-    } else {
-        return SAI_STATUS_SUCCESS;
-    }
-}
-
 sai_status_t SwitchStateBase::vpp_create_router_interface(
         _In_ uint32_t attr_count,
         _In_ const sai_attribute_t *attr_list)
@@ -1651,8 +1612,27 @@ sai_status_t SwitchStateBase::vpp_create_router_interface(
 	SWSS_LOG_NOTICE("Setting interface vrf on hwif_name %s", hwif_name);
 	set_interface_vrf(hwif_name, vlan_id, vrf_id, false);
     }
+    auto attr_type_mtu = sai_metadata_get_attr_by_id(SAI_ROUTER_INTERFACE_ATTR_MTU, attr_count, attr_list);
 
-    return vpp_set_interface_attributes(obj_id, attr_count, attr_list, vlan_id);
+    if (attr_type_mtu != NULL)
+    {
+        vpp_set_interface_mtu(obj_id, vlan_id, attr_type_mtu->value.u32);
+    }
+
+    bool v4_is_up = false, v6_is_up = false;
+
+    auto attr_type_v4 = sai_metadata_get_attr_by_id(SAI_ROUTER_INTERFACE_ATTR_ADMIN_V4_STATE, attr_count, attr_list);
+
+    if (attr_type_v4 != NULL)
+    {
+	v4_is_up = attr_type_v4->value.booldata;
+    }
+    auto attr_type_v6 = sai_metadata_get_attr_by_id(SAI_ROUTER_INTERFACE_ATTR_ADMIN_V6_STATE, attr_count, attr_list);
+
+    if (attr_type_v6 != NULL)
+    {
+	v6_is_up = attr_type_v6->value.booldata;
+    }
 }
 
 sai_status_t SwitchStateBase::vpp_update_router_interface(
@@ -1724,7 +1704,34 @@ sai_status_t SwitchStateBase::vpp_update_router_interface(
 
     uint16_t vlan_id = attr.value.u16;
 
-    return vpp_set_interface_attributes(obj_id, attr_count, attr_list, vlan_id);
+    auto attr_type_mtu = sai_metadata_get_attr_by_id(SAI_ROUTER_INTERFACE_ATTR_MTU, attr_count, attr_list);
+
+    if (attr_type_mtu != NULL)
+    {
+        vpp_set_interface_mtu(obj_id, vlan_id, attr_type_mtu->value.u32);
+    }
+
+    bool v4_is_up = false, v6_is_up = false;
+
+    auto attr_type_v4 = sai_metadata_get_attr_by_id(SAI_ROUTER_INTERFACE_ATTR_ADMIN_V4_STATE, attr_count, attr_list);
+
+    if (attr_type_v4 != NULL)
+    {
+	v4_is_up = attr_type_v4->value.booldata;
+    }
+    auto attr_type_v6 = sai_metadata_get_attr_by_id(SAI_ROUTER_INTERFACE_ATTR_ADMIN_V6_STATE, attr_count, attr_list);
+
+    if (attr_type_v6 != NULL)
+    {
+	v6_is_up = attr_type_v6->value.booldata;
+    }
+
+    if (attr_type_v4 != NULL || attr_type_v6 != NULL)
+    {
+        return vpp_set_interface_state(obj_id, vlan_id, (v4_is_up || v6_is_up));
+    } else {
+	return SAI_STATUS_SUCCESS;
+    }
 }
 
 sai_status_t SwitchStateBase::vpp_router_interface_remove_vrf(
