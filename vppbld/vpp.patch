@@ -1,8 +1,8 @@
 diff --git a/Makefile b/Makefile
-index 3144905f3..04560cf2c 100644
+index 6bd4ab611..128b462e5 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -78,7 +78,7 @@ DEB_DEPENDS += libffi-dev python3-ply libunwind-dev
+@@ -96,7 +96,7 @@ DEB_DEPENDS += libffi-dev python3-ply libunwind-dev
  DEB_DEPENDS += cmake ninja-build python3-jsonschema python3-yaml
  DEB_DEPENDS += python3-venv  # ensurepip
  DEB_DEPENDS += python3-dev python3-pip
@@ -11,7 +11,7 @@ index 3144905f3..04560cf2c 100644
  # DEB_DEPENDS += enchant  # for docs
  DEB_DEPENDS += python3-virtualenv
  DEB_DEPENDS += libssl-dev
-@@ -87,7 +87,7 @@ DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
+@@ -105,7 +105,7 @@ DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
  DEB_DEPENDS += nasm
  DEB_DEPENDS += iperf ethtool  # for 'make test TEST=vm_vpp_interfaces'
  DEB_DEPENDS += libpcap-dev
@@ -21,266 +21,18 @@ index 3144905f3..04560cf2c 100644
  
  LIBFFI=libffi6 # works on all but 20.04 and debian-testing
 diff --git a/build/external/packages/xdp-tools.mk b/build/external/packages/xdp-tools.mk
-index 08d94e424..1fbbef9b7 100644
+index 57f5e0ae8..99ad87928 100644
 --- a/build/external/packages/xdp-tools.mk
 +++ b/build/external/packages/xdp-tools.mk
 @@ -25,7 +25,7 @@ define  xdp-tools_config_cmds
  endef
  
  define  xdp-tools_build_cmds
--	@cd ${xdp-tools_src_dir} && $(MAKE) V=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
-+	@cd ${xdp-tools_src_dir} && $(MAKE) FORCE_SUBDIR_LIBBPF=1 V=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
+-	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc V=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
++	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc V=1 FORCE_SUBDIR_LIBBPF=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
  endef
  
  define  xdp-tools_install_cmds
-diff --git a/src/plugins/lacp/lacp.c b/src/plugins/lacp/lacp.c
-index ba66f7b24..3d4316b13 100644
---- a/src/plugins/lacp/lacp.c
-+++ b/src/plugins/lacp/lacp.c
-@@ -24,6 +24,7 @@
- #include <vlib/stats/stats.h>
- 
- lacp_main_t lacp_main;
-+__clib_export int lacp_plugin_enabled = 1;
- 
- /*
-  * Generate lacp pdu
-diff --git a/src/plugins/linux-cp/lcp_interface.c b/src/plugins/linux-cp/lcp_interface.c
-index 61665ad41..ec4324acd 100644
---- a/src/plugins/linux-cp/lcp_interface.c
-+++ b/src/plugins/linux-cp/lcp_interface.c
-@@ -1216,6 +1216,15 @@ lcp_itf_pair_link_up_down (vnet_main_t *vnm, u32 hw_if_index, u32 flags)
- 
- VNET_HW_INTERFACE_LINK_UP_DOWN_FUNCTION (lcp_itf_pair_link_up_down);
- 
-+static bool
-+is_lacp_plugin_enabled ()
-+{
-+  int *lacp_plugin_enabled =
-+    vlib_get_plugin_symbol ("lacp_plugin.so", "lacp_plugin_enabled");
-+
-+  return lacp_plugin_enabled ? *lacp_plugin_enabled : false;
-+}
-+
- static clib_error_t *
- lcp_interface_init (vlib_main_t *vm)
- {
-@@ -1233,6 +1242,17 @@ lcp_interface_init (vlib_main_t *vm)
-   tcp_punt_unknown (vm, 0, 1);
-   tcp_punt_unknown (vm, 1, 1);
- 
-+  /* mirror LACP pkts if lacp_plugin disabled */
-+  if (!is_lacp_plugin_enabled ())
-+    {
-+      vlib_node_t *n = vlib_get_node_by_name (vm, (u8 *) "linux-cp-punt-xc");
-+      if (n)
-+	{
-+	  ethernet_register_input_type (vm, ETHERNET_TYPE_SLOW_PROTOCOLS,
-+					n->index);
-+	}
-+    }
-+
-   lcp_itf_pair_logger = vlib_log_register_class ("linux-cp", "itf");
- 
-   return NULL;
-diff --git a/src/plugins/linux-cp/lcp_node.c b/src/plugins/linux-cp/lcp_node.c
-index 241cc5e4b..6545f567a 100644
---- a/src/plugins/linux-cp/lcp_node.c
-+++ b/src/plugins/linux-cp/lcp_node.c
-@@ -39,40 +39,51 @@
- 
- typedef enum
- {
--#define _(sym, str) LIP_PUNT_NEXT_##sym,
-+#define _(sym, str) LIP_PUNT_XC_NEXT_##sym,
-   foreach_lip_punt
- #undef _
--    LIP_PUNT_N_NEXT,
--} lip_punt_next_t;
-+    LIP_PUNT_XC_N_NEXT,
-+} lip_punt_xc_next_t;
- 
--typedef struct lip_punt_trace_t_
-+typedef struct lip_punt_xc_trace_t_
- {
-+  u8 direction; // 0 = punt phy to host (default), 1 = xc host to phy
-   u32 phy_sw_if_index;
-   u32 host_sw_if_index;
--} lip_punt_trace_t;
-+} lip_punt_xc_trace_t;
- 
- /* packet trace format function */
- static u8 *
--format_lip_punt_trace (u8 *s, va_list *args)
-+format_lip_punt_xc_trace (u8 *s, va_list *args)
- {
-   CLIB_UNUSED (vlib_main_t * vm) = va_arg (*args, vlib_main_t *);
-   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
--  lip_punt_trace_t *t = va_arg (*args, lip_punt_trace_t *);
-+  lip_punt_xc_trace_t *t = va_arg (*args, lip_punt_xc_trace_t *);
- 
--  s =
--    format (s, "lip-punt: %u -> %u", t->phy_sw_if_index, t->host_sw_if_index);
-+  if (t->direction)
-+    {
-+      s = format (s, "lip-xc: %u -> %u", t->host_sw_if_index,
-+		  t->phy_sw_if_index);
-+    }
-+  else
-+    {
-+      s = format (s, "lip-punt: %u -> %u", t->phy_sw_if_index,
-+		  t->host_sw_if_index);
-+    }
- 
-   return s;
- }
- 
- /**
-  * Pass punted packets from the PHY to the HOST.
-+ * Conditionally x-connect packets from the HOST to the PHY.
-  */
--VLIB_NODE_FN (lip_punt_node)
--(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
-+static_always_inline u32
-+lip_punt_xc_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
-+		    vlib_frame_t *frame, bool xc)
- {
-   u32 n_left_from, *from, *to_next, n_left_to_next;
--  lip_punt_next_t next_index;
-+  lip_punt_xc_next_t next_index;
- 
-   next_index = node->cached_next_index;
-   n_left_from = frame->n_vectors;
-@@ -89,6 +100,7 @@ VLIB_NODE_FN (lip_punt_node)
- 	  u32 next0 = ~0;
- 	  u32 bi0, lipi0;
- 	  u32 sw_if_index0;
-+	  u8 direction0 = 0;
- 	  u8 len0;
- 
- 	  bi0 = to_next[0] = from[0];
-@@ -97,18 +109,34 @@ VLIB_NODE_FN (lip_punt_node)
- 	  to_next += 1;
- 	  n_left_from -= 1;
- 	  n_left_to_next -= 1;
--	  next0 = LIP_PUNT_NEXT_DROP;
-+	  next0 = LIP_PUNT_XC_NEXT_DROP;
- 
- 	  b0 = vlib_get_buffer (vm, bi0);
- 
- 	  sw_if_index0 = vnet_buffer (b0)->sw_if_index[VLIB_RX];
- 	  lipi0 = lcp_itf_pair_find_by_phy (sw_if_index0);
--	  if (PREDICT_FALSE (lipi0 == INDEX_INVALID))
--	    goto trace0;
-+
-+	  /*
-+	   * lip_punt_node: expect sw_if_index0 is phy in an itf pair
-+	   * lip_punt_xc_node: if sw_if_index0 is not phy, expect it is host
-+	   */
-+	  if (!xc && (PREDICT_FALSE (lipi0 == INDEX_INVALID)))
-+	    {
-+	      goto trace0;
-+	    }
-+	  else if (xc && (lipi0 == INDEX_INVALID))
-+	    {
-+	      direction0 = 1;
-+	      lipi0 = lcp_itf_pair_find_by_host (sw_if_index0);
-+	      if (PREDICT_FALSE (lipi0 == INDEX_INVALID))
-+		goto trace0;
-+	    }
- 
- 	  lip0 = lcp_itf_pair_get (lipi0);
--	  next0 = LIP_PUNT_NEXT_IO;
--	  vnet_buffer (b0)->sw_if_index[VLIB_TX] = lip0->lip_host_sw_if_index;
-+	  next0 = LIP_PUNT_XC_NEXT_IO;
-+	  vnet_buffer (b0)->sw_if_index[VLIB_TX] =
-+	    direction0 ? lip0->lip_phy_sw_if_index :
-+			 lip0->lip_host_sw_if_index;
- 
- 	  if (PREDICT_TRUE (lip0->lip_host_type == LCP_ITF_HOST_TAP))
- 	    {
-@@ -129,10 +157,22 @@ VLIB_NODE_FN (lip_punt_node)
- 	trace0:
- 	  if (PREDICT_FALSE ((b0->flags & VLIB_BUFFER_IS_TRACED)))
- 	    {
--	      lip_punt_trace_t *t = vlib_add_trace (vm, node, b0, sizeof (*t));
--	      t->phy_sw_if_index = sw_if_index0;
--	      t->host_sw_if_index =
--		(lipi0 == INDEX_INVALID) ? ~0 : lip0->lip_host_sw_if_index;
-+	      lip_punt_xc_trace_t *t =
-+		vlib_add_trace (vm, node, b0, sizeof (*t));
-+
-+	      t->direction = direction0;
-+	      if (direction0)
-+		{
-+		  t->phy_sw_if_index =
-+		    (lipi0 == INDEX_INVALID) ? ~0 : lip0->lip_phy_sw_if_index;
-+		  t->host_sw_if_index = sw_if_index0;
-+		}
-+	      else
-+		{
-+		  t->phy_sw_if_index = sw_if_index0;
-+		  t->host_sw_if_index =
-+		    (lipi0 == INDEX_INVALID) ? ~0 : lip0->lip_host_sw_if_index;
-+		}
- 	    }
- 
- 	  vlib_validate_buffer_enqueue_x1 (vm, node, next_index, to_next,
-@@ -145,16 +185,41 @@ VLIB_NODE_FN (lip_punt_node)
-   return frame->n_vectors;
- }
- 
-+VLIB_NODE_FN (lip_punt_node)
-+(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
-+{
-+  return (lip_punt_xc_inline (vm, node, frame, false /* xc */));
-+}
-+
-+VLIB_NODE_FN (lip_punt_xc_node)
-+(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
-+{
-+  return (lip_punt_xc_inline (vm, node, frame, true /* xc */));
-+}
-+
- VLIB_REGISTER_NODE (lip_punt_node) = {
-   .name = "linux-cp-punt",
-   .vector_size = sizeof (u32),
--  .format_trace = format_lip_punt_trace,
-+  .format_trace = format_lip_punt_xc_trace,
-+  .type = VLIB_NODE_TYPE_INTERNAL,
-+
-+  .n_next_nodes = LIP_PUNT_XC_N_NEXT,
-+  .next_nodes = {
-+    [LIP_PUNT_XC_NEXT_DROP] = "error-drop",
-+    [LIP_PUNT_XC_NEXT_IO] = "interface-output",
-+  },
-+};
-+
-+VLIB_REGISTER_NODE (lip_punt_xc_node) = {
-+  .name = "linux-cp-punt-xc",
-+  .vector_size = sizeof (u32),
-+  .format_trace = format_lip_punt_xc_trace,
-   .type = VLIB_NODE_TYPE_INTERNAL,
- 
--  .n_next_nodes = LIP_PUNT_N_NEXT,
-+  .n_next_nodes = LIP_PUNT_XC_N_NEXT,
-   .next_nodes = {
--    [LIP_PUNT_NEXT_DROP] = "error-drop",
--    [LIP_PUNT_NEXT_IO] = "interface-output",
-+    [LIP_PUNT_XC_NEXT_DROP] = "error-drop",
-+    [LIP_PUNT_XC_NEXT_IO] = "interface-output",
-   },
- };
- 
-@@ -190,7 +255,7 @@ VLIB_NODE_FN (lcp_punt_l3_node)
- (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
- {
-   u32 n_left_from, *from, *to_next, n_left_to_next;
--  lip_punt_next_t next_index;
-+  lip_punt_xc_next_t next_index;
- 
-   next_index = node->cached_next_index;
-   n_left_from = frame->n_vectors;
 diff --git a/src/plugins/vxlan/vxlan.c b/src/plugins/vxlan/vxlan.c
 index 0885550d2..8b8cd66e4 100644
 --- a/src/plugins/vxlan/vxlan.c

@@ -239,7 +239,6 @@
 #undef vl_api_version
 
 /* BOND API inclusion */
-/* BOND API inclusion */
 
 #define vl_typedefs
 #include <vnet/bonding/bond.api.h>
@@ -330,10 +329,9 @@
 void classify_get_trace_chain(void ){}
 void os_exit(int code) {}
 
-//#define SAIVPP_DEBUG(format,args...) {}
-#define SAIVPP_DEBUG(format,args...) clib_warning("PID: %d, TID: %ld, " format, getpid(), syscall(SYS_gettid), ##args)
-#define SAIVPP_WARN(format,args...) clib_warning("PID: %d, TID: %ld, " format, getpid(), syscall(SYS_gettid), ##args)
-#define SAIVPP_ERROR(format,args...) clib_error("PID: %d, TID: %ld, " format, getpid(), syscall(SYS_gettid), ##args)
+#define SAIVPP_DEBUG(format,args...) {}
+#define SAIVPP_WARN clib_warning
+#define SAIVPP_ERROR clib_error
 
 /**
  * Wait for result and retry if necessary. The retry is necessary because there could be unsolicited
@@ -407,6 +405,7 @@ static int vpp_acl_counters_enable_disable(bool enable);
 static int vpp_intf_events_enable_disable(bool enable);
 static int vpp_bfd_events_enable_disable(bool enable);
 static int vpp_bfd_udp_enable_multihop();
+static int vpp_lcp_ethertype_enable(u16 ethertype);
 
 static pthread_mutex_t vpp_mutex;
 
@@ -1194,7 +1193,7 @@ static void vpp_base_vpe_init(void)
     _(INTERFACE_MSG_ID(SW_INTERFACE_ADD_DEL_ADDRESS_REPLY), sw_interface_add_del_address_reply) \
     _(INTERFACE_MSG_ID(SW_INTERFACE_SET_FLAGS_REPLY), sw_interface_set_flags_reply) \
     _(INTERFACE_MSG_ID(SW_INTERFACE_SET_MTU_REPLY), sw_interface_set_mtu_reply) \
-    _(INTERFACE_MSG_ID(SW_INTERFACE_SET_MAC_ADDRESS_REPLY), sw_interface_set_mac_address_reply) \ 
+    _(INTERFACE_MSG_ID(SW_INTERFACE_SET_MAC_ADDRESS_REPLY), sw_interface_set_mac_address_reply) \
     _(INTERFACE_MSG_ID(HW_INTERFACE_SET_MTU_REPLY), hw_interface_set_mtu_reply) \
     _(INTERFACE_MSG_ID(WANT_INTERFACE_EVENTS), want_interface_events_reply) \
     _(INTERFACE_MSG_ID(SW_INTERFACE_EVENT), sw_interface_event) \
@@ -1252,6 +1251,13 @@ static void vl_api_lcp_itf_pair_add_del_reply_t_handler(vl_api_lcp_itf_pair_add_
     SAIVPP_DEBUG("linux_cp hostif creation %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
 }
 
+static void vl_api_lcp_ethertype_enable_reply_t_handler(vl_api_lcp_ethertype_enable_reply_t *msg)
+{
+    set_reply_status(ntohl(msg->retval));
+
+    SAIVPP_WARN("linux_cp ethertype enabled %s(%d)", msg->retval ? "failed" : "successful", msg->retval);
+}
+
 static void vl_api_acl_add_replace_reply_t_handler(vl_api_acl_add_replace_reply_t *msg)
 {
     set_reply_status(ntohl(msg->retval));
@@ -1305,6 +1311,7 @@ vl_api_acl_interface_add_del_reply_t_handler(vl_api_acl_interface_add_del_reply_
 
 #define foreach_vpe_plugin_api_reply_msg                                \
     _(LCP_MSG_ID(LCP_ITF_PAIR_ADD_DEL_REPLY), lcp_itf_pair_add_del_reply) \
+    _(LCP_MSG_ID(LCP_ETHERTYPE_ENABLE_REPLY), lcp_ethertype_enable_reply) \
     _(ACL_MSG_ID(ACL_ADD_REPLACE_REPLY), acl_add_replace_reply)        \
     _(ACL_MSG_ID(ACL_DEL_REPLY), acl_del_reply) \
     _(ACL_MSG_ID(ACL_STATS_INTF_COUNTERS_ENABLE_REPLY), acl_stats_intf_counters_enable_reply) \
@@ -1732,6 +1739,9 @@ int init_vpp_client()
         dump_interface_table(vam);
 
         vpp_acl_counters_enable_disable(true);
+
+        /* Enable LACP punt/xc in linux-cp */
+        vpp_lcp_ethertype_enable(0x8809);
 
         /* 
          * SONiC periodically polls the port status so currently there is no need for
@@ -2724,7 +2734,7 @@ int hw_interface_set_mtu (const char *hwif_name, uint32_t mtu)
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
@@ -2778,7 +2788,7 @@ int vpp_bridge_domain_add_del(uint32_t bridge_id, bool is_add)
 
     __plugin_msg_base = l2_msg_id_base;
 
-    M(BRIDGE_DOMAIN_ADD_DEL, mp);
+    M (BRIDGE_DOMAIN_ADD_DEL, mp);
     mp->is_add = is_add;
     mp->bd_id = htonl(bridge_id);
 
@@ -3430,15 +3440,35 @@ static int vpp_bfd_udp_enable_multihop ()
     return ret;
 }
 
+static int vpp_lcp_ethertype_enable(u16 ethertype)
+{
+    vat_main_t *vam = &vat_main;
+    vl_api_lcp_ethertype_enable_t *mp;
+    int ret;
+
+    VPP_LOCK();
+
+    __plugin_msg_base = lcp_msg_id_base;
+
+    M (LCP_ETHERTYPE_ENABLE, mp);
+    mp->ethertype = ethertype;
+
+    S (mp);
+    W (ret);
+
+    VPP_UNLOCK();
+
+    return ret;
+}
+
 int create_bond_interface(uint32_t bond_id, uint32_t mode, uint32_t lb, uint32_t  *swif_idx)
 {
     vat_main_t *vam = &vat_main;
     vl_api_bond_create_t * mp;
     int ret;
 
-
-    SAIVPP_WARN("Creating bd interface: \n");
     VPP_LOCK();
+    SAIVPP_WARN("Creating bd interface with id %u \n", bond_id);
 
     __plugin_msg_base = bond_msg_id_base;
 
@@ -3466,9 +3496,8 @@ int delete_bond_interface(const char *hwif_name)
     vl_api_bond_delete_t * mp;
     int ret;
 
-
-    SAIVPP_WARN("Removing bond interface: \n");
     VPP_LOCK();
+    SAIVPP_WARN("Removing bond interface %s \n", hwif_name);
 
     __plugin_msg_base = bond_msg_id_base;
 
@@ -3505,9 +3534,8 @@ int create_bond_member(uint32_t bond_sw_if_index, const char *hwif_name, bool is
     vl_api_bond_add_member_t * mp;
     int ret;
 
-
-    SAIVPP_WARN("Adding member %s to bond interface %u \n", hwif_name, bond_sw_if_index);
     VPP_LOCK();
+    SAIVPP_WARN("Adding member %s to bond interface %u \n", hwif_name, bond_sw_if_index);
 
     __plugin_msg_base = bond_msg_id_base;
 
@@ -3556,6 +3584,7 @@ int delete_bond_member(const char * hwif_name)
     int ret;
 
     VPP_LOCK();
+    SAIVPP_WARN("Removing member %s from its bond\n", hwif_name);
 
     __plugin_msg_base = bond_msg_id_base;
 

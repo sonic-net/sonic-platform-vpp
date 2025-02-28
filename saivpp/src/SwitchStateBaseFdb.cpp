@@ -1164,7 +1164,18 @@ sai_status_t SwitchStateBase:: createLag(
 
 }
 
-uint32_t SwitchStateBase::find_bond_id()
+/*
+ * This function determines the ID of a newly created PortChannel.
+ * It does this by querying the list of PortChannels using the ip command and
+ * comparing it to the existing LAG interfaces in m_lag_bond_map.
+ *
+ * This function is necessary due to the way IP addresses are set on interfaces in Sonic-VPP,
+ * which requires mapping between the PortChannel interface and the BondEthernet in VPP.
+ * Although no issues have been observed during manual and sonic-mgmt testing,
+ * it should be noted that this design may theoretically present a race condition,
+ * where the wrong ID is returned for a given LAG interface if multiple PortChannels are created concurrently.
+ */
+uint32_t SwitchStateBase::find_new_bond_id()
 {
     std::stringstream cmd;
     std::string res;
@@ -1219,10 +1230,8 @@ sai_status_t SwitchStateBase::vpp_create_lag(
     const char *hw_ifname;
     SWSS_LOG_ENTER();
 
-    LAG_MUTEX;
-
     // Extract bond_id from PortChannel name
-    bond_id = find_bond_id();
+    bond_id = find_new_bond_id();
     if (bond_id == ~0)
     {
         SWSS_LOG_ERROR("Bond id could not be found");
@@ -1231,7 +1240,7 @@ sai_status_t SwitchStateBase::vpp_create_lag(
 
     // Set mode and lb. SONiC config does not have provision to pass mode and load balancing algorithm
     mode = VPP_BOND_API_MODE_XOR;
-    lb = VPP_BOND_API_LB_ALGO_L23;
+    lb = VPP_BOND_API_LB_ALGO_L34;
 
     create_bond_interface(bond_id, mode, lb, &swif_idx);
     if (swif_idx == ~0)
@@ -1269,8 +1278,6 @@ sai_status_t SwitchStateBase::vpp_remove_lag(
 {
     int ret;
     SWSS_LOG_ENTER();
-
-    LAG_MUTEX;
 
     platform_bond_info_t bond_info;
     CHECK_STATUS(get_lag_bond_info(lag_oid, bond_info));
@@ -1376,8 +1383,6 @@ sai_status_t SwitchStateBase::vpp_create_lag_member(
         SWSS_LOG_NOTICE("No ports found for lag port id :%s",sai_serialize_object_id(lag_port_oid).c_str());
         return SAI_STATUS_FAILURE;
     }
-
-    LAG_MUTEX;
 
     ret = create_bond_member(bond_if_idx, hwifname, is_passive, is_long_timeout);
     if (ret != 0)
