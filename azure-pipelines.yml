@@ -86,7 +86,7 @@ stages:
         git clone https://gerrit.fd.io/r/vpp repo
         cp -vr $(System.DefaultWorkingDirectory)/vppbld/plugins/* repo/src/plugins/
         cd repo
-        git checkout $(git log --until "7 days ago" -1 --format="%h")
+        git checkout $(git log --until "10 days ago" -1 --format="%h")
         git apply $(System.DefaultWorkingDirectory)/vppbld/vpp.patch
         make UNATTENDED=y PLATFORM=vpp install-deps install-ext-deps
         make UNATTENDED=y PLATFORM=vpp -j4 pkg-deb
