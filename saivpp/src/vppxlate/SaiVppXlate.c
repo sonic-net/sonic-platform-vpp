@@ -2612,7 +2612,7 @@ int vpp_sync_for_events ()
     return ret;
 }
 
-int sw_interface_set_mtu (const char *hwif_name, uint32_t mtu, int type)
+int sw_interface_set_mtu (const char *hwif_name, uint32_t mtu)
 {
     vat_main_t *vam = &vat_main;
     vl_api_sw_interface_set_mtu_t *mp;
@@ -2638,22 +2638,11 @@ int sw_interface_set_mtu (const char *hwif_name, uint32_t mtu, int type)
         VPP_UNLOCK();
         return -EINVAL;
     }
-    switch (type) {
-    case AF_INET:
-        mp->mtu[MTU_PROTO_API_IP4] = htonl(mtu);
-        break;
-
-    case AF_INET6:
-        mp->mtu[MTU_PROTO_API_IP6] = htonl(mtu);
-        break;
-    default:
-        VPP_UNLOCK();
-        return -EINVAL;
-    }
+    mp->mtu[MTU_PROTO_API_L3] = htonl(mtu);
 
     S (mp);
 
-    W (ret);
+    WR (ret);
 
     VPP_UNLOCK();
 
