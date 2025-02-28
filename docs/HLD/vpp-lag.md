@@ -87,7 +87,7 @@ This section explores how LACP was implemented in SONiC-VPP.
 Both SONiC and VPP can run LACP. If we choose to run LACP in VPP, the PortChannel interface in SONiC will not be reported up.
 Instead, we need to let SONiC run LACP and instruct VPP to carry SONiC's LACP packets without generating or consuming them.
 
-To achieve this, we can use the VPP [linux-cp plugin](https://s3-docs.fd.io/vpp/22.06/developer/plugins/lcp.html) to mirror packets between the member tap interfaces (on host) and the corresponding VPP phy interface.
+To achieve this, we can use the VPP [linux-cp plugin](https://s3-docs.fd.io/vpp/22.06/developer/plugins/lcp.html) to create a connection between the member tap interfaces (on host) and the corresponding VPP phy interface.
 
 However, the linux-cp plugin did not support LACP packets.
 Support was added to the VPP plugin as part of this project to allow for punting and injecting packets of any ethertype (including LACP).
