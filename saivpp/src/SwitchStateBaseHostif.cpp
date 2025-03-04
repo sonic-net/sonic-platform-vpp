@@ -708,7 +708,7 @@ sai_status_t SwitchStateBase::vpp_create_hostif_tap_interface(
         return SAI_STATUS_FAILURE;
     }
 
-    SWSS_LOG_ERROR("created TAP device for %s, fd: %d", name.c_str(), tapfd);
+    SWSS_LOG_NOTICE("created TAP device for %s, fd: %d", name.c_str(), tapfd);
     const char *dev = name.c_str();
     const char *hwif_name = tap_to_hwif_name(dev);
 

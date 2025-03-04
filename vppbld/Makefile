@@ -17,7 +17,7 @@ SHELL = /bin/bash
 
 VPP_URL = https://gerrit.fd.io/r/vpp
 VPP_SHA =
-VPP_LAG = 10
+VPP_LAG = 5
 USER = $(shell id -un)
 UID = $(shell id -u)
 GUID = $(shell id -g)
