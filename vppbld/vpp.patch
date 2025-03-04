@@ -21,7 +21,7 @@ index 6bd4ab611..128b462e5 100644
  
  LIBFFI=libffi6 # works on all but 20.04 and debian-testing
 diff --git a/build/external/packages/xdp-tools.mk b/build/external/packages/xdp-tools.mk
-index 57f5e0ae8..99ad87928 100644
+index 57f5e0ae8..73e35b90b 100644
 --- a/build/external/packages/xdp-tools.mk
 +++ b/build/external/packages/xdp-tools.mk
 @@ -25,7 +25,7 @@ define  xdp-tools_config_cmds
@@ -29,7 +29,7 @@ index 57f5e0ae8..99ad87928 100644
  
  define  xdp-tools_build_cmds
 -	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc V=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
-+	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc V=1 FORCE_SUBDIR_LIBBPF=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
++	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc FORCE_SUBDIR_LIBBPF=1 V=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
  endef
  
  define  xdp-tools_install_cmds
