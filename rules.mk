@@ -13,8 +13,6 @@
 # limitations under the License.
 PLATFORM_RULES := $(PLATFORM_PATH)/rules
 export PLATFORM_RULES
-#include $(PLATFORM_RULES)/vpp.mk
-#include $(PLATFORM_RULES)/saivpp.mk
 include $(PLATFORM_RULES)/syncd-vpp.mk
 include $(PLATFORM_RULES)/sonic-version.mk
 include $(PLATFORM_RULES)/platform-modules-vpp.mk
