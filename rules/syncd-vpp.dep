@@ -35,4 +35,4 @@ $(SYNCD_VPP)_CACHE_MODE  := GIT_CONTENT_SHA
 $(SYNCD_VPP)_DEP_FLAGS   := $(SONIC_COMMON_FLAGS_LIST)
 $(SYNCD_VPP)_DEP_FILES   := $(DEP_FILES)
 
-$(eval $(call add_dbg_docker,$(SYNCD_VPP),$(SYNCD_VPP_DBG)))
+$(eval $(call add_dbg_docker,$(SYNCD_VPP),$(SYNCD_VPP_DBGSYM)))

@@ -35,11 +35,11 @@ $(DOCKER_SYNCD_BASE)_DEPENDS += $(LIBSAIVPP) \
 
 $(SYNCD)_DEPENDS += $(LIBSAIVPP) $(LIBSAIVPP_DEV)
 
-$(DOCKER_SYNCD_BASE)_DBG_DEPENDS += $(SYNCD_DBG) \
+$(DOCKER_SYNCD_BASE)_DBG_DEPENDS += $(SYNCD_VPP_DBGSYM) \
                                 $(LIBSWSSCOMMON_DBG) \
-                                $(LIBSAIMETADATA_DBG) \
-                                $(LIBSAIREDIS_DBG) \
-                                $(LIBSAIVPP_DBG)
+                                $(LIBSAIMETADATA_DBGSYM) \
+                                $(LIBSAIREDIS_DBGSYM) \
+                                $(LIBSAIVPP_DBGSYM)
 
 $(DOCKER_SYNCD_BASE)_VERSION = 1.0.0
 $(DOCKER_SYNCD_BASE)_PACKAGE_NAME = syncd
