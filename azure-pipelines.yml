@@ -49,9 +49,6 @@ stages:
   - job:
     displayName: amd64
     timeoutInMinutes: 300
-    container:
-      image: sonicdev-microsoft.azurecr.io:443/sonic-slave-${{ parameters.debian_version }}:latest
-      options:  "--privileged"
     steps:
     - checkout: self
       clean: true
