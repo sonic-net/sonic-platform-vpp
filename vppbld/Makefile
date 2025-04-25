@@ -16,6 +16,7 @@ SHELL = /bin/bash
 .SHELLFLAGS += -e
 
 VPP_URL = https://gerrit.fd.io/r/vpp
+VPP_DEB_URL = https://packages.buildkite.com/sonic-vpp/vpp/any/pool/any/main/v/vpp
 USER = $(shell id -un)
 UID = $(shell id -u)
 GUID = $(shell id -g)
@@ -25,45 +26,8 @@ VPP_CUSTOM_PLUGINS_DIR = plugins
 MAIN_TARGET = $(VPPINFRA)
 DERIVED_TARGETS = $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK) \
 				  $(VPP_PLUGIN_DEV) $(VPP_DEV) $(VPPINFRA_DEV) $(VPPDBG)
-
-VPP_DOCKER_DEBS = libnl-3-200_$(LIBNL3_VERSION_SONIC)_$(CONFIGURED_ARCH).deb \
-                  libnl-3-dev_$(LIBNL3_VERSION_SONIC)_$(CONFIGURED_ARCH).deb \
-				  libnl-route-3-200_$(LIBNL3_VERSION_SONIC)_$(CONFIGURED_ARCH).deb \
-				  libnl-route-3-dev_$(LIBNL3_VERSION_SONIC)_$(CONFIGURED_ARCH).deb
-
-VPP_DOCKER_BUILD = docker build --no-cache \
-		    -t vppbld_$(BLDENV):latest \
-		    --build-arg http_proxy=$(http_proxy) \
-		    --build-arg https_proxy=$(https_proxy) \
-		    --build-arg no_proxy=$(no_proxy) \
-			--build-arg user=$(USER) \
-			--build-arg uid=$(UID) \
-			--build-arg guid=$(GUID) \
-			-f ./Dockerfile-$(BLDENV) .
-
-VPP_DOCKER_RUN = docker run --rm=true \
-			-v /sonic/platform/vpp/vppbld/repo:/vpp \
-    		-e "http_proxy=$(http_proxy)" \
-    		-e "https_proxy=$(https_proxy)" \
-    		-e "no_proxy=$(no_proxy)" \
-			--network=host \
-			vppbld_$(BLDENV):latest
-
-VPP_DOCKER_RUN_IT = docker run -it --rm=true \
-			-v /sonic/platform/vpp/vppbld/repo:/vpp \
-    		-e "http_proxy=$(http_proxy)" \
-    		-e "https_proxy=$(https_proxy)" \
-    		-e "no_proxy=$(no_proxy)" \
-			--network=host \
-			vppbld_$(BLDENV):latest bash
-
-docker_shell:
-	$(VPP_DOCKER_RUN_IT)
-
-build_vpp:
-	 $(VPP_DOCKER_RUN) /run_build.sh
-
-.PHONY: repo_clone
+ALL_TARGETS = $(MAIN_TARGET) $(DERIVED_TARGETS)
+.PHONY: repo_clone build_locally
 repo_clone:
 	rm -rf $(VPP_REPO_DIR)
 	git clone $(VPP_URL) $(VPP_REPO_DIR)
@@ -77,27 +41,22 @@ repo_clone:
 	git apply ../vpp.patch
 	popd
 
-vppbld-docker/Dockerfile-$(BLDENV): vppbld-docker/Dockerfile-$(BLDENV).j2
-	export VPP_DOCKER_DEBS="$(VPP_DOCKER_DEBS)"
-	j2 vppbld-docker/Dockerfile-$(BLDENV).j2 > vppbld-docker/Dockerfile-$(BLDENV)
+$(addprefix $(DEST)/, $(MAIN_TARGET)):
+	@echo "Downloading all .deb files to $(DEST)..."
+	@( \
+		set -e; \
+		$(foreach deb, $(ALL_TARGETS), \
+			echo "Attempting to download $(DEST)/$(deb)..."; \
+			curl -f -o $(DEST)/$(deb) $(VPP_DEB_URL)/$(deb); \
+		) \
+	) || (echo "One or more downloads failed..." && $(MAKE) build_locally -f Makefile)
 
-.PHONY: docker_build
-docker_build:  vppbld-docker/Dockerfile-$(BLDENV)
-	pushd vppbld-docker
-	rm -rf debs
-	mkdir debs
-	cp $(foreach target,$(VPP_DOCKER_DEBS),$(addprefix $(DEST)/,$(target))) debs/
-	$(VPP_DOCKER_BUILD)
-	rm -rf debs
-	popd
-
-$(addprefix $(DEST)/, $(MAIN_TARGET)): $(DEST)/% : docker_build repo_clone
-	$(VPP_DOCKER_RUN) /run_build.sh
-	pushd $(VPP_REPO_DIR)/build-root
+build_locally: repo_clone
+	pushd $(VPP_REPO_DIR)
+	make UNATTENDED=y PLATFORM=vpp install-dep && CUSTOM_VERSION=$(VPP_VERSION_SONIC) make UNATTENDED=y PLATFORM=vpp -j4 pkg-deb
+	pushd build-root
 	@for target in *_$(CONFIGURED_ARCH).deb; do \
-		new_name=$$(echo $$target | sed -E 's/^([^_]+)_[^_]+_($(CONFIGURED_ARCH).deb)$$/\1_$(VPP_VERSION_FULL)_\2/')
-		echo "$$target -> $$new_name"
-		cp $$target $(DEST)/$$new_name
+		cp $$target $(DEST)/
 	done
 	popd
 
