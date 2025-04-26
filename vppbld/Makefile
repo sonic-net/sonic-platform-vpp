@@ -47,7 +47,7 @@ $(addprefix $(DEST)/, $(MAIN_TARGET)):
 		set -e; \
 		$(foreach deb, $(ALL_TARGETS), \
 			echo "Attempting to download $(DEST)/$(deb)..."; \
-			curl -f -o $(DEST)/$(deb) $(VPP_DEB_URL)/$(deb); \
+			curl -L -f -o $(DEST)/$(deb) $(VPP_DEB_URL)/$(deb); \
 		) \
 	) || (echo "One or more downloads failed..." && $(MAKE) build_locally -f Makefile)
 
