@@ -142,7 +142,7 @@ bool vpp_get_intf_name_for_prefix (
 
     if (ifname.length() != 0)
     {
-        SWSS_LOG_NOTICE("%s interface name with prefix %s is %s", (is_v6 ? "IPv6" : "IPv4"), prefix.to_string(), ifname.c_str());
+        SWSS_LOG_NOTICE("%s interface name with prefix %s is %s", (is_v6 ? "IPv6" : "IPv4"), prefix.to_string().c_str(), ifname.c_str());
         return true;
     } else {
         return false;
