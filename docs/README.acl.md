@@ -8,7 +8,7 @@ The test cases in [`test_acl.py`](https://github.com/sonic-net/sonic-mgmt/blob/m
 
 2. After config reload, the test must wait for the interfaces to come up before proceeding.
 
-These VPP limitations will be suggested and upstreamed to the sonic-mgmt repository itself.
+These VPP limitations are codified in the following sonic-mgmt PR: https://github.com/sonic-net/sonic-mgmt/pull/18313
 
 Future support on sonic-mgmt will include:
 
