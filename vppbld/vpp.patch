@@ -46,3 +46,20 @@ index 0885550d2..8b8cd66e4 100644
  
  static u32
  vxlan_eth_flag_change (vnet_main_t *vnm, vnet_hw_interface_t *hi, u32 flags)
+diff --git a/src/scripts/version b/src/scripts/version
+index b8748af15..8f88c53c7 100755
+--- a/src/scripts/version
++++ b/src/scripts/version
+@@ -17,6 +17,12 @@ path=$( cd "$(dirname "${BASH_SOURCE}")" ; pwd -P )
+ 
+ cd "$path"
+ 
++# Check if CUSTOM_VERSION is set
++if [ -n "$CUSTOM_VERSION" ]; then
++    echo "$CUSTOM_VERSION"
++    exit 0
++fi
++
+ if [ -f .version ]; then
+     vstring=$(cat .version)
+ else

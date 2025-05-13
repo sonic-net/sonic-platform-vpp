@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#$(LIBSAIREDIS)_DEB_BUILD_PROFILES += syncd
+$(LIBSAIREDIS)_DEB_BUILD_PROFILES += syncd vs
 
-SYNCD_VPP = syncd-vpp_1.0.0_amd64.deb
-$(SYNCD_VPP)_RDEPENDS += $(LIBSAIREDIS) $(LIBSAIMETADATA) $(LIBSAIVPP)
+SYNCD_VS = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
+$(SYNCD_VS)_RDEPENDS += $(LIBSAIREDIS) $(LIBSAIMETADATA) $(LIBSAIVS)
 
-SYNCD_VPP_DBGSYM = syncd-vpp-dbgsym_1.0.0_amd64.deb
-$(SYNCD_VPP_DBGSYM)_DEPENDS += $(SYNCD_VPP)
-$(SYNCD_VPP_DBGSYM)_RDEPENDS += $(SYNCD_VPP)
+$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS)))
+
+SYNCD_VS_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
+$(SYNCD_VS_DBG)_DEPENDS += $(SYNCD_VS)
+$(SYNCD_VS_DBG)_RDEPENDS += $(SYNCD_VS)
+$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS_DBG)))

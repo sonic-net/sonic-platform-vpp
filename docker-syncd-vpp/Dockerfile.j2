@@ -6,6 +6,7 @@ RUN [ -f /etc/rsyslog.conf ] && sed -ri "s/%syslogtag%/$docker_container_name#%s
 
 ## Make apt-get non-interactive
 ENV DEBIAN_FRONTEND=noninteractive
+ENV VPP_INSTALL_SKIP_SYSCTL=1
 
 RUN apt-get update
 
@@ -17,7 +18,7 @@ debs/{{ deb }}{{' '}}
 {%- endfor -%}
 debs/
 
-RUN  VPP_INSTALL_SKIP_SYSCTL=1 dpkg -i \
+RUN dpkg -i \
 {% for deb in docker_syncd_vpp_debs.split(' ') -%}
 debs/{{ deb }}{{' '}}
 {%- endfor %} || apt-get install -f -y
