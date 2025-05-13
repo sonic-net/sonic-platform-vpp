@@ -30,16 +30,16 @@
 DOCKER_SYNCD_PLATFORM_CODE = vpp
 include $(PLATFORM_PATH)/../template/docker-syncd-bookworm.mk
 
-$(DOCKER_SYNCD_BASE)_DEPENDS += $(LIBSAIVPP) \
-                                $(SYNCD)
+$(DOCKER_SYNCD_BASE)_DEPENDS += $(LIBSAIVS) \
+                                $(SYNCD_VS)
 
-$(SYNCD)_DEPENDS += $(LIBSAIVPP) $(LIBSAIVPP_DEV)
+$(SYNCD)_DEPENDS += $(LIBSAIVS) $(LIBSAIVS_DEV)
 
-$(DOCKER_SYNCD_BASE)_DBG_DEPENDS += $(SYNCD_DBG) \
+$(DOCKER_SYNCD_BASE)_DBG_DEPENDS += $(SYNCD_VS_DBG) \
                                 $(LIBSWSSCOMMON_DBG) \
                                 $(LIBSAIMETADATA_DBG) \
                                 $(LIBSAIREDIS_DBG) \
-                                $(LIBSAIVPP_DBG)
+                                $(LIBSAIVS_DBG)
 
 $(DOCKER_SYNCD_BASE)_VERSION = 1.0.0
 $(DOCKER_SYNCD_BASE)_PACKAGE_NAME = syncd
