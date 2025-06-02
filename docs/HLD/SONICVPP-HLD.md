@@ -1,5 +1,5 @@
 # SONIC VPP Platform HLD
-Rev v0.1
+Rev v0.2
 
 **Caveat**- Document is work in progress. 
 
@@ -16,7 +16,7 @@ Rev v0.1
 5. [Usecases Targeted](#item-5)
 6. [Proposed Solution](#item-6)
 7. [Architecture Overview](#item-7)
-8. [libsaivpp](#item-8)
+8. [vpp libsai](#item-8)
 9. [Theory of Operation](#item-9)
 10. [VPP Datapath ](#item-10)
     - [startup.conf](#item-101)
@@ -44,6 +44,7 @@ Rev v0.1
 | Rev | Date | Author(s) |
 |-----|------|-----------|
 |v0.1 | 03/28/2023 | Shashishar Patil (Cisco), Sameer Nanajkar (Cisco) |
+|v0.2 | 06/02/2025 | Yue (Fred) Gao (Cisco) |
 
 
 <br/>
@@ -106,22 +107,17 @@ Figure below shows the architecture of SONiC-VPP where SONIC components and VPP 
 There are NO changes to the SONiC system architecture. VPP fits in the same manner VS platform did. To integrate with VPP a new platform called `VPP' is added. 
 
 The salient aspects of the architecture are listed below
- - SONIC components and VPP run as Linux processes inside the container.
- - The container needs to be run in privileged mode. This requirement is driven by VPP needs.
- - A new platform construct called `sonic-platform-vpp` is added to support VPP.
+ - A new platform called vpp is added to SONiC under platform/vpp in sonic-buildimage. sonic-vpp image can be built using PLATFORM=vpp.
+ - vpp runs as a Linux process inside syncd container.
  - SONIC interacts with VPP to configure features, get statistics, get asynchronous notifications (e.g. link down events)
  - There is no change to the way SONiC operates. The configurations are handled by SONiC control plane components and updated into ASIC_DB.  
- - The `libsaivpp.so` in syncd process communicates with the VPP process using [VPP Binary APIs](https://docs.fd.io/vpp/17.10/api_doc.html). 
+ - vpp libsai in syncd process communicates with the VPP process using [VPP Binary APIs](https://docs.fd.io/vpp/17.10/api_doc.html). 
  - The Linux network name space is shared between SONIC components and VPP. Note- This will not be applicable for a few scenarios (e.g. when they run in different containers)
  - The VPP plugin *Linux CP plugin* is used for host path and maps the front panel ports to corresponding Linux interfaces (tap). 
-
-There are utilities that provide the following functionality 
- - Setting up the SONIC-VPP platform configuration files like *platform.json, hwsku.json, port_map.ini and config_db.json*
- - Generate VPP container specific configuration from the data passed to SONIC and instantiate the VPP container. 
-
+ - A platform service `sonic-platform-modules-vpp` configures vpp interfaces based on vm interface setup during boot time.
 
 <a id="item-8"></a>
-## libsaivpp
+## vpp libsai
 This library implements the SAI SDK for VPP data path platform. It is responsible for
   - Setting up VPP IPC with VPP process. 
   - Translate SAI API requests to VPP Binary API requests and dispatch them via VPP IPC
@@ -129,6 +125,14 @@ This library implements the SAI SDK for VPP data path platform. It is responsibl
   - Translate the incoming notifications from the VPP data path container to SONiC message and forward them to control plane.
   - Pull or process the metrics from VPP data path and return the metrics to SAI stats-debug layer.
 
+From SONiC 2025.05 release, vpp libsai has been merged with vs libsai in sonic-sairedis. There are 2 main reasons.
+  - Removing duplicate code. Original vpp libsai source code is copied from vs libsai. There 128 files but only 21 files are created or modified for vpp. The rest of the files are common code between vs and vpp.
+  - Keeping vpp libsai code up to date. Above common code is modified from time to time when sai version is upgraded or syncd behavior changed. By removing the copy of the common code in vpp libsai, we keep it always up to date.
+
+Here are the changes in combining vpp and vs libsai.
+  - Moving SONiC-VPP libsai code to sonic-sairedis/vslib/vpp
+  - Making SwitchStateBase of vpp a subclass of SwitchStateBase in vs, called SwitchVpp
+  - SwitchVpp is the 6th virtual switch type in vslib. It is instantiated by syncd based on switch type `SAI_VS_SWITCH_TYPE_VPP` in sai.profile
 
 <a id="item-9"></a>
 ## Theory of Operation
@@ -144,9 +148,9 @@ launches the SONIC-VPP container and generates the following configuration files
  - `start_sonic.sh` starts the supervisord daemon
  - SONiC processes are spawned 
  - VPP process is started with the generated `startup.conf` file. 
- - libsaivpp establishes communication with VPP 
+ - vpp libsai establishes communication with VPP 
  - The front panel ports become visible as EthernetX tap interfaces to SONiC
- - libsaivpp establishes connection with VPP and configures the data path
+ - vpp libsai establishes connection with VPP and configures the data path
  - The system is ready
 
 ## VM image
@@ -158,14 +162,14 @@ VPP is responsible for the following functions
  - Managing the network ports (*e.g. tap interfaces, SRIOV Virtual Functions, VT-D Pass through ports*)
  - Fast packet IO using DPDK
  - Feature processing (*routing, switching, tunnels, QoS, ACL, etc*)
- - Notifying events (*e.g. link flap*) to libsaivpp 
+ - Notifying events (*e.g. link flap*) to vpp libsai
  - Host path packet handling
  - Portability across multiple commodity CPU architectures (*Intel, AMD, ARM*) and NICs (*Intel, Mellanox, etc*)
  
 It has two functional parts.
 
  - Master Thread\
-   Takes care of handling configuration requests from various clients and program the VPP datapath structures. The clients could be VPP CLI (*vppctl*) or applications (*syncd*) that use [VPP Binary APIs](https://docs.fd.io/vpp/17.10/api_doc.html). Care needs to be taken so that the control path-data path messaging design doesn't overwhelm this thread. There is only one master thread. The queries, get requests, sent by clients are processed by the Master thread. The master thread also sends asynchronous notifications, say interface link going down to the client application/s.
+   Takes care of handling configuration requests from syncd to program the VPP datapath structures using [VPP Binary APIs](https://docs.fd.io/vpp/17.10/api_doc.html). Care needs to be taken so that the control path-data path messaging design doesn't overwhelm this thread. There is only one master thread. The queries, get requests, sent by clients are processed by the Master thread. The master thread also sends asynchronous notifications, say interface link going down to the client application/s.
    
  - Data Workers\
    They handle the packet/flow processing needed by the features enabled. The packets ingress and egress from the worker threads. Each worker is instantiated as a POSIX thread. The number of workers is configurable at VPP boot time (*via startup.conf*). 
@@ -178,12 +182,13 @@ This file can be tailored to configure the VPP network stack as desired. For mor
 
 <a id="item-102"></a>
 ### VPP Features
-See link for [VPP Supported Features](https://s3-docs.fd.io/vpp/22.06/aboutvpp/featurelist.html). Over time SONIC-VPP will match the features supported by SONIC. See TODO.md for details on execution phasing.  
+See link for [VPP Supported Features](https://s3-docs.fd.io/vpp/25.06/aboutvpp/featurelist.html). Over time SONIC-VPP will match the features supported by SONIC. See TODO.md for details on execution phasing.  
 
 <a id="item-103"></a>
-### How is VPP consumed 
-At the time of writing the document, we do not have any VPP specific changes for SONiC integration. We use a official prebuilt binary of VPP release 22.06 to build SONiC-VPP. At some cadence we will upgrade the VPP version. The prebuilt binary is picked up from [VPP prebuilt binaries](https://packagecloud.io/fdio/release/). As we add new features to SONiC-VPP (e.g. Stateful firewall) we will need to add these features into VPP and upstream the changes. In future it is likely the VPP consumption model could change.
+### How is VPP consumed
+Starting from SONiC 2025.05 release, prebuilt vpp for SONiC is downloaded from [buildkite](https://buildkite.com/organizations/sonic-vpp/packages) at the time of building sonic-vpp image. The vpp packages are built from vpp source code plus patches under platform/vpp/vppbld/vpp.patch. The patch includes a custom plugin for tunnel termination ACL, which is not yet ready to be upstreamed to FDio. For the changes that are in the process of upstreaming to FDio, they can be added to the patch temporarily. 
 
+When there is a need to upgrade prebuilt vpp, either to update base vpp version or apply a new vpp patch, one can follow the [instructions](https://github.com/sonic-net/sonic-platform-vpp/blob/main/vppbld/README.md).
 
 <a id="item-11"></a>
 ## SONIC - VPP Communication
@@ -205,14 +210,14 @@ The number of VPP binary APIs is around 1900. For details see [VPP Binary APIs](
 The SAI APIs need to be translated to the corresponding VPP API/s. Figure below shows the end-end communication path 
 
      ------------     config   ----------  config notify      -------------------  Req (sync)       ---------
-     |  SONiC   |   -------->  |  Redis | -------------->     |  libsaivpp.so   | ---------------> |  VPP   |  Events
+     |  SONiC   |   -------->  |  Redis | -------------->     |  vpp libsai   | ---------------> |  VPP   |  Events
      |          |              |ASIC DB | <--------------     |   xlate logic   | <--------------  |        | <------
      ------------              ---------- config resp/notify  ------------------   Resp/Notify     ---------
 
 The flow is 
  - All configuration, updates get reflected in ASIC_DB
  - Any updates to ASIC_DB triggers the libsaiapp.so in syncd process. There is a translation logic here that maps the SAI APIs to VPP binary APIs. 
- - There is a Request-Response pattern between the libsaivpp and VPP. VPP sends back a response to each request. It returns an OK in case the API was processed successfully. In case of error the libsaivpp propagates the error via the SAI API error response message to the control plane.
+ - There is a Request-Response pattern between the vpp libsai and VPP. VPP sends back a response to each request. It returns an OK in case the API was processed successfully. In case of error the vpp libsai propagates the error via the SAI API error response message to the control plane.
 
 The API  mapping is often non-trivial and requires state to be maintained for objects configured. The fact the VPP unlike SAI does not support 
  - Single attribute update or
@@ -248,7 +253,7 @@ The interfaces are specified at the time of SONIC-VPP container/VM instantiation
               ----------                   ---------
               |  Tap 1 |                   | Tap 2 |
               ----------                   ---------
-                  | 1:1                       |  1:1     Link events to libsaivpp.so
+                  | 1:1                       |  1:1     Link events to vpp libsai
                   |                           |          ^ 
               ----------                   ---------     |
               |  VF 1  |                   | VF 2  |  ---| 
@@ -262,6 +267,12 @@ The interfaces are specified at the time of SONIC-VPP container/VM instantiation
 
 Note- The front panel ports are not visible to Linux kernel when using SRIOV or VT-D modes. 
                   
+### Loopback Interfaces
+TBD
+
+### Portchannel Interfaces
+TBD
+
 <a id="item-13"></a>
 ## Host path handling 
  - Inbound packets\
@@ -324,7 +335,7 @@ Below test frameworks are planned:
  
 ## Four test topologies are planned for running the above test frameworks
 
-1. The physical and virtual T0 topology detailed in SONiC PTF testbed document. The T0 topology only runs the SONiC PTF.
+1. The physical and virtual T1/T1-LAG topology detailed in SONiC PTF testbed document. The T1/T1-LAG topology only runs the SONiC PTF.
 2. Simple topology based on virtual SONiC-VPP DUT runs Inhouse developed sanity tests.
  
 ![Simple Topology](Simple-topo.png) 
