@@ -26,14 +26,15 @@ Rev v0.2
     - [API Semantics](#item-111)
     - [Sample API translation for IP Route](#item-112)
 12. [Interfaces](#item-12)
-13. [Host Path handling](#item-13)
-14. [Repositories](#item-14)
-15. [Configuration and Management](#item-15)
-16. [VPP Restart](#item-16)
-17. [Warm and Fastboot Design Impact](#item-17)
-18. [Packaging](#item-18)
-19. [Restrictions/Limitations](#item-19)
-20. [Testing](#item-20)
+    - [Host Path handling](#item-121)
+    - [Interface Create Flow](#item-122)
+13. [Repositories](#item-13)
+14. [Configuration and Management](#item-14)
+15. [VPP Restart](#item-15)
+16. [Warm and Fastboot Design Impact](#item-16)
+17. [Packaging](#item-17)
+18. [Restrictions/Limitations](#item-18)
+19. [Testing](#item-19)
 
 <br/>
 <br/>
@@ -267,8 +268,8 @@ The interfaces are specified at the time of SONIC-VPP container/VM instantiation
 
 Note- The front panel ports are not visible to Linux kernel when using SRIOV or VT-D modes. 
                   
-<a id="item-13"></a>
-## Host path handling 
+<a id="item-121"></a>
+### Host path handling 
  - Inbound packets\
    Packets are intercepted by VPP data path and injected into SONiC network namespace. The injection of packets is currently done via the Linux CP plugin of VPP. This works as the SONIC and VPP are packaged into a single container and share the same network namespace. In future we need to support scenario of non shared network namespaces (e.g. when SONiC and VPP run in separate containers or different machines). 
 
@@ -281,6 +282,7 @@ The front panel interfaces are created as tap interfaces and used by the Linux C
 
 Other interfaces created by SONiC on the Host (like PortChannels and Loopback interfaces) cannot be used directly by the Linux CP plugin as they are not tap interfaces. To get around this, we let the Linux CP plugin instantiate a dummy tap interface which is paired with the associated phy interface on VPP. This dummy tap interface then has all of its ingress punted traffic redirected to the corresponding host interface using Linux tc filters.
 
+<a id="item-122"></a>
 ### Interface Create Flow
 
 | Interface Type | Configuration | SAI | VPP | LCP |
@@ -291,36 +293,36 @@ Other interfaces created by SONiC on the Host (like PortChannels and Loopback in
 | **Subinterface** | `sudo config subinterface add Ethernet0.10 10` | `\|c\|SAI_OBJECT_TYPE_ROUTER_INTERFACE:oid:0x6000000000094`<br>`SAI_ROUTER_INTERFACE_ATTR_TYPE=SAI_ROUTER_INTERFACE_TYPE_SUB_PORT` | `create_subif`| `lcp_itf_pair_add_del` automatically invoked with `lcp-auto-subinf` enabled<br><br>`itf-pair: [3] bobm0.10 tap4096.10 Ethernet0.10 14 type tap` |
 
     
-<a id="item-14"></a>
+<a id="item-13"></a>
 ## Repositories
 This design adds the following new repositories:
  - sonic-platform-vpp
 
 It has no modifications to existing SONiC repositories. 
 
-<a id="item-15"></a>
+<a id="item-14"></a>
 # Configuration and Management
 
-<a id="item-151"></a>
+<a id="item-141"></a>
 ## CLI/YANG model
 There are no CLI changes introduced by SONiC-VPP. 
 
-<a id="item-152"></a>
+<a id="item-142"></a>
 ## Config DB Enhancements
 There will be configuration entries to configure VPP. This is a future item. 
 
 
-<a id="item-16"></a>
+<a id="item-15"></a>
 <br/>
 # VPP Restart
 TBD
 
-<a id="item-17"></a>
+<a id="item-16"></a>
 <br/>
 # Warmboot and Fastoot Design impact
 TBD
 
-<a id="item-18"></a>
+<a id="item-17"></a>
 <br/>
 # Packaging & Footprint
 SONiC-VPP is packaged into
@@ -328,14 +330,14 @@ SONiC-VPP is packaged into
  - VM\
  
 
-<a id="item-19"></a>
+<a id="item-18"></a>
 ## Restrictions and Limitations
 Initial releases supports limited functionality and features. Over time more features will be added. The following limitations apply
  - Single container
 
 Details of execution plan can be found [here](https://github.com/sonic-net/sonic-platform-vpp/blob/main/TODO.md)
 
-<a id="item-20"></a>
+<a id="item-19"></a>
 ## Testing
 Below test frameworks are planned:
   *  SONiC Unit tests per component: will be run as part of each of the SONiC components being built
