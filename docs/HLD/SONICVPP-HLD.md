@@ -282,6 +282,8 @@ The front panel interfaces are created as tap interfaces and used by the Linux C
 
 Other interfaces created by SONiC on the Host (like PortChannels and Loopback interfaces) cannot be used directly by the Linux CP plugin as they are not tap interfaces. To get around this, we let the Linux CP plugin instantiate a dummy tap interface which is paired with the associated phy interface on VPP. This dummy tap interface then has all of its ingress punted traffic redirected to the corresponding host interface using Linux tc filters.
 
+For example, a PortChannel10 will have a corresponding dummy tap interface (be10) created by the Linux-CP plugin and which will receive BondEthernet10 punted traffic. A tc filter will then redirect ingress traffic from this be10 interface to the PortChannel10. Using this approach, LACP packets are successfully received by the PortChannel and its operational status is updated accordingly.
+
 <a id="item-122"></a>
 ### Interface Create
 
