@@ -45,7 +45,7 @@ Rev v0.2
 | Rev | Date | Author(s) |
 |-----|------|-----------|
 |v0.1 | 03/28/2023 | Shashishar Patil (Cisco), Sameer Nanajkar (Cisco) |
-|v0.2 | 06/02/2025 | Yue (Fred) Gao (Cisco) |
+|v0.2 | 06/02/2025 | Yue (Fred) Gao (Cisco), Akeel Ali (Cisco) |
 
 
 <br/>
@@ -236,7 +236,7 @@ making the translation non-trivial.
 |Route Modify | `set_route_entry_attribute` | `vl_api_ip_route_add_del_t (DEL, oldroute)`</br> `vl_api_ip_route_add_del_t (ADD, newroute)`  |
 |Route Delete | `remove_route_entry` | `vl_api_ip_route_add_del_t (DEL, route)` |
 |Route Get | `get_route_entry_attribute` | `vl_api_ip_route_lookup_t (prefix)` |
-|Bulk Route Get | `get_route_entries_attribute` | `vl_api_ip_route_dump_t |
+|Bulk Route Get | `get_route_entries_attribute` | `vl_api_ip_route_dump_t` |
 
 <a id="item-12"></a>
 ## Interfaces 
@@ -285,12 +285,12 @@ Other interfaces created by SONiC on the Host (like PortChannels and Loopback in
 <a id="item-122"></a>
 ### Interface Create Flow
 
-| Interface Type | Configuration | SAI | VPP | LCP |
-|----------------|---------------|-----|-----|-----|
-| **Front-Panel** | Loaded from `config_db.json` | `\|c\|SAI_OBJECT_TYPE_HOSTIF:oid:0xd000000000080`<br>`SAI_HOSTIF_ATTR_TYPE=SAI_HOSTIF_TYPE_NETDEV`<br>`SAI_HOSTIF_ATTR_NAME=Ethernet0`| `lcp_itf_pair_add_del` with mapping from `sonic_vpp_ifmap.ini` | `lcp_itf_pair_add_del(vpp_ifname, EthernetX)`<br><br>>`itf-pair: [0] bobm0 tap4096 Ethernet0 10 type tap` |
-| **PortChannel** | `sudo config portchannel add PortChannel10`<br>`sudo config portchannel member add PortChannel10 Ethernet4` | `\|c\|SAI_OBJECT_TYPE_LAG:oid:0x2000000000095`<br>`\|c\|SAI_OBJECT_TYPE_LAG_MEMBER:oid:0x1b000000000096`<br>`SAI_LAG_MEMBER_ATTR_LAG_ID=oid:0x2000000000095` | `bond_create`<br>`bond_add_member` | `lcp_itf_pair_add_del(BondEthernetX, beX)`<br>`add_tc_filter_redirect(beX, PortChannelX)`<br><br>>`itf-pair: [4] BondEthernet10 tap4099 be10 16 type tap` |
-| **Loopback** | `sudo config interface ip add Loopback0 10.0.0.1/32` | `\|c\|SAI_OBJECT_TYPE_ROUTE_ENTRY:{"dest":"10.0.0.1/32","` | `create_loopback_instance`<br>`sw_interface_add_del_address` | `lcp_itf_pair_add_del(loopX, tap_LoopbackX)`<br>`add_tc_filter_redirect(tap_LoopbackX, LoopbackX)`<br><br>>`itf-pair: [2] loop0 tap4098 tap_Loopback0 13 type tap` |
-| **Subinterface** | `sudo config subinterface add Ethernet0.10 10` | `\|c\|SAI_OBJECT_TYPE_ROUTER_INTERFACE:oid:0x6000000000094`<br>`SAI_ROUTER_INTERFACE_ATTR_TYPE=SAI_ROUTER_INTERFACE_TYPE_SUB_PORT` | `create_subif`| `lcp_itf_pair_add_del` automatically invoked with `lcp-auto-subinf` enabled<br><br>>`itf-pair: [3] bobm0.10 tap4096.10 Ethernet0.10 14 type tap` |
+| Interface Type | Configuration | SAI | VPP | LCP | TC Redirect |
+|----------------|---------------|-----|-----|-----|-------------|
+| **Front-Panel** | Loaded from `config_db.json` | `\|c\|SAI_OBJECT_TYPE_HOSTIF:oid:0xd000000000080`<br>`SAI_HOSTIF_ATTR_TYPE=SAI_HOSTIF_TYPE_NETDEV`<br>`SAI_HOSTIF_ATTR_NAME=Ethernet0`| `lcp_itf_pair_add_del` with mapping from `sonic_vpp_ifmap.ini` | `lcp_itf_pair_add_del(vpp_ifname,EthernetX)`<br><br>>`itf-pair: [0] bobm0 tap4096 Ethernet0 10 type tap` | N/A |
+| **PortChannel** | sudo config portchannel add PortChannel10<br>sudo&nbsp;config&nbsp;portchannel&nbsp;member&nbsp;add&nbsp;PortChannel10&nbsp;Ethernet4 | `\|c\|SAI_OBJECT_TYPE_LAG:oid:0x2000000000095`<br>`\|c\|SAI_OBJECT_TYPE_LAG_MEMBER:oid:0x1b000000000096`<br>`SAI_LAG_MEMBER_ATTR_LAG_ID=oid:0x2000000000095` | `bond_create`<br>`bond_add_member` | `lcp_itf_pair_add_del(BondEthernetX,beX)`<br><br>>`itf-pair: [4] BondEthernet10 tap4099 be10 16 type tap` | `beX`<br>--><br>`PortChannelX` |
+| **Loopback** | sudo config interface ip add Loopback0 10.0.0.1/32 | `\|c\|SAI_OBJECT_TYPE_ROUTE_ENTRY:{"dest":"10.0.0.1/32","` | `create_loopback_instance`<br>`sw_interface_add_del_address` | `lcp_itf_pair_add_del(loopX,tap_LoopbackX)`<br><br>>`itf-pair: [2] loop0 tap4098 tap_Loopback0 13 type tap` | `tap_LoopbackX`<br>--><br>`LoopbackX` |
+| **Subinterface** | sudo config subinterface add Ethernet0.10 10 | `\|c\|SAI_OBJECT_TYPE_ROUTER_INTERFACE:oid:0x6000000000094`<br>`SAI_ROUTER_INTERFACE_ATTR_TYPE=SAI_ROUTER_INTERFACE_TYPE_SUB_PORT` | `create_subif`| `lcp_itf_pair_add_del` automatically invoked with `lcp-auto-subinf` enabled<br><br>>`itf-pair: [3] bobm0.10 tap4096.10 Ethernet0.10 14 type tap` | N/A, shares parent tap |
 
     
 <a id="item-13"></a>
