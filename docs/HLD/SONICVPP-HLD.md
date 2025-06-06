@@ -27,7 +27,7 @@ Rev v0.2
     - [Sample API translation for IP Route](#item-112)
 12. [Interfaces](#item-12)
     - [Host Path handling](#item-121)
-    - [Interface Create Flow](#item-122)
+    - [Interface Create](#item-122)
 13. [Repositories](#item-13)
 14. [Configuration and Management](#item-14)
 15. [VPP Restart](#item-15)
@@ -283,7 +283,7 @@ The front panel interfaces are created as tap interfaces and used by the Linux C
 Other interfaces created by SONiC on the Host (like PortChannels and Loopback interfaces) cannot be used directly by the Linux CP plugin as they are not tap interfaces. To get around this, we let the Linux CP plugin instantiate a dummy tap interface which is paired with the associated phy interface on VPP. This dummy tap interface then has all of its ingress punted traffic redirected to the corresponding host interface using Linux tc filters.
 
 <a id="item-122"></a>
-### Interface Create Flow
+### Interface Create
 
 | Interface Type | Configuration | SAI | VPP | LCP | TC Redirect |
 |----------------|---------------|-----|-----|-----|-------------|
