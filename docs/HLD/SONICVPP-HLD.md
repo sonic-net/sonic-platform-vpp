@@ -28,14 +28,14 @@ Rev v0.2
 12. [Interfaces](#item-12)
     - [Front-panel Port Create Flow](#item-121)
     - [Host Path handling](#item-122)
-    - [Interface Create by Type](#item-123)
-14. [Repositories](#item-13)
-15. [Configuration and Management](#item-14)
-16. [VPP Restart](#item-15)
-17. [Warm and Fastboot Design Impact](#item-16)
-18. [Packaging](#item-17)
-19. [Restrictions/Limitations](#item-18)
-20. [Testing](#item-19)
+    - [Interface Create Flow by Type](#item-123)
+13. [Repositories](#item-13)
+14. [Configuration and Management](#item-14)
+15. [VPP Restart](#item-15)
+16. [Warm and Fastboot Design Impact](#item-16)
+17. [Packaging](#item-17)
+18. [Restrictions/Limitations](#item-18)
+19. [Testing](#item-19)
 
 <br/>
 <br/>
