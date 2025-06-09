@@ -26,15 +26,16 @@ Rev v0.2
     - [API Semantics](#item-111)
     - [Sample API translation for IP Route](#item-112)
 12. [Interfaces](#item-12)
-    - [Host Path handling](#item-121)
-    - [Interface Create](#item-122)
-13. [Repositories](#item-13)
-14. [Configuration and Management](#item-14)
-15. [VPP Restart](#item-15)
-16. [Warm and Fastboot Design Impact](#item-16)
-17. [Packaging](#item-17)
-18. [Restrictions/Limitations](#item-18)
-19. [Testing](#item-19)
+    - [Front-panel Port Create Flow](#item-121)
+    - [Host Path handling](#item-122)
+    - [Interface Create by Type](#item-123)
+14. [Repositories](#item-13)
+15. [Configuration and Management](#item-14)
+16. [VPP Restart](#item-15)
+17. [Warm and Fastboot Design Impact](#item-16)
+18. [Packaging](#item-17)
+19. [Restrictions/Limitations](#item-18)
+20. [Testing](#item-19)
 
 <br/>
 <br/>
@@ -114,7 +115,8 @@ The salient aspects of the architecture are listed below
  - There is no change to the way SONiC operates. The configurations are handled by SONiC control plane components and updated into ASIC_DB.  
  - vpp libsai in syncd process communicates with the VPP process using [VPP Binary APIs](https://docs.fd.io/vpp/17.10/api_doc.html). 
  - The Linux network name space is shared between SONIC components and VPP. Note- This will not be applicable for a few scenarios (e.g. when they run in different containers)
- - The VPP plugin *Linux CP plugin* is used for host path and maps the front panel ports to corresponding Linux interfaces (tap). 
+ - The VPP plugin *Linux CP plugin* is used for host path and maps the front panel ports to corresponding Linux interfaces (tap).
+ - Note: The VPP *Netlink plugin* is not currently used. This plugin allows sync'ing of interface state from Linux to VPP. Instead, we rely on SONiC SAI calls to update the VPP state.
  - A platform service `sonic-platform-modules-vpp` configures vpp interfaces based on vm interface setup during boot time.
 
 <a id="item-8"></a>
@@ -266,9 +268,70 @@ The interfaces are specified at the time of SONIC-VPP container/VM instantiation
                              |
                          NIC Port 0 
 
-Note- The front panel ports are not visible to Linux kernel when using SRIOV or VT-D modes. 
-                  
+
 <a id="item-121"></a>
+### Front-panel Port Create Flow
+
+1. First, on system boot, the `vpp-cfg-init` file will detect the available ports (eth1 up to eth32) and will generate the configuration files and environment variables needed to provision them in VPP and SONiC. The `vpp-cfg-init` script will generate the following files:
+
+    a. `syncd_vpp_env`: contains environment variables for VPP.
+    ```
+    DPDK_DISABLE=n
+    VPP_DPDK_PORTS=0000:00:04.0,0000:00:05.0
+    SONIC_NUM_PORTS=2
+    VPP_PORT_LIST=eth1,eth2
+    NO_LINUX_NL=y
+    ```
+    b. `sonic_vpp_ifmap.ini`: maps SONiC Ethernet interfaces to VPP port names.
+   ```
+   Ethernet0 bobm0
+   Ethernet4 bobm1
+   ```
+   c. `config_db.json`: the SONiC configuration database based on the detected ports.
+   ```
+		  "PORT": {
+		    "Ethernet0": {
+		     ...
+		    },
+		    "Ethernet4": {
+		     ...
+		    }
+		  },
+   ```
+
+2. Second, the `vpp-port-config` systemd service runs and invokes `vpp_ports_setup.sh` to bind the ports to the required driver for VPP/DPDK.
+
+    a. Input: `syncd_vpp_env`
+
+    b. Output: Updated drivers, eg.
+    ```
+    cisco@vpp-01:~$ lspci -k -s 0000:00:04.0
+    00:04.0 Ethernet controller: Red Hat, Inc. Virtio network device
+            Subsystem: Red Hat, Inc. Virtio network device
+            Kernel driver in use: uio_pci_generic
+            Kernel modules: virtio_pci
+    ```
+
+3. Third, on `syncd`, the `vpp_init.sh` file is invoked by `supervisord` to generate the VPP startup configuration (with the appropriate port configs) to launch VPP.
+
+   a. Input: `syncd_vpp_env`
+
+   b. Output: startup config and vpp launched
+   ```
+   ...
+			dpdk {
+			        dev 0000:00:04.0 {
+			            name bobm0
+			        }
+			        dev 0000:00:05.0 {
+			            name bobm1
+			        }
+   ...
+   ```
+
+4. Finally, SONiC loads the startup `config_db.json`, which triggers `SAI_OBJECT_TYPE_HOSTIF` create calls for each front-panel port defined in the config. These calls are passed on to VPP's `configure_lcp_interface` which will create the corresponding tap interfaces and pair them with the corresponding VPP DPDK interface using the mapping from `sonic_vpp_ifmap.ini`.
+
+<a id="item-122"></a>
 ### Host path handling 
  - Inbound packets\
    Packets are intercepted by VPP data path and injected into SONiC network namespace. The injection of packets is currently done via the Linux CP plugin of VPP. This works as the SONIC and VPP are packaged into a single container and share the same network namespace. In future we need to support scenario of non shared network namespaces (e.g. when SONiC and VPP run in separate containers or different machines). 
@@ -284,14 +347,14 @@ Other interfaces created by SONiC on the Host (like PortChannels and Loopback in
 
 For example, a PortChannel10 will have a corresponding dummy tap interface (be10) created by the Linux-CP plugin and which will receive BondEthernet10 punted traffic. A tc filter will then redirect ingress traffic from this be10 interface to the PortChannel10. Using this approach, LACP packets are successfully received by the PortChannel and its operational status is updated accordingly.
 
-<a id="item-122"></a>
-### Interface Create
+<a id="item-123"></a>
+### Interface Create Flow by Type
 
-Following table summarizes the flow from configuration to VPP/LCP API for different interface types.
+The following table summarizes the flow from configuration to VPP/LCP API for different interface types.
 
 | Interface Type | Configuration | SAI | VPP | LCP | TC Redirect |
 |----------------|---------------|-----|-----|-----|-------------|
-| **Front-Panel** | Loaded from `config_db.json` | `\|c\|SAI_OBJECT_TYPE_HOSTIF:oid:0xd000000000080`<br>`SAI_HOSTIF_ATTR_TYPE=SAI_HOSTIF_TYPE_NETDEV`<br>`SAI_HOSTIF_ATTR_NAME=Ethernet0`| vpp intf pre-created using generated `startup.conf` | `lcp_itf_pair_add_del(vpp_ifname,EthernetX)`<br><br>>`itf-pair: [0] bobm0 tap4096 Ethernet0 10 type tap` | N/A |
+| **Front-Panel** | Loaded from `config_db.json` | `\|c\|SAI_OBJECT_TYPE_HOSTIF:oid:0xd000000000080`<br>`SAI_HOSTIF_ATTR_NAME=Ethernet0`| *vpp intf pre-created using generated `startup.conf` | `lcp_itf_pair_add_del(vpp_ifname,EthernetX)`<br><br>>`itf-pair: [0] bobm0 tap4096 Ethernet0 10 type tap` | N/A |
 | **PortChannel** | sudo config portchannel add PortChannel10<br>sudo&nbsp;config&nbsp;portchannel&nbsp;member&nbsp;add&nbsp;PortChannel10&nbsp;Ethernet4 | `\|c\|SAI_OBJECT_TYPE_LAG:oid:0x2000000000095`<br>`\|c\|SAI_OBJECT_TYPE_LAG_MEMBER:oid:0x1b000000000096`<br>`SAI_LAG_MEMBER_ATTR_LAG_ID=oid:0x2000000000095` | `bond_create`<br>`bond_add_member` | `lcp_itf_pair_add_del(BondEthernetX,beX)`<br><br>>`itf-pair: [4] BondEthernet10 tap4099 be10 16 type tap` | `beX`<br>--><br>`PortChannelX` |
 | **Loopback** | sudo config interface ip add Loopback0 10.0.0.1/32 | `\|c\|SAI_OBJECT_TYPE_ROUTE_ENTRY:{"dest":"10.0.0.1/32","` | `create_loopback_instance`<br>`sw_interface_add_del_address` | `lcp_itf_pair_add_del(loopX,tap_LoopbackX)`<br><br>>`itf-pair: [2] loop0 tap4098 tap_Loopback0 13 type tap` | `tap_LoopbackX`<br>--><br>`LoopbackX` |
 | **Subinterface** | sudo config subinterface add Ethernet0.10 10 | `\|c\|SAI_OBJECT_TYPE_ROUTER_INTERFACE:oid:0x6000000000094`<br>`SAI_ROUTER_INTERFACE_ATTR_TYPE=SAI_ROUTER_INTERFACE_TYPE_SUB_PORT` | `create_subif`| `lcp_itf_pair_add_del` automatically invoked with `lcp-auto-subinf` enabled<br><br>>`itf-pair: [3] bobm0.10 tap4096.10 Ethernet0.10 14 type tap` | N/A, shares parent tap |
