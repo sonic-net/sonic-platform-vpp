@@ -274,7 +274,7 @@ The interfaces are specified at the time of SONIC-VPP container/VM instantiation
 
 1. First, on system boot, the `vpp-cfg-init` file will detect the available ports (eth1 up to eth32) and will generate the configuration files and environment variables needed to provision them in VPP and SONiC. The `vpp-cfg-init` script will generate the following files:
 
-    a. `syncd_vpp_env`: contains environment variables for VPP.
+    a. `syncd_vpp_env`: contains environment variables for VPP including the front-panel ports.
     ```
     DPDK_DISABLE=n
     VPP_DPDK_PORTS=0000:00:04.0,0000:00:05.0
@@ -329,7 +329,9 @@ The interfaces are specified at the time of SONIC-VPP container/VM instantiation
    ...
    ```
 
-4. Finally, SONiC loads the startup `config_db.json`, which triggers `SAI_OBJECT_TYPE_HOSTIF` create calls for each front-panel port defined in the config. These calls are passed on to VPP's `configure_lcp_interface` which will create the corresponding tap interfaces and pair them with the corresponding VPP DPDK interface using the mapping from `sonic_vpp_ifmap.ini`.
+At this point, VPP is running and has instantiated DPDK interfaces corresponding to the front-panel ports of the switch. 
+
+4. Finally, SONiC loads the startup `config_db.json`, which triggers `SAI_OBJECT_TYPE_HOSTIF` create calls for each front-panel port defined in the config. These calls are passed on to VPP's `configure_lcp_interface` which will create the corresponding tap interfaces in Linux and pair them with the corresponding VPP DPDK interface using the mapping from `sonic_vpp_ifmap.ini`.
 
 <a id="item-122"></a>
 ### Host path handling 
