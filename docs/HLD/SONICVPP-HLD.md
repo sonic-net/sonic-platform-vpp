@@ -345,7 +345,7 @@ For example, a PortChannel10 will have a corresponding dummy tap interface (be10
    ...
    ```
 
-At this point, VPP is running and has instantiated DPDK interfaces corresponding to the front-panel ports of the switch. 
+At this point, VPP is running and has created DPDK interfaces that correspond to the switch's front-panel ports.
 
 4. Finally, SONiC loads the startup `config_db.json`, which triggers `SAI_OBJECT_TYPE_HOSTIF` create calls for each front-panel port defined in the config. These calls are passed on to VPP's `configure_lcp_interface` which will create the corresponding tap interfaces in Linux and pair them with the corresponding VPP DPDK interface using the mapping from `sonic_vpp_ifmap.ini`.
 
