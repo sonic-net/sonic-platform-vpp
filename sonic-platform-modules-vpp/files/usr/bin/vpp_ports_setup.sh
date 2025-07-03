@@ -46,7 +46,7 @@ function bind_ports_to_uio()
 	    echo "Un-binding port $port($PCI_ID) from driver $CUR_DRIVER"
 	    echo "$PCI_ID" > /sys/bus/pci/drivers/$CUR_DRIVER/unbind
 
-		# Wait until the device is unbound
+	    # Wait until the device is unbound
 	    max_attempts=50  # Maximum number of attempts
 	    attempt=0        # Current attempt count
 	    while [ -e "/sys/bus/pci/drivers/$CUR_DRIVER/$PCI_ID" ]; do
