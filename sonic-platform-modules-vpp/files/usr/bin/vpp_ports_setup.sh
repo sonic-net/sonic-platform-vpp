@@ -29,7 +29,7 @@ function bind_ports_to_uio()
     do
 	echo "Binding port $port "
 	PCI_ID=$(ethtool -i $port | grep bus-info | awk '{ print $2}')
-	
+
 	if eval echo "$port" | grep "[0-9a-fA-F]\+:[0-9a-fA-F]\+:[0-9a-fA-F]\+\.[0-9a-fA-F]\+" > /dev/null; then
 	    PCI_ID=$port
 	elif [ "$PCI_ID" == "" ]; then
@@ -45,6 +45,17 @@ function bind_ports_to_uio()
 	if [ "$CUR_DRIVER" != "" ] && [ "$CUR_DRIVER" != "$UIO_DRV" ]; then
 	    echo "Un-binding port $port($PCI_ID) from driver $CUR_DRIVER"
 	    echo "$PCI_ID" > /sys/bus/pci/drivers/$CUR_DRIVER/unbind
+
+	    # Wait until the device is unbound
+	    max_attempts=50  # Maximum number of attempts
+	    attempt=0        # Current attempt count
+	    while [ -e "/sys/bus/pci/drivers/$CUR_DRIVER/$PCI_ID" ]; do
+	        sleep 0.1  # Check every 100ms
+	        attempt=$((attempt + 1))
+	        if [ "$attempt" -ge "$max_attempts" ]; then
+	            echo "Timeout: Device unbind operation took too long"
+	        fi
+	    done
 	fi
 	echo "Binding port $port($PCI_ID) to driver $UIO_DRV"
 	NEWID=$(lspci -s $PCI_ID -n | awk '{ print $3}' | awk -F":" '{ printf "%s %s", $1, $2}')
@@ -61,7 +72,7 @@ function restore_dpdk_ports()
 	if eval echo "$port" | grep "[0-9a-fA-F]\+:[0-9a-fA-F]\+:[0-9a-fA-F]\+\.[0-9a-fA-F]\+" > /dev/null; then
 	    CUR_DRIVER=$(lspci -k -s $port | grep "Kernel driver in use:" | cut -d ':' -f2 | xargs)
 	    DRIVER=$(lspci -k -s $port | grep "Kernel modules:" | cut -d ':' -f2 | xargs)
-	    
+
 	    if [ "$CUR_DRIVER" != "" ] && [ "$CUR_DRIVER" != "$DRIVER" ]; then
 		echo "Un-binding port $port from driver $CUR_DRIVER"
 		echo "$port" > /sys/bus/pci/drivers/$CUR_DRIVER/unbind || true
