@@ -23,3 +23,4 @@ include $(PLATFORM_RULES)/one-image.dep
 include $(PLATFORM_RULES)/onie.dep
 include $(PLATFORM_RULES)/kvm-image.dep
 include $(PLATFORM_RULES)/raw-image.dep
+include $(PLATFORM_RULES)/docker-sonic-vpp.dep
