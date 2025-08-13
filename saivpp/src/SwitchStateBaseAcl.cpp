@@ -190,7 +190,7 @@ static sai_status_t acl_icmp_field_to_vpp_acl_rule(
     _In_ const sai_attribute_value_t  *value,
     _Out_ vpp_acl_rule_t *rule)
 {
-    uint16_t                                data = 0, mask = 0;
+    uint16_t                                first = 0, last = 0;
     uint16_t                                new_data, new_mask;
 
     assert((SAI_ACL_ENTRY_ATTR_FIELD_ICMP_CODE == attr_id) ||
@@ -201,25 +201,21 @@ static sai_status_t acl_icmp_field_to_vpp_acl_rule(
     new_data = (value->aclfield.enable) ? value->aclfield.data.u8 : 0;
     new_mask = (value->aclfield.enable) ? value->aclfield.mask.u8 : 0;
 
+    first = new_data & new_mask;
+    last = new_data | (~new_mask & 0xFF);
 
     switch (attr_id) {
     case SAI_ACL_ENTRY_ATTR_FIELD_ICMP_CODE:
     case SAI_ACL_ENTRY_ATTR_FIELD_ICMPV6_CODE:
-        data = (uint16_t) ((data & 0xFF) | (new_data << 8));
-        mask = (uint16_t) ((mask & 0xFF) | (new_mask << 8));
-
-	rule->dstport_or_icmpcode_first = data;
-	rule->srcport_or_icmptype_last = mask;
+        rule->dstport_or_icmpcode_first = first;
+        rule->dstport_or_icmpcode_last = last;
 
         break;
 
     case SAI_ACL_ENTRY_ATTR_FIELD_ICMP_TYPE:
     case SAI_ACL_ENTRY_ATTR_FIELD_ICMPV6_TYPE:
-        data = (uint16_t) ((data & 0xFF00) | new_data);
-        mask = (uint16_t) ((mask & 0xFF00) | new_mask);
-
-	rule->srcport_or_icmptype_first = data;
-	rule->srcport_or_icmptype_last = mask;
+        rule->srcport_or_icmptype_first = first;
+        rule->srcport_or_icmptype_last = last;
 
         break;
 
@@ -267,20 +263,34 @@ static sai_status_t acl_rule_port_range_vpp_acl_set(
 
     switch (type) {
     case SAI_ACL_RANGE_TYPE_L4_SRC_PORT_RANGE:
-	rule->srcport_or_icmptype_first = (uint16_t) range->min;
-	rule->srcport_or_icmptype_last = (uint16_t) range->max;
-	SWSS_LOG_INFO("SRC port range %u-%u", range->min, range->max);
+        if (rule->proto != 0 && rule->proto != IPPROTO_TCP) {
+            SWSS_LOG_ERROR(
+                "Conflicting protocol settings: "
+                "src port range requires TCP, but proto is already set to %u",
+                rule->proto);
+            return SAI_STATUS_FAILURE;
+        }
+        rule->proto = IPPROTO_TCP;
+        rule->srcport_or_icmptype_first = (uint16_t) range->min;
+        rule->srcport_or_icmptype_last = (uint16_t) range->max;
         break;
 
     case SAI_ACL_RANGE_TYPE_L4_DST_PORT_RANGE:
-	rule->dstport_or_icmpcode_first = (uint16_t) range->min;
-	rule->dstport_or_icmpcode_last = (uint16_t) range->max;
-	SWSS_LOG_INFO("DST port range %u-%u", range->min, range->max);
+        if (rule->proto != 0 && rule->proto != IPPROTO_TCP) {
+            SWSS_LOG_ERROR(
+                "Conflicting protocol settings: "
+                "dst port range requires TCP, but proto is already set to %u",
+                rule->proto);
+            return SAI_STATUS_FAILURE;
+        }
+        rule->proto = IPPROTO_TCP;
+        rule->dstport_or_icmpcode_first = (uint16_t) range->min;
+        rule->dstport_or_icmpcode_last = (uint16_t) range->max;
         break;
 
     default:
         SWSS_LOG_INFO("Range type %d is not supported\n", type);
-	break;
+        break;
     }
 
     return SAI_STATUS_SUCCESS;
@@ -339,15 +349,15 @@ static void acl_rule_set_action(
     _Out_ vpp_acl_rule_t      *rule)
 
 {
-    	switch (value->aclaction.parameter.s32) {
-	case SAI_PACKET_ACTION_FORWARD:
-	    rule->action = VPP_ACL_ACTION_API_PERMIT_STFULL;
-	    break;
+    switch (value->aclaction.parameter.s32) {
+    case SAI_PACKET_ACTION_FORWARD:
+        rule->action = VPP_ACL_ACTION_API_PERMIT;
+        break;
 
-	case SAI_PACKET_ACTION_DROP:
-	    rule->action = VPP_ACL_ACTION_API_DENY;
-	    break;
-	}
+    case SAI_PACKET_ACTION_DROP:
+        rule->action = VPP_ACL_ACTION_API_DENY;
+        break;
+    }
 }
 
 sai_status_t acl_rule_field_update(
@@ -373,33 +383,99 @@ sai_status_t acl_rule_field_update(
         break;
 
     case SAI_ACL_ENTRY_ATTR_FIELD_ACL_IP_TYPE:
-	status = acl_ip_type_field_to_vpp_acl_rule(attr_id, value, rule);
+        status = acl_ip_type_field_to_vpp_acl_rule(attr_id, value, rule);
         break;
-
 
     case SAI_ACL_ENTRY_ATTR_FIELD_ICMP_CODE:
     case SAI_ACL_ENTRY_ATTR_FIELD_ICMP_TYPE:
+        if (rule->proto != 0 && rule->proto != IPPROTO_ICMP) {
+            SWSS_LOG_ERROR(
+                "Conflicting protocol settings: "
+                "ICMP requires ICMP protocol, but proto is already set to %u",
+                rule->proto);
+            return SAI_STATUS_FAILURE;
+        }
+        rule->proto = IPPROTO_ICMP;
+        status = acl_icmp_field_to_vpp_acl_rule(attr_id, value, rule);
+        break;
+
     case SAI_ACL_ENTRY_ATTR_FIELD_ICMPV6_CODE:
     case SAI_ACL_ENTRY_ATTR_FIELD_ICMPV6_TYPE:
-        status = acl_icmp_field_to_vpp_acl_rule(attr_id,
-						value, rule);
+        if (rule->proto != 0 && rule->proto != IPPROTO_ICMPV6) {
+            SWSS_LOG_ERROR(
+                "Conflicting protocol settings: "
+                "ICMPv6 requires ICMPv6 protocol, but proto is already set to %u",
+                rule->proto);
+            return SAI_STATUS_FAILURE;
+        }
+        rule->proto = IPPROTO_ICMPV6;
+        status = acl_icmp_field_to_vpp_acl_rule(attr_id, value, rule);
         break;
 
     case SAI_ACL_ENTRY_ATTR_FIELD_L4_SRC_PORT:
     case SAI_ACL_ENTRY_ATTR_FIELD_L4_DST_PORT:
-	status = acl_entry_port_to_vpp_acl_rule(attr_id, value, rule);
-	break;
+        if (rule->proto != 0 && rule->proto != IPPROTO_TCP) {
+            SWSS_LOG_ERROR(
+                "Conflicting protocol settings: "
+                "src/dst port requires TCP, but proto is already set to %u",
+                rule->proto);
+            return SAI_STATUS_FAILURE;
+        }
+        rule->proto = IPPROTO_TCP;
+        status = acl_entry_port_to_vpp_acl_rule(attr_id, value, rule);
+        break;
 
     case SAI_ACL_ENTRY_ATTR_FIELD_IP_PROTOCOL:
-	rule->proto = value->aclfield.data.u8 & value->aclfield.mask.u8;
-	status = SAI_STATUS_SUCCESS;
-	break;
+        if (rule->proto != 0 && rule->proto != (value->aclfield.data.u8 & value->aclfield.mask.u8)) {
+            SWSS_LOG_ERROR(
+                "Conflicting protocol settings: "
+                "IP_PROTOCOL specified but proto is already set to %u",
+                rule->proto);
+            return SAI_STATUS_FAILURE;
+        }
+        rule->proto = value->aclfield.data.u8 & value->aclfield.mask.u8;
+        status = SAI_STATUS_SUCCESS;
+        break;
+
+    case SAI_ACL_ENTRY_ATTR_FIELD_TCP_FLAGS:
+        if (rule->proto != 0 && rule->proto != IPPROTO_TCP) {
+            SWSS_LOG_ERROR(
+                "Conflicting protocol settings: "
+                "TCP flags require TCP, but proto is already set to %u",
+                rule->proto);
+            return SAI_STATUS_FAILURE;
+        }
+        rule->proto = IPPROTO_TCP;
+        rule->tcp_flags_mask = value->aclfield.mask.u8;
+        rule->tcp_flags_value = value->aclfield.data.u8;
+        break;
+
+    case SAI_ACL_ENTRY_ATTR_FIELD_IPV6_NEXT_HEADER:
+        if (rule->proto != 0 && rule->proto != (value->aclfield.data.u8 & value->aclfield.mask.u8)) {
+            SWSS_LOG_ERROR(
+                "Conflicting protocol settings: "
+                "IPV6_NEXT_HEADER specified but proto is already set to %u",
+                rule->proto);
+            return SAI_STATUS_FAILURE;
+        }
+        rule->proto = value->aclfield.data.u8 & value->aclfield.mask.u8;
+        break;
 
     case SAI_ACL_ENTRY_ATTR_ACTION_PACKET_ACTION:
-	acl_rule_set_action(value, rule);
-	break;
+        acl_rule_set_action(value, rule);
+        break;
+
+    case SAI_ACL_ENTRY_ATTR_PRIORITY:
+    case SAI_ACL_ENTRY_ATTR_TABLE_ID:
+    case SAI_ACL_ENTRY_ATTR_ADMIN_STATE:
+    case SAI_ACL_TABLE_ATTR_FIELD_ETHER_TYPE:
+    case SAI_ACL_ENTRY_ATTR_ACTION_COUNTER:
+        // NOOP here - these are either handled elsewhere or not currently applicable
+        break;
+
 
     default:
+        SWSS_LOG_ERROR("Unhandled ACL entry attribute ID: %d", attr_id);
         break;
     }
 
@@ -808,6 +884,16 @@ sai_status_t SwitchStateBase::fill_acl_rules(
                 }
             } else {
                 status = acl_rule_field_update((sai_acl_entry_attr_t) attr->id, &attr->value, rule);
+            }
+
+            if (rule && (rule->srcport_or_icmptype_first != 0 || rule->dstport_or_icmpcode_first != 0)) {
+                SWSS_LOG_DEBUG(
+                        "Attribute %d ranges: "
+                        "srcport_or_icmptype = %u - %u, "
+                        "dstport_or_icmpcode = %u - %u",
+                        attr->id,
+                        rule->srcport_or_icmptype_first, rule->srcport_or_icmptype_last,
+                        rule->dstport_or_icmpcode_first, rule->dstport_or_icmpcode_last);
             }
 
             if(status != SAI_STATUS_SUCCESS) {
