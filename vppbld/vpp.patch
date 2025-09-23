@@ -1,8 +1,8 @@
 diff --git a/Makefile b/Makefile
-index 6bd4ab611..128b462e5 100644
+index 792d5c4bf..d0d46b712 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -96,7 +96,7 @@ DEB_DEPENDS += libffi-dev python3-ply libunwind-dev
+@@ -100,7 +100,7 @@ DEB_DEPENDS += python3-ply libunwind-dev
  DEB_DEPENDS += cmake ninja-build python3-jsonschema python3-yaml
  DEB_DEPENDS += python3-venv  # ensurepip
  DEB_DEPENDS += python3-dev python3-pip
@@ -11,15 +11,15 @@ index 6bd4ab611..128b462e5 100644
  # DEB_DEPENDS += enchant  # for docs
  DEB_DEPENDS += python3-virtualenv
  DEB_DEPENDS += libssl-dev
-@@ -105,7 +105,7 @@ DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
- DEB_DEPENDS += nasm
+@@ -108,7 +108,7 @@ DEB_DEPENDS += libelf-dev libpcap-dev # for libxdp (af_xdp)
+ DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
  DEB_DEPENDS += iperf ethtool  # for 'make test TEST=vm_vpp_interfaces'
  DEB_DEPENDS += libpcap-dev
 -DEB_DEPENDS += tshark
 +#DEB_DEPENDS += tshark
  DEB_DEPENDS += jq # for extracting test summary from .json report (hs-test)
- 
- LIBFFI=libffi6 # works on all but 20.04 and debian-testing
+ DEB_DEPENDS += libiberty-dev
+ DEB_DEPENDS += nasm libnuma-dev # for make-ext-deps
 diff --git a/build/external/packages/xdp-tools.mk b/build/external/packages/xdp-tools.mk
 index 57f5e0ae8..73e35b90b 100644
 --- a/build/external/packages/xdp-tools.mk
