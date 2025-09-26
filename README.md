@@ -8,7 +8,7 @@ This repo contains  scripts, Makefiles, configuration file, Docker files etc to 
 **Caveat**- *The documentation for this project is a work in progress and a bit terse. We hope to address this in coming weeks.* 
 
 # Prerequisites
- * Linux host machine running ubuntu 18.x or later distribution (Ubuntu 20.x is preferred).
+ * Linux host machine running Debian 12 ("Bookwork)", Ubuntu 18.x or later distribution (Ubuntu 20.x is preferred).
  * Install the following packages 
 
 ```
@@ -30,7 +30,7 @@ There are two types of sonic-vpp image build targets supported
 
 1. git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git
 2. make init
-3. make configure PLATFORM=vpp
+3. NOBULLSEYE=1 NOBUSTER=1 make configure PLATFORM=vpp
 4. NOBULLSEYE=1 NOBUSTER=1 make SONIC_BUILD_JOBS=4 target/docker-sonic-vpp.gz
 Note: this is not tested and could be broken, which will be fixed later. In the meantime, use branch prior-to-build-change for single container image build.
 
@@ -42,7 +42,7 @@ Refer to the [Getting started](docs/README.getting-started.md) document in docs 
 ## Building a KVM VM image 
 1. git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git
 2. make init
-3. make configure PLATFORM=vpp
+3. NOBULLSEYE=1 NOBUSTER=1 make configure PLATFORM=vpp
 4. NOBULLSEYE=1 NOBUSTER=1 make SONIC_BUILD_JOBS=4 target/sonic-vpp.img.gz
 ### Testing the qemu VM image
 
