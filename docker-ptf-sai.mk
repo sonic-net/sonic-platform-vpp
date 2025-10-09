@@ -12,17 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-$(LIBSAIREDIS)_DEB_BUILD_PROFILES += syncd vs
+# docker image for docker-ptf-sai
 
-# VPP uses the virtual switch syncd since it operates in software dataplane mode
-SYNCD_VPP = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-SYNCD_VPP_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
-
-SYNCD_VS = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS)_RDEPENDS += $(LIBSAIREDIS) $(LIBSAIMETADATA) $(LIBSAIVS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS)))
-
-SYNCD_VS_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS_DBG)_DEPENDS += $(SYNCD_VS)
-$(SYNCD_VS_DBG)_RDEPENDS += $(SYNCD_VS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS_DBG)))
+DOCKER_PTF_SAI = docker-ptf-sai.gz
+DOCKER_PTF_BASE = docker-ptf.gz
+$(DOCKER_PTF_SAI)_PATH = $(DOCKERS_PATH)/docker-ptf-sai
+$(DOCKER_PTF_SAI)_DEPENDS += $(LIBTHRIFT_2) $(PYTHON3_THRIFT_2)
+$(DOCKER_PTF_SAI)_LOAD_DOCKERS += $(DOCKER_PTF_BASE)
+SONIC_DOCKER_IMAGES += $(DOCKER_PTF_SAI)
+SONIC_BUSTER_DOCKERS += $(DOCKER_PTF_SAI)

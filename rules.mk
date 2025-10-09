@@ -11,19 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-PLATFORM_RULES := $(PLATFORM_PATH)/rules
-export PLATFORM_RULES
-include $(PLATFORM_RULES)/syncd-vpp.mk
-include $(PLATFORM_RULES)/sonic-version.mk
-include $(PLATFORM_RULES)/platform-modules-vpp.mk
-include $(PLATFORM_RULES)/docker-syncd-vpp.mk
-include $(PLATFORM_RULES)/docker-gbsyncd-vpp.mk
-include $(PLATFORM_RULES)/docker-ptf.mk
-include $(PLATFORM_RULES)/docker-ptf-sai.mk
-include $(PLATFORM_RULES)/libsaithrift-dev.mk
-include $(PLATFORM_RULES)/one-image.mk
-include $(PLATFORM_RULES)/onie.mk
-include $(PLATFORM_RULES)/kvm-image.mk
-include $(PLATFORM_RULES)/raw-image.mk
+include $(PLATFORM_PATH)/syncd-vpp.mk
+include $(PLATFORM_PATH)/sonic-version.mk
+include $(PLATFORM_PATH)/platform-modules-vpp.mk
+include $(PLATFORM_PATH)/docker-syncd-vpp.mk
+include $(PLATFORM_PATH)/docker-sonic-vpp.mk
+include $(PLATFORM_PATH)/docker-gbsyncd-vpp.mk
+include $(PLATFORM_PATH)/docker-ptf.mk
+include $(PLATFORM_PATH)/docker-ptf-sai.mk
+include $(PLATFORM_PATH)/libsaithrift-dev.mk
+include $(PLATFORM_PATH)/vppcfgd.mk
+include $(PLATFORM_PATH)/one-image.mk
+include $(PLATFORM_PATH)/onie.mk
+include $(PLATFORM_PATH)/kvm-image.mk
+include $(PLATFORM_PATH)/raw-image.mk
 
 SONIC_ALL += $(SONIC_ONE_IMAGE) $(SONIC_KVM_IMAGE) $(DOCKER_SONIC_VPP) $(SONIC_RAW_IMAGE)
