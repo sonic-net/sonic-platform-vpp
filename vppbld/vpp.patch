@@ -1,8 +1,8 @@
 diff --git a/Makefile b/Makefile
-index 6bd4ab611..128b462e5 100644
+index 593ea4e98..736fb6704 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -96,7 +96,7 @@ DEB_DEPENDS += libffi-dev python3-ply libunwind-dev
+@@ -104,7 +104,7 @@ DEB_DEPENDS += python3-ply libunwind-dev
  DEB_DEPENDS += cmake ninja-build python3-jsonschema python3-yaml
  DEB_DEPENDS += python3-venv  # ensurepip
  DEB_DEPENDS += python3-dev python3-pip
@@ -11,25 +11,38 @@ index 6bd4ab611..128b462e5 100644
  # DEB_DEPENDS += enchant  # for docs
  DEB_DEPENDS += python3-virtualenv
  DEB_DEPENDS += libssl-dev
-@@ -105,7 +105,7 @@ DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
- DEB_DEPENDS += nasm
+@@ -112,7 +112,7 @@ DEB_DEPENDS += libelf-dev libpcap-dev # for libxdp (af_xdp)
+ DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
  DEB_DEPENDS += iperf ethtool  # for 'make test TEST=vm_vpp_interfaces'
  DEB_DEPENDS += libpcap-dev
 -DEB_DEPENDS += tshark
 +#DEB_DEPENDS += tshark
  DEB_DEPENDS += jq # for extracting test summary from .json report (hs-test)
+ DEB_DEPENDS += libiberty-dev
+ DEB_DEPENDS += nasm libnuma-dev # for make-ext-deps
+diff --git a/build/external/packages/dpdk.mk b/build/external/packages/dpdk.mk
+index 57f8242e5..63220f0a9 100644
+--- a/build/external/packages/dpdk.mk
++++ b/build/external/packages/dpdk.mk
+@@ -17,7 +17,7 @@ DPDK_DEBUG                   ?= n
+ DPDK_TAP_PMD                 ?= n
+ DPDK_FAILSAFE_PMD            ?= n
+ DPDK_MACHINE                 ?= generic
+-DPDK_MLX_IBV_LINK            ?= static
++DPDK_MLX_IBV_LINK            ?= shared
+ # On most of the systems, default value for max lcores is 128
+ DPDK_MAX_LCORES              ?=
  
- LIBFFI=libffi6 # works on all but 20.04 and debian-testing
 diff --git a/build/external/packages/xdp-tools.mk b/build/external/packages/xdp-tools.mk
-index 57f5e0ae8..73e35b90b 100644
+index a692aacf1..0265b8eaf 100644
 --- a/build/external/packages/xdp-tools.mk
 +++ b/build/external/packages/xdp-tools.mk
 @@ -25,7 +25,7 @@ define  xdp-tools_config_cmds
  endef
  
  define  xdp-tools_build_cmds
--	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc V=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
-+	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc FORCE_SUBDIR_LIBBPF=1 V=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
+-	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc V=1 BUILD_STATIC_ONLY=y PREFIX='$(xdp-tools_install_dir)' > $(xdp-tools_build_log)
++	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc FORCE_SUBDIR_LIBBPF=1 V=1 BUILD_STATIC_ONLY=y PREFIX='$(xdp-tools_install_dir)' > $(xdp-tools_build_log)
  endef
  
  define  xdp-tools_install_cmds
