@@ -20,19 +20,6 @@ index 593ea4e98..736fb6704 100644
  DEB_DEPENDS += jq # for extracting test summary from .json report (hs-test)
  DEB_DEPENDS += libiberty-dev
  DEB_DEPENDS += nasm libnuma-dev # for make-ext-deps
-diff --git a/build/external/packages/dpdk.mk b/build/external/packages/dpdk.mk
-index 57f8242e5..63220f0a9 100644
---- a/build/external/packages/dpdk.mk
-+++ b/build/external/packages/dpdk.mk
-@@ -17,7 +17,7 @@ DPDK_DEBUG                   ?= n
- DPDK_TAP_PMD                 ?= n
- DPDK_FAILSAFE_PMD            ?= n
- DPDK_MACHINE                 ?= generic
--DPDK_MLX_IBV_LINK            ?= static
-+DPDK_MLX_IBV_LINK            ?= shared
- # On most of the systems, default value for max lcores is 128
- DPDK_MAX_LCORES              ?=
- 
 diff --git a/build/external/packages/xdp-tools.mk b/build/external/packages/xdp-tools.mk
 index a692aacf1..0265b8eaf 100644
 --- a/build/external/packages/xdp-tools.mk
