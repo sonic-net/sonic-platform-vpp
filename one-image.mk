@@ -12,17 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-$(LIBSAIREDIS)_DEB_BUILD_PROFILES += syncd vs
+# sonic vpp one image installer
 
-# VPP uses the virtual switch syncd since it operates in software dataplane mode
-SYNCD_VPP = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-SYNCD_VPP_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
-
-SYNCD_VS = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS)_RDEPENDS += $(LIBSAIREDIS) $(LIBSAIMETADATA) $(LIBSAIVS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS)))
-
-SYNCD_VS_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS_DBG)_DEPENDS += $(SYNCD_VS)
-$(SYNCD_VS_DBG)_RDEPENDS += $(SYNCD_VS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS_DBG)))
+SONIC_ONE_IMAGE = sonic-vpp.bin
+$(SONIC_ONE_IMAGE)_MACHINE = vpp
+$(SONIC_ONE_IMAGE)_IMAGE_TYPE = onie
+$(SONIC_ONE_IMAGE)_INSTALLS += $(SYSTEMD_SONIC_GENERATOR) $(VPP_PLATFORM_MODULE)
+ifeq ($(INSTALL_DEBUG_TOOLS),y)
+$(SONIC_ONE_IMAGE)_DOCKERS += $(SONIC_INSTALL_DOCKER_DBG_IMAGES)
+$(SONIC_ONE_IMAGE)_DOCKERS += $(filter-out $(patsubst %-$(DBG_IMAGE_MARK).gz,%.gz, $(SONIC_INSTALL_DOCKER_DBG_IMAGES)), $(SONIC_INSTALL_DOCKER_IMAGES))
+else
+$(SONIC_ONE_IMAGE)_DOCKERS = $(SONIC_INSTALL_DOCKER_IMAGES)
+endif
+SONIC_INSTALLERS += $(SONIC_ONE_IMAGE)

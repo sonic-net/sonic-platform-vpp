@@ -62,6 +62,7 @@ RUN apt-get install -y net-tools \
                        # For installing dependent Python packages of sonic-host-services
                        # these packages are needed at runtime
                        gir1.2-glib-2.0 \
+                       python3-gi \
                        libdbus-1-3 \
                        libunwind8 \
                        libgirepository-1.0-1 \
@@ -111,7 +112,11 @@ copy {%- for whl in docker_sonic_vpp_whls.split(' ') %} python-wheels/{{ whl }}{
 # install PKGs after copying all PKGs to avoid dependency failure
 # use py3 to find python3 package, which is forced by wheel as of now
 {%- for whl in docker_sonic_vpp_whls.split(' ') %}
-RUN pip{% if 'py3' in whl %}3{% else %}2{% endif %} install python-wheels/{{ whl }}
+{%- if "host_services" in whl %}
+RUN pip{% if "py3" in whl %}3{% else %}2{% endif %} install --no-deps python-wheels/{{ whl }}
+{%- else %}
+RUN pip{% if "py3" in whl %}3{% else %}2{% endif %} install python-wheels/{{ whl }}
+{%- endif %}
 {%- endfor %}
 {% endif %}
 
@@ -176,6 +181,11 @@ COPY scripts/start_sonic.sh /usr/local/bin/
 COPY scripts/vpp_hostif.sh /usr/local/bin/
 COPY scripts/vpp_init.sh /usr/local/bin/
 COPY scripts/vppcfg_load.py /usr/local/bin/
+
+RUN chmod +x /usr/local/bin/start_sonic.sh && \
+    chmod +x /usr/local/bin/vpp_hostif.sh && \
+    chmod +x /usr/local/bin/vpp_init.sh && \
+    chmod +x /usr/local/bin/vppcfg_load.py
 
 COPY conf/vpp_init.conf /etc/supervisor/conf.d/
 COPY conf/startup.conf.tmpl  /etc/vpp/

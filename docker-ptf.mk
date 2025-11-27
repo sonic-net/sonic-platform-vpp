@@ -12,17 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-$(LIBSAIREDIS)_DEB_BUILD_PROFILES += syncd vs
+# docker image for docker-ptf
 
-# VPP uses the virtual switch syncd since it operates in software dataplane mode
-SYNCD_VPP = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-SYNCD_VPP_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
-
-SYNCD_VS = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS)_RDEPENDS += $(LIBSAIREDIS) $(LIBSAIMETADATA) $(LIBSAIVS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS)))
-
-SYNCD_VS_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS_DBG)_DEPENDS += $(SYNCD_VS)
-$(SYNCD_VS_DBG)_RDEPENDS += $(SYNCD_VS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS_DBG)))
+DOCKER_PTF = docker-ptf.gz
+$(DOCKER_PTF)_PYTHON_WHEELS += $(PTF_PY3)
+$(DOCKER_PTF)_PATH = $(DOCKERS_PATH)/docker-ptf
+$(DOCKER_PTF)_DEPENDS += $(LIBTHRIFT) $(PYTHON_THRIFT) $(PTF) $(PYTHON_SAITHRIFT)
+SONIC_DOCKER_IMAGES += $(DOCKER_PTF)
+SONIC_BUSTER_DOCKERS += $(DOCKER_PTF)
