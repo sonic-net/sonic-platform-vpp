@@ -53,7 +53,7 @@ $(addprefix $(DEST)/, $(MAIN_TARGET)):
 
 build_locally: repo_clone
 	pushd $(VPP_REPO_DIR)
-	make UNATTENDED=y PLATFORM=vpp install-dep && CUSTOM_VERSION=$(VPP_VERSION_SONIC) make UNATTENDED=y PLATFORM=vpp -j4 pkg-deb
+	make UNATTENDED=y PLATFORM=vpp DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n install-dep && make PLATFORM=vpp DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n install-ext-deps && CUSTOM_VERSION=$(VPP_VERSION_SONIC) make UNATTENDED=y PLATFORM=vpp -j4 DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n pkg-deb
 	pushd build-root
 	@for target in *_$(CONFIGURED_ARCH).deb; do \
 		cp $$target $(DEST)/
