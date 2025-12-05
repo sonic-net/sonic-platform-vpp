@@ -11,15 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-include $(PLATFORM_RULES)/syncd-vpp.dep
-include $(PLATFORM_RULES)/sonic-version.dep
-include $(PLATFORM_RULES)/platform-modules-vpp.dep
-include $(PLATFORM_RULES)/docker-syncd-vpp.dep
-include $(PLATFORM_RULES)/docker-gbsyncd-vpp.dep
-include $(PLATFORM_RULES)/docker-ptf.dep
-include $(PLATFORM_RULES)/docker-ptf-sai.dep
-include $(PLATFORM_RULES)/libsaithrift-dev.dep
-include $(PLATFORM_RULES)/one-image.dep
-include $(PLATFORM_RULES)/onie.dep
-include $(PLATFORM_RULES)/kvm-image.dep
-include $(PLATFORM_RULES)/raw-image.dep
+include $(PLATFORM_PATH)/syncd-vpp.dep
+include $(PLATFORM_PATH)/sonic-version.dep
+include $(PLATFORM_PATH)/platform-modules-vpp.dep
+include $(PLATFORM_PATH)/docker-syncd-vpp.dep
+include $(PLATFORM_PATH)/docker-gbsyncd-vpp.dep
+include $(PLATFORM_PATH)/docker-ptf.dep
+include $(PLATFORM_PATH)/docker-ptf-sai.dep
+include $(PLATFORM_PATH)/libsaithrift-dev.dep
+include $(PLATFORM_PATH)/one-image.dep
+include $(PLATFORM_PATH)/onie.dep
+include $(PLATFORM_PATH)/kvm-image.dep
