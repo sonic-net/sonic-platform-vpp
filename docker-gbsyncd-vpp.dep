@@ -12,17 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-$(LIBSAIREDIS)_DEB_BUILD_PROFILES += syncd vs
+#DPKG FRK
+DPATH       := $($(DOCKER_GBSYNCD_BASE)_PATH)
+DEP_FILES   := $(SONIC_COMMON_FILES_LIST) $(PLATFORM_RULES)/docker-gbsyncd-vpp.mk $(PLATFORM_RULES)/docker-gbsyncd-vpp.dep
+DEP_FILES   += $(SONIC_COMMON_BASE_FILES_LIST)
+DEP_FILES   += $(shell git ls-files $(DPATH))
 
-# VPP uses the virtual switch syncd since it operates in software dataplane mode
-SYNCD_VPP = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-SYNCD_VPP_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
+$(DOCKER_GBSYNCD_BASE)_CACHE_MODE  := GIT_CONTENT_SHA 
+$(DOCKER_GBSYNCD_BASE)_DEP_FLAGS   := $(SONIC_COMMON_FLAGS_LIST)
+$(DOCKER_GBSYNCD_BASE)_DEP_FILES   := $(DEP_FILES)
 
-SYNCD_VS = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS)_RDEPENDS += $(LIBSAIREDIS) $(LIBSAIMETADATA) $(LIBSAIVS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS)))
-
-SYNCD_VS_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS_DBG)_DEPENDS += $(SYNCD_VS)
-$(SYNCD_VS_DBG)_RDEPENDS += $(SYNCD_VS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS_DBG)))
+$(eval $(call add_dbg_docker,$(DOCKER_GBSYNCD_BASE),$(DOCKER_GBSYNCD_BASE_DBG)))

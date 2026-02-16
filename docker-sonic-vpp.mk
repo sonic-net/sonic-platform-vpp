@@ -28,7 +28,7 @@ $(DOCKER_SONIC_VPP)_DEPENDS += $(SYNCD_VPP) \
                               $(LIBYANG_PY3) \
                               $(SONIC_UTILITIES_DATA) \
                               $(SONIC_HOST_SERVICES_DATA) \
-                              $(FRR) $(FRR_SNMP) \
+			                  $(FRR) $(FRR_SNMP) \
 			                  $(LIBYANG2) \
                               $(IPROUTE2)
 

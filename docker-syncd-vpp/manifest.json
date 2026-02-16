@@ -2,17 +2,17 @@
 {
     "version": "1.0.0",
     "package": {
-        "version": "",
+        "version": "1.0.0",
         "depends": [],
-        "name": ""
+        "name": "syncd"
     },
     "service": {
-        "name": "",
+        "name": "syncd",
         "requires": [],
         "after": [],
         "before": [],
         "dependent-of": [],
-        "asic-service": false,
+        "asic-service": true,
         "host-service": false,
         "warm-shutdown": {
             "after": [],
