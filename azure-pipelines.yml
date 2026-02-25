@@ -26,7 +26,7 @@ schedules:
 parameters:
   - name: debian_version
     type: string
-    default: bookworm
+    default: trixie
   - name: arch
     type: string
     default: amd64
