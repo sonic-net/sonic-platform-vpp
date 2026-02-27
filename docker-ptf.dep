@@ -12,17 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-$(LIBSAIREDIS)_DEB_BUILD_PROFILES += syncd vs
 
-# VPP uses the virtual switch syncd since it operates in software dataplane mode
-SYNCD_VPP = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-SYNCD_VPP_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
+DPATH       := $($(DOCKER_PTF)_PATH)
+DEP_FILES   := $(SONIC_COMMON_FILES_LIST) $(PLATFORM_RULES)/docker-ptf.mk $(PLATFORM_RULES)/docker-ptf.dep
+DEP_FILES   += $(SONIC_COMMON_BASE_FILES_LIST)
+DEP_FILES   += $(shell git ls-files $(DPATH))
 
-SYNCD_VS = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS)_RDEPENDS += $(LIBSAIREDIS) $(LIBSAIMETADATA) $(LIBSAIVS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS)))
+$(DOCKER_PTF)_CACHE_MODE  := GIT_CONTENT_SHA
+$(DOCKER_PTF)_DEP_FLAGS   := $(SONIC_COMMON_FLAGS_LIST)
+$(DOCKER_PTF)_DEP_FILES   := $(DEP_FILES)
 
-SYNCD_VS_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS_DBG)_DEPENDS += $(SYNCD_VS)
-$(SYNCD_VS_DBG)_RDEPENDS += $(SYNCD_VS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS_DBG)))

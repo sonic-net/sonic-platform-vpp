@@ -12,17 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-$(LIBSAIREDIS)_DEB_BUILD_PROFILES += syncd vs
+# sonic version yml file
 
-# VPP uses the virtual switch syncd since it operates in software dataplane mode
-SYNCD_VPP = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-SYNCD_VPP_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
+sonic_version=$(SONIC_GET_VERSION)
+sonic_asic_platform=$(CONFIGURED_PLATFORM)
+sonic_os_version=$(SONIC_OS_VERSION)
 
-SYNCD_VS = syncd-vs_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS)_RDEPENDS += $(LIBSAIREDIS) $(LIBSAIMETADATA) $(LIBSAIVS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS)))
+export sonic_version
+export sonic_asic_platform
+export sonic_os_version
 
-SYNCD_VS_DBG = syncd-vs-dbgsym_1.0.0_$(CONFIGURED_ARCH).deb
-$(SYNCD_VS_DBG)_DEPENDS += $(SYNCD_VS)
-$(SYNCD_VS_DBG)_RDEPENDS += $(SYNCD_VS)
-$(eval $(call add_derived_package,$(LIBSAIREDIS),$(SYNCD_VS_DBG)))
+SONIC_VERSION = sonic_version.yml
+$(SONIC_VERSION)_SRC_PATH = $(PLATFORM_PATH)/sonic-version
+SONIC_MAKE_FILES += $(SONIC_VERSION)
+
+SONIC_PHONY_TARGETS += $(addprefix $(FILES_PATH)/, $(SONIC_VERSION))
