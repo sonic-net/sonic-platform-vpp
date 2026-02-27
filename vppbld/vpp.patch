@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 593ea4e98..736fb6704 100644
+index daede502e..6b5d29557 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -104,7 +104,7 @@ DEB_DEPENDS += python3-ply libunwind-dev
@@ -11,8 +11,8 @@ index 593ea4e98..736fb6704 100644
  # DEB_DEPENDS += enchant  # for docs
  DEB_DEPENDS += python3-virtualenv
  DEB_DEPENDS += libssl-dev
-@@ -112,7 +112,7 @@ DEB_DEPENDS += libelf-dev libpcap-dev # for libxdp (af_xdp)
- DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
+@@ -123,7 +123,7 @@ DEB_DEPENDS += iperf3 # for 'make test TEST=vcl'
+ endif
  DEB_DEPENDS += iperf ethtool  # for 'make test TEST=vm_vpp_interfaces'
  DEB_DEPENDS += libpcap-dev
 -DEB_DEPENDS += tshark
@@ -21,23 +21,23 @@ index 593ea4e98..736fb6704 100644
  DEB_DEPENDS += libiberty-dev
  DEB_DEPENDS += nasm libnuma-dev # for make-ext-deps
 diff --git a/build/external/packages/xdp-tools.mk b/build/external/packages/xdp-tools.mk
-index a692aacf1..0265b8eaf 100644
+index f33c220e5..fad06266a 100644
 --- a/build/external/packages/xdp-tools.mk
 +++ b/build/external/packages/xdp-tools.mk
 @@ -25,7 +25,7 @@ define  xdp-tools_config_cmds
  endef
  
  define  xdp-tools_build_cmds
--	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc V=1 BUILD_STATIC_ONLY=y PREFIX='$(xdp-tools_install_dir)' > $(xdp-tools_build_log)
-+	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc FORCE_SUBDIR_LIBBPF=1 V=1 BUILD_STATIC_ONLY=y PREFIX='$(xdp-tools_install_dir)' > $(xdp-tools_build_log)
+-	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc V=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
++	@cd ${xdp-tools_src_dir} && $(MAKE) CC=gcc FORCE_SUBDIR_LIBBPF=1 V=1 BUILD_STATIC_ONLY=y > $(xdp-tools_build_log)
  endef
  
  define  xdp-tools_install_cmds
 diff --git a/src/plugins/vxlan/vxlan.c b/src/plugins/vxlan/vxlan.c
-index 0885550d2..8b8cd66e4 100644
+index 46c014912..523e7b72d 100644
 --- a/src/plugins/vxlan/vxlan.c
 +++ b/src/plugins/vxlan/vxlan.c
-@@ -43,7 +43,7 @@
+@@ -34,7 +34,7 @@
   */
  
  
