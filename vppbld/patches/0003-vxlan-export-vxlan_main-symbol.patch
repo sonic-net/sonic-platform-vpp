@@ -1,0 +1,13 @@
+diff --git a/src/plugins/vxlan/vxlan.c b/src/plugins/vxlan/vxlan.c
+index 0885550d2..8b8cd66e4 100644
+--- a/src/plugins/vxlan/vxlan.c
++++ b/src/plugins/vxlan/vxlan.c
+@@ -43,7 +43,7 @@
+  */
+
+
+-vxlan_main_t vxlan_main;
++__clib_export vxlan_main_t vxlan_main;
+
+ static u32
+ vxlan_eth_flag_change (vnet_main_t *vnm, vnet_hw_interface_t *hi, u32 flags)

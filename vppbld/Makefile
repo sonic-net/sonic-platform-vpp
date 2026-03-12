@@ -35,10 +35,14 @@ repo_clone:
 	pushd $(VPP_REPO_DIR)
 	@VPP_VERSION=`cat ../vpp_version`
 	git checkout $$VPP_VERSION
-	# 1. use installed libnl from sonic. 
-	# 2. use libbpf pulled by vpp
-	# 3. export vxlan main
-	git apply ../vpp.patch
+	# Apply patches from series file
+	@while IFS= read -r line; do \
+		case "$$line" in \
+			''|\#*) continue ;; \
+		esac; \
+		echo "Applying patch: $$line"; \
+		git apply ../patches/$$line; \
+	done < ../patches/series
 	popd
 
 $(addprefix $(DEST)/, $(MAIN_TARGET)):
