@@ -1,0 +1,13 @@
+diff --git a/build/packages_common.mk b/build/packages_common.mk
+index 234223f..076db33 100644
+--- a/build/packages_common.mk
++++ b/build/packages_common.mk
+@@ -35,7 +35,7 @@ $(D)/$($1_tarball):
+ 		then cp $(DL_CACHE_DIR)/$($1_tarball) $$@ ; \
+ 	else \
+ 		echo "Downloading $($1_url)" ; \
+-		curl -o $$@ -LO $($1_url) ; \
++		curl -L -o $$@ $($1_url) ; \
+ 	fi
+ 	@rm -f $(B)/.$1.download.ok
+ 
