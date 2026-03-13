@@ -9,3 +9,5 @@
 0004-linux-cp-remove-ethertype-registration-check.patch
 # 5. Support CUSTOM_VERSION override in version script
 0005-version-support-custom-version-override.patch
+# 6. Fix curl conflicting -o and -O output options
+0006-fix-curl-conflicting-output-options.patch
