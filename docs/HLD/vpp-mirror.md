@@ -11,23 +11,23 @@
   6. [Port Mirroring — VPP Implementation](#6-port-mirroring--vpp-implementation)
   7. [Port Mirroring — Unit Tests](#7-port-mirroring--unit-tests)
 - **Phase 2: Everflow (ACL-Based Mirroring)**
-  8. [Everflow — Feature Description](#8-everflow--feature-description)
-  9. [Everflow — SONiC Configuration](#9-everflow--sonic-configuration)
+  1. [Everflow — Feature Description](#8-everflow--feature-description)
+  2. [Everflow — SONiC Configuration](#9-everflow--sonic-configuration)
       - [9.3 Supported Match Qualifiers](#93-supported-match-qualifiers)
       - [9.4 MIRROR_DSCP Table (Policer)](#94-mirror_dscp-table-policer)
       - [9.5 Per-Interface ACL Binding](#95-per-interface-acl-binding)
-  10. [Everflow — SAI API Calls](#10-everflow--sai-api-calls)
-  11. [Everflow — VPP Gap Analysis and Proposed Changes](#11-everflow--vpp-gap-analysis-and-proposed-changes)
-  12. [Everflow — SAI-VPP Implementation](#12-everflow--sai-vpp-implementation)
-  13. [Everflow — VPP Node Graphs](#13-everflow--vpp-node-graphs)
-  14. [Everflow — Unit Tests](#14-everflow--unit-tests)
+  3. [Everflow — SAI API Calls](#10-everflow--sai-api-calls)
+  4. [Everflow — VPP Gap Analysis and Proposed Changes](#11-everflow--vpp-gap-analysis-and-proposed-changes)
+  5. [Everflow — SAI-VPP Implementation](#12-everflow--sai-vpp-implementation)
+  6. [Everflow — VPP Node Graphs](#13-everflow--vpp-node-graphs)
+  7. [Everflow — Unit Tests](#14-everflow--unit-tests)
       - [14.2 IPv4 Match Qualifiers](#142-dataplane--ipv4-match-qualifiers)
       - [14.3 IPv6 Match Qualifiers](#143-dataplane--ipv6-match-qualifiers)
       - [14.5 Routing — Mirror Session Destination](#145-routing--mirror-session-destination)
       - [14.6 Advanced Scenarios](#146-advanced-scenarios)
       - [14.7 ACL Stage × Mirror Direction Matrix](#147-acl-stage--mirror-direction-matrix)
 - **Cross-Cutting**
-  15. [LAG / Port-Channel Support](#15-lag--port-channel-support)
+  1. [LAG / Port-Channel Support](#15-lag--port-channel-support)
 - **Appendices**
   - [Appendix A: File Change Summary](#appendix-a-file-change-summary)
   - [Appendix B: VPP Existing API Reference](#appendix-b-vpp-existing-api-reference)
@@ -162,24 +162,24 @@ Port mirroring copies ALL traffic on a source port (ingress, egress, or both) to
  ┌───────────────────────────────────────────────────────┐
  │  VPP Dataplane                                        │
  │                                                       │
- │  ┌───────────┐ ALL pkts  ┌─────────────────┐         │
- │  │ Ethernet0 │──────────>│ VPP SPAN module │         │
- │  │ (source)  │           │ (span-input /    │         │
- │  │           │           │  span-output)    │         │
- │  └───────────┘           └────────┬────────┘         │
+ │  ┌───────────┐ ALL pkts  ┌─────────────────┐          │
+ │  │ Ethernet0 │──────────>│ VPP SPAN module │          │
+ │  │ (source)  │           │ (span-input /   │          │
+ │  │           │           │  span-output)   │          │
+ │  └───────────┘           └────────┬────────┘          │
  │                                   │ clone             │
  │                                   ▼                   │
  │                          ┌─────────────────┐          │
- │                          │ interface-output │          │
+ │                          │ interface-output│          │
  │                          └────────┬────────┘          │
  │                              ┌────┴────┐              │
  │                              ▼         ▼              │
- │                        ┌────────┐ ┌──────────────┐   │
- │                        │ SPAN:  │ │ ERSPAN:      │   │
- │                        │ Eth8-tx│ │ gre-erspan   │   │
- │                        │ (local)│ │ → ip4-rewrite│   │
- │                        │        │ │ → phy-tx     │   │
- │                        └────────┘ └──────────────┘   │
+ │                        ┌────────┐ ┌──────────────┐    │
+ │                        │ SPAN:  │ │ ERSPAN:      │    │
+ │                        │ Eth8-tx│ │ gre-erspan   │    │
+ │                        │ (local)│ │ → ip4-rewrite│    │
+ │                        │        │ │ → phy-tx     │    │
+ │                        └────────┘ └──────────────┘    │
  │                                                       │
  │  Original pkt continues through normal forwarding     │
  └───────────────────────────────────────────────────────┘
