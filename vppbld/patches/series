@@ -11,3 +11,5 @@
 0005-version-support-custom-version-override.patch
 # 6. Fix curl conflicting -o and -O output options
 0006-fix-curl-conflicting-output-options.patch
+# 7. Add SRv6 LocalSID v2 API with uSID/custom length support and tests
+0007-srv6-localsid-v2-custom-usid-lengths.patch
