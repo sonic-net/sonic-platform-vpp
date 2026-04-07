@@ -106,26 +106,32 @@ sonic_ip4_validate_x1 (vlib_buffer_t *b, u16 *next)
   dst = clib_net_to_host_u32 (ip->dst_address.as_u32);
 
   /* SRC checks */
+
+  /* Drop packets with source in 127.0.0.0/8 (loopback range) */
   if (PREDICT_FALSE ((src >> 24) == 127))
     {
       *next = SONIC_IP4_VALIDATE_NEXT_DROP;
       return SONIC_IP4_VALIDATE_ERROR_SRC_LOOPBACK;
     }
+  /* Drop packets with source in 224.0.0.0/4 (multicast range) */
   if (PREDICT_FALSE ((src >> 28) == 0xE))
     {
       *next = SONIC_IP4_VALIDATE_NEXT_DROP;
       return SONIC_IP4_VALIDATE_ERROR_SRC_MULTICAST;
     }
+  /* Drop packets with source in 240.0.0.0/4 (class E reserved range) */
   if (PREDICT_FALSE ((src >> 28) == 0xF))
     {
       *next = SONIC_IP4_VALIDATE_NEXT_DROP;
       return SONIC_IP4_VALIDATE_ERROR_SRC_CLASS_E;
     }
+  /* Drop packets with source 0.0.0.0 (unspecified address) */
   if (PREDICT_FALSE (src == 0))
     {
       *next = SONIC_IP4_VALIDATE_NEXT_DROP;
       return SONIC_IP4_VALIDATE_ERROR_SRC_UNSPECIFIED;
     }
+  /* Drop packets with source in 169.254.0.0/16 (link-local range) */
   if (PREDICT_FALSE ((src >> 16) == 0xA9FE))
     {
       *next = SONIC_IP4_VALIDATE_NEXT_DROP;
@@ -133,11 +139,14 @@ sonic_ip4_validate_x1 (vlib_buffer_t *b, u16 *next)
     }
 
   /* DST checks */
+
+  /* Drop packets with destination in 127.0.0.0/8 (loopback range) */
   if (PREDICT_FALSE ((dst >> 24) == 127))
     {
       *next = SONIC_IP4_VALIDATE_NEXT_DROP;
       return SONIC_IP4_VALIDATE_ERROR_DST_LOOPBACK;
     }
+  /* Drop packets with destination in 169.254.0.0/16 (link-local range) */
   if (PREDICT_FALSE ((dst >> 16) == 0xA9FE))
     {
       *next = SONIC_IP4_VALIDATE_NEXT_DROP;

@@ -2,9 +2,27 @@
 name: SONiC IP Packet Validation
 maintainer: Akeel Ali <akeali@cisco.com>
 features:
-  - Drops IPv4 packets with invalid src/dst addresses (loopback, multicast, class E, unspecified, link-local)
-  - Drops IPv4 unicast packets with multicast/broadcast Ethernet destination
-  - Drops IPv6 packets with invalid src/dst addresses (multicast src, unspecified)
+  - SONiC-specific plugin to satisfy the requirements of test_drop_counters.py. 
+    When the plugin is enabled, the IP filtering listed below
+    is automatically applied to every interface.
+  - The plugin is enabled by default in SONiC. To disable, set the plugin 
+    to "disable" in the VPP startup config and restart syncd.
+  - IPv4 source filtering:
+    - Drops packets with source in 127.0.0.0/8 (loopback)
+    - Drops packets with source in 224.0.0.0/4 (multicast)
+    - Drops packets with source in 240.0.0.0/4 (class E reserved)
+    - Drops packets with source 0.0.0.0 (unspecified)
+    - Drops packets with source in 169.254.0.0/16 (link-local)
+  - IPv4 destination filtering:
+    - Drops packets with destination in 127.0.0.0/8 (loopback)
+    - Drops packets with destination in 169.254.0.0/16 (link-local)
+  - IPv4 L2 filtering:
+    - Drops unicast IP packets with multicast/broadcast Ethernet destination
+  - IPv6 source filtering:
+    - Drops packets with source in ff00::/8 (multicast)
+    - Drops packets with source "::" (unspecified)
+  - IPv6 destination filtering:
+    - Drops packets with destination "::" (unspecified)
 description: "SONiC IP packet validation plugin"
 state: experimental
 properties: []

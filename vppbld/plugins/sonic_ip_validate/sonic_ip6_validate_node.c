@@ -88,11 +88,14 @@ sonic_ip6_validate_x1 (vlib_buffer_t *b, u16 *next)
   vnet_feature_next (&feat_next, b);
 
   /* SRC checks */
+
+  /* Drop packets with source in ff00::/8 (multicast range) */
   if (PREDICT_FALSE (ip->src_address.as_u8[0] == 0xFF))
     {
       *next = SONIC_IP6_VALIDATE_NEXT_DROP;
       return SONIC_IP6_VALIDATE_ERROR_SRC_MULTICAST;
     }
+  /* Drop packets with source :: (unspecified address) */
   if (PREDICT_FALSE (sonic_ip6_address_is_zero (&ip->src_address)))
     {
       *next = SONIC_IP6_VALIDATE_NEXT_DROP;
@@ -100,6 +103,8 @@ sonic_ip6_validate_x1 (vlib_buffer_t *b, u16 *next)
     }
 
   /* DST checks */
+
+  /* Drop packets with destination :: (unspecified address) */
   if (PREDICT_FALSE (sonic_ip6_address_is_zero (&ip->dst_address)))
     {
       *next = SONIC_IP6_VALIDATE_NEXT_DROP;
