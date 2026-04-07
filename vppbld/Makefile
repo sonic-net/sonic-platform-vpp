@@ -31,7 +31,6 @@ ALL_TARGETS = $(MAIN_TARGET) $(DERIVED_TARGETS)
 repo_clone:
 	rm -rf $(VPP_REPO_DIR)
 	git clone $(VPP_URL) $(VPP_REPO_DIR)
-	cp -r $(VPP_CUSTOM_PLUGINS_DIR)/* $(VPP_REPO_DIR)/src/plugins/
 	pushd $(VPP_REPO_DIR)
 	@VPP_VERSION=`cat ../vpp_version`
 	git checkout $$VPP_VERSION
@@ -44,16 +43,10 @@ repo_clone:
 		git apply ../patches/$$line; \
 	done < ../patches/series
 	popd
+	cp -r $(VPP_CUSTOM_PLUGINS_DIR)/* $(VPP_REPO_DIR)/src/plugins/
 
 $(addprefix $(DEST)/, $(MAIN_TARGET)):
-	@echo "Downloading all .deb files to $(DEST)..."
-	@( \
-		set -e; \
-		$(foreach deb, $(ALL_TARGETS), \
-			echo "Attempting to download $(DEST)/$(deb)..."; \
-			curl -L -f -o $(DEST)/$(deb) $(VPP_DEB_URL)/$(deb); \
-		) \
-	) || (echo "One or more downloads failed..." && $(MAKE) build_locally -f Makefile)
+	$(MAKE) build_locally -f Makefile
 
 build_locally: repo_clone
 	pushd $(VPP_REPO_DIR)

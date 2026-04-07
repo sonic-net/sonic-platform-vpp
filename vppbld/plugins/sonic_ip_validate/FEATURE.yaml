@@ -1,0 +1,10 @@
+---
+name: SONiC IP Packet Validation
+maintainer: Akeel Ali <akeali@cisco.com>
+features:
+  - Drops IPv4 packets with invalid src/dst addresses (loopback, multicast, class E, unspecified, link-local)
+  - Drops IPv4 unicast packets with multicast/broadcast Ethernet destination
+  - Drops IPv6 packets with invalid src/dst addresses (multicast src, unspecified)
+description: "SONiC IP packet validation plugin"
+state: experimental
+properties: []
