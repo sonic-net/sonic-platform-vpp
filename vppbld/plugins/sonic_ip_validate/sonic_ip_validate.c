@@ -32,6 +32,11 @@ VLIB_PLUGIN_REGISTER () = {
 
 sonic_ip_validate_main_t sonic_ip_validate_main;
 
+/*
+ * API handler — currently used only by the test suite.
+ * Production behaviour is automatic: the VNET_SW_INTERFACE_ADD_DEL_FUNCTION
+ * callback enables validation on every interface when it is created.
+ */
 static void
 vl_api_sonic_ip_validate_enable_disable_t_handler (
   vl_api_sonic_ip_validate_enable_disable_t *mp)
@@ -75,12 +80,9 @@ VLIB_INIT_FUNCTION (sonic_ip_validate_init);
 
 /*
  * Auto-enable validation on every interface as it is created.
- *
- * Future option: if per-interface control is desired (e.g. to exclude
- * certain interfaces), this callback can be replaced with explicit
- * vnet_feature_enable_disable() calls from the SAI layer or vppcfgd,
- * similar to how tunterm_acl enables its feature via API. The API
- * sonic_ip_validate_enable_disable is already available for this purpose.
+ * This is the intended production mechanism — no explicit API call is
+ * needed.  The sonic_ip_validate_enable_disable API exists for testing
+ * and could serve as a per-interface override in the future if needed.
  */
 static clib_error_t *
 sonic_ip_validate_sw_interface_add_del (vnet_main_t *vnm, u32 sw_if_index,

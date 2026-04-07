@@ -21,6 +21,11 @@ import "vnet/interface_types.api";
     @param context - sender context, to match reply w/ request
     @param sw_if_index - the interface on which to enable/disable
     @param is_enable - 1 to enable, 0 to disable
+
+    Note: In production the plugin auto-enables validation on every
+    interface via the VNET_SW_INTERFACE_ADD_DEL_FUNCTION callback, so
+    callers do not need to invoke this API.  It is provided for testing
+    and as a hook for any future per-interface control if needed.
 */
 
 autoreply define sonic_ip_validate_enable_disable
