@@ -51,7 +51,7 @@ format_sonic_ip4_validate_trace (u8 *s, va_list *args)
   _ (SRC_LINK_LOCAL, "source address is link-local")                          \
   _ (DST_LOOPBACK, "destination address is loopback")                        \
   _ (DST_LINK_LOCAL, "destination address is link-local")                    \
-  _ (L2_MCAST_BCAST, "unicast IP with multicast/broadcast L2 destination")
+  _ (L2_MCAST_BCAST, "unicast IP with multicast~broadcast L2 destination")
 
 typedef enum
 {

@@ -15,6 +15,7 @@
 #include <vlib/vlib.h>
 #include <vnet/vnet.h>
 #include <vnet/ip/ip6_packet.h>
+#include <vnet/ethernet/ethernet.h>
 #include <vnet/feature/feature.h>
 #include <sonic_ip_validate/sonic_ip_validate.h>
 
@@ -45,7 +46,10 @@ format_sonic_ip6_validate_trace (u8 *s, va_list *args)
   _ (VALID, "valid packets")                                                  \
   _ (SRC_MULTICAST, "source address is multicast")                            \
   _ (SRC_UNSPECIFIED, "source address is unspecified")                        \
-  _ (DST_UNSPECIFIED, "destination address is unspecified")
+  _ (SRC_LOOPBACK, "source address is loopback")                              \
+  _ (DST_UNSPECIFIED, "destination address is unspecified")                   \
+  _ (DST_LOOPBACK, "destination address is loopback")                        \
+  _ (L2_MCAST_BCAST, "unicast IP with multicast~broadcast L2 destination")
 
 typedef enum
 {
@@ -74,6 +78,12 @@ sonic_ip6_address_is_zero (const ip6_address_t *a)
   return (a->as_u64[0] == 0 && a->as_u64[1] == 0);
 }
 
+static_always_inline int
+sonic_ip6_address_is_loopback (const ip6_address_t *a)
+{
+  return (a->as_u64[0] == 0 && a->as_u64[1] == clib_host_to_net_u64 (1));
+}
+
 /*
  * Validate a single IPv6 packet. Returns the error code and sets *next
  * to the appropriate next-node index (feature-arc next on success,
@@ -86,6 +96,20 @@ sonic_ip6_validate_x1 (vlib_buffer_t *b, u16 *next)
   u32 feat_next;
 
   vnet_feature_next (&feat_next, b);
+
+  /*
+   * L2 check: unicast IP but multicast/broadcast ETH dst.
+   * Use ethernet_buffer_get_header() which correctly handles VLAN-tagged
+   * frames via l2_hdr_offset set by ethernet-input.
+   */
+  {
+    ethernet_header_t *eth = ethernet_buffer_get_header (b);
+    if (PREDICT_FALSE (eth->dst_address[0] & 0x01))
+      {
+	*next = SONIC_IP6_VALIDATE_NEXT_DROP;
+	return SONIC_IP6_VALIDATE_ERROR_L2_MCAST_BCAST;
+      }
+  }
 
   /* SRC checks */
 
@@ -101,6 +125,12 @@ sonic_ip6_validate_x1 (vlib_buffer_t *b, u16 *next)
       *next = SONIC_IP6_VALIDATE_NEXT_DROP;
       return SONIC_IP6_VALIDATE_ERROR_SRC_UNSPECIFIED;
     }
+  /* Drop packets with source ::1 (loopback address) */
+  if (PREDICT_FALSE (sonic_ip6_address_is_loopback (&ip->src_address)))
+    {
+      *next = SONIC_IP6_VALIDATE_NEXT_DROP;
+      return SONIC_IP6_VALIDATE_ERROR_SRC_LOOPBACK;
+    }
 
   /* DST checks */
 
@@ -109,6 +139,12 @@ sonic_ip6_validate_x1 (vlib_buffer_t *b, u16 *next)
     {
       *next = SONIC_IP6_VALIDATE_NEXT_DROP;
       return SONIC_IP6_VALIDATE_ERROR_DST_UNSPECIFIED;
+    }
+  /* Drop packets with destination ::1 (loopback address) */
+  if (PREDICT_FALSE (sonic_ip6_address_is_loopback (&ip->dst_address)))
+    {
+      *next = SONIC_IP6_VALIDATE_NEXT_DROP;
+      return SONIC_IP6_VALIDATE_ERROR_DST_LOOPBACK;
     }
 
   /* Valid packet - continue on feature arc */
