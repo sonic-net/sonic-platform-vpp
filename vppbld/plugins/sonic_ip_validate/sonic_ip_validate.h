@@ -22,8 +22,6 @@ typedef struct
 {
   /* API message ID base */
   u16 msg_id_base;
-
-  vnet_main_t *vnet_main;
 } sonic_ip_validate_main_t;
 
 extern sonic_ip_validate_main_t sonic_ip_validate_main;

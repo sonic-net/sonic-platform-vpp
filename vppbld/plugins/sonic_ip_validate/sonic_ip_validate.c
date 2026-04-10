@@ -56,6 +56,12 @@ vl_api_sonic_ip_validate_enable_disable_t_handler (
 
   rv = vnet_feature_enable_disable ("ip6-unicast", "sonic-ip6-validate",
                                     sw_if_index, is_enable, 0, 0);
+  if (rv)
+    {
+      /* Rollback ip4 to avoid half-enabled state */
+      vnet_feature_enable_disable ("ip4-unicast", "sonic-ip4-validate",
+                                   sw_if_index, !is_enable, 0, 0);
+    }
 
 done:
   BAD_SW_IF_INDEX_LABEL;
@@ -70,7 +76,6 @@ sonic_ip_validate_init (vlib_main_t *vm)
 {
   sonic_ip_validate_main_t *sm = &sonic_ip_validate_main;
 
-  sm->vnet_main = vnet_get_main ();
   sm->msg_id_base = setup_message_id_table ();
 
   return 0;

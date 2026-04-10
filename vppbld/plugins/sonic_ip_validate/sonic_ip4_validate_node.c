@@ -43,15 +43,15 @@ format_sonic_ip4_validate_trace (u8 *s, va_list *args)
 }
 
 #define foreach_sonic_ip4_validate_error                                       \
-  _ (VALID, "VALID")                                                          \
-  _ (SRC_LOOPBACK, "SRC_LOOPBACK")                                            \
-  _ (SRC_MULTICAST, "SRC_MULTICAST")                                          \
-  _ (SRC_CLASS_E, "SRC_CLASS_E")                                              \
-  _ (SRC_UNSPECIFIED, "SRC_UNSPECIFIED")                                      \
-  _ (SRC_LINK_LOCAL, "SRC_LINK_LOCAL")                                        \
-  _ (DST_LOOPBACK, "DST_LOOPBACK")                                            \
-  _ (DST_LINK_LOCAL, "DST_LINK_LOCAL")                                        \
-  _ (L2_MCAST_BCAST, "L2_MCAST_BCAST")
+  _ (VALID, "valid packets")                                                  \
+  _ (SRC_LOOPBACK, "source address is loopback")                              \
+  _ (SRC_MULTICAST, "source address is multicast")                            \
+  _ (SRC_CLASS_E, "source address is class E")                                \
+  _ (SRC_UNSPECIFIED, "source address is unspecified")                        \
+  _ (SRC_LINK_LOCAL, "source address is link-local")                          \
+  _ (DST_LOOPBACK, "destination address is loopback")                        \
+  _ (DST_LINK_LOCAL, "destination address is link-local")                    \
+  _ (L2_MCAST_BCAST, "unicast IP with multicast/broadcast L2 destination")
 
 typedef enum
 {

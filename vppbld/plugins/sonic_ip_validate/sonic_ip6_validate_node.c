@@ -42,10 +42,10 @@ format_sonic_ip6_validate_trace (u8 *s, va_list *args)
 }
 
 #define foreach_sonic_ip6_validate_error                                       \
-  _ (VALID, "VALID")                                                          \
-  _ (SRC_MULTICAST, "SRC_MULTICAST")                                          \
-  _ (SRC_UNSPECIFIED, "SRC_UNSPECIFIED")                                      \
-  _ (DST_UNSPECIFIED, "DST_UNSPECIFIED")
+  _ (VALID, "valid packets")                                                  \
+  _ (SRC_MULTICAST, "source address is multicast")                            \
+  _ (SRC_UNSPECIFIED, "source address is unspecified")                        \
+  _ (DST_UNSPECIFIED, "destination address is unspecified")
 
 typedef enum
 {

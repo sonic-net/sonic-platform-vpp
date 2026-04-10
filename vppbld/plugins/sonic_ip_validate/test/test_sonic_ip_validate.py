@@ -399,7 +399,6 @@ class TestSonicIpValidate(VppTestCase):
     def test_disable_allows_invalid_ipv4(self):
         """IPv4: after disabling feature, invalid packets are forwarded"""
         pg0 = self.pg_interfaces[0]
-        pg1 = self.pg_interfaces[1]
 
         # The feature has refcount=2 on pg0 (auto-enable + explicit API
         # enable in setUpClass). Disable twice to fully remove.
@@ -427,7 +426,6 @@ class TestSonicIpValidate(VppTestCase):
     def test_disable_allows_invalid_ipv6(self):
         """IPv6: after disabling feature, invalid packets are forwarded"""
         pg0 = self.pg_interfaces[0]
-        pg1 = self.pg_interfaces[1]
 
         for _ in range(2):
             self.vapi.sonic_ip_validate_enable_disable(
