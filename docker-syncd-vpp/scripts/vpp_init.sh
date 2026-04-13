@@ -52,7 +52,11 @@ cp $STARTUP_TMPL $TMP_FILE || error "Failed to copy template file"
 [ "$NO_LINUX_NL" == "y" ] && sed -i -e 's/plugin linux_nl_plugin/#plugin linux_nl_plugin/g' $TMP_FILE
 
 IDX=0
-upd_startup "dpdk {"
+upd_startup """dpdk {
+	dev default {
+	    num-tx-desc 4096
+	}
+	"""
 for port in ${portlist[@]};
 do
     if eval ip link show type veth dev $port >& /dev/null; then
