@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-SONiC IP Packet Validation Plugin Tests
+IP Packet Validation Plugin Tests
 
-Tests for sonic-ip4-validate and sonic-ip6-validate VPP nodes.
+Tests for ip4-validate and ip6-validate VPP nodes.
 These nodes drop packets with invalid source/destination addresses
 and mismatched L2/L3 headers.
 """
@@ -18,12 +18,12 @@ from scapy.layers.inet6 import IPv6
 from scapy.packet import Raw
 
 
-class TestSonicIpValidate(VppTestCase):
-    """SONiC IP Packet Validation Test Case"""
+class TestIpValidate(VppTestCase):
+    """IP Packet Validation Test Case"""
 
     @classmethod
     def setUpClass(cls):
-        super(TestSonicIpValidate, cls).setUpClass()
+        super(TestIpValidate, cls).setUpClass()
         try:
             cls.create_pg_interfaces(range(2))
             for pg in cls.pg_interfaces:
@@ -33,9 +33,9 @@ class TestSonicIpValidate(VppTestCase):
                 pg.resolve_arp()
                 pg.resolve_ndp()
 
-            # Enable sonic-ip-validate features on pg interfaces via API
+            # Enable ip-validate features on pg interfaces via API
             for pg in cls.pg_interfaces:
-                cls.vapi.sonic_ip_validate_enable_disable(
+                cls.vapi.ip_validate_enable_disable(
                     sw_if_index=pg.sw_if_index, is_enable=True
                 )
         except Exception:
@@ -46,18 +46,18 @@ class TestSonicIpValidate(VppTestCase):
     def tearDownClass(cls):
         # Disable features before teardown
         for pg in cls.pg_interfaces:
-            cls.vapi.sonic_ip_validate_enable_disable(
+            cls.vapi.ip_validate_enable_disable(
                 sw_if_index=pg.sw_if_index, is_enable=False
             )
-        super(TestSonicIpValidate, cls).tearDownClass()
+        super(TestIpValidate, cls).tearDownClass()
 
     def setUp(self):
-        super(TestSonicIpValidate, self).setUp()
+        super(TestIpValidate, self).setUp()
         for pg in self.pg_interfaces:
             pg.enable_capture()
 
     def tearDown(self):
-        super(TestSonicIpValidate, self).tearDown()
+        super(TestIpValidate, self).tearDown()
 
     def show_commands_at_teardown(self):
         self.logger.info(self.vapi.cli("show interface"))
@@ -144,7 +144,7 @@ class TestSonicIpValidate(VppTestCase):
             dst_mac="01:00:5e:00:00:01",
         )
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip4-validate/unicast IP with multicast~broadcast L2 destination"
+            pkt, "/err/ip4-validate/unicast IP with multicast~broadcast L2 destination"
         )
 
     def test_unicast_ip_incorrect_eth_dst_broadcast(self):
@@ -156,7 +156,7 @@ class TestSonicIpValidate(VppTestCase):
             dst_mac="ff:ff:ff:ff:ff:ff",
         )
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip4-validate/unicast IP with multicast~broadcast L2 destination"
+            pkt, "/err/ip4-validate/unicast IP with multicast~broadcast L2 destination"
         )
 
     # ================================================================
@@ -167,35 +167,35 @@ class TestSonicIpValidate(VppTestCase):
         """IPv4: SRC=127.0.0.1 -> drop"""
         pkt = self.create_ipv4_packet(src_ip="127.0.0.1", dst_ip=None)
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip4-validate/source address is loopback"
+            pkt, "/err/ip4-validate/source address is loopback"
         )
 
     def test_src_ip_is_multicast_addr_ipv4(self):
         """IPv4: SRC=224.1.1.1 -> drop"""
         pkt = self.create_ipv4_packet(src_ip="224.1.1.1", dst_ip=None)
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip4-validate/source address is multicast"
+            pkt, "/err/ip4-validate/source address is multicast"
         )
 
     def test_src_ip_is_class_e(self):
         """IPv4: SRC=240.1.1.1 -> drop"""
         pkt = self.create_ipv4_packet(src_ip="240.1.1.1", dst_ip=None)
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip4-validate/source address is class E"
+            pkt, "/err/ip4-validate/source address is class E"
         )
 
     def test_ip_is_zero_addr_ipv4_src(self):
         """IPv4: SRC=0.0.0.0 -> drop"""
         pkt = self.create_ipv4_packet(src_ip="0.0.0.0", dst_ip=None)
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip4-validate/source address is unspecified"
+            pkt, "/err/ip4-validate/source address is unspecified"
         )
 
     def test_src_ip_link_local(self):
         """IPv4: SRC=169.254.1.1 -> drop"""
         pkt = self.create_ipv4_packet(src_ip="169.254.1.1", dst_ip=None)
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip4-validate/source address is link-local"
+            pkt, "/err/ip4-validate/source address is link-local"
         )
 
     # ================================================================
@@ -206,7 +206,7 @@ class TestSonicIpValidate(VppTestCase):
         """IPv4: DST=127.0.0.1 -> drop"""
         pkt = self.create_ipv4_packet(src_ip="10.0.0.1", dst_ip="127.0.0.1")
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip4-validate/destination address is loopback"
+            pkt, "/err/ip4-validate/destination address is loopback"
         )
 
     def test_dst_ip_link_local(self):
@@ -215,7 +215,7 @@ class TestSonicIpValidate(VppTestCase):
             src_ip="10.0.0.1", dst_ip="169.254.1.1"
         )
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip4-validate/destination address is link-local"
+            pkt, "/err/ip4-validate/destination address is link-local"
         )
 
     # ================================================================
@@ -231,7 +231,7 @@ class TestSonicIpValidate(VppTestCase):
         """IPv4: valid packets traverse node and increment VALID counter"""
         pg0 = self.pg_interfaces[0]
         pg1 = self.pg_interfaces[1]
-        counter_path = "/err/sonic-ip4-validate/valid packets"
+        counter_path = "/err/ip4-validate/valid packets"
         counter_before = self.statistics.get_err_counter(counter_path)
 
         pkts = [
@@ -267,7 +267,7 @@ class TestSonicIpValidate(VppTestCase):
             / Raw(b"\xa5" * 100)
         )
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip6-validate/unicast IP with multicast~broadcast L2 destination"
+            pkt, "/err/ip6-validate/unicast IP with multicast~broadcast L2 destination"
         )
 
     def test_unicast_ipv6_incorrect_eth_dst_broadcast(self):
@@ -281,7 +281,7 @@ class TestSonicIpValidate(VppTestCase):
             / Raw(b"\xa5" * 100)
         )
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip6-validate/unicast IP with multicast~broadcast L2 destination"
+            pkt, "/err/ip6-validate/unicast IP with multicast~broadcast L2 destination"
         )
 
     # ================================================================
@@ -292,21 +292,21 @@ class TestSonicIpValidate(VppTestCase):
         """IPv6: SRC=ff02::1 -> drop"""
         pkt = self.create_ipv6_packet(src_ip="ff02::1", dst_ip=None)
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip6-validate/source address is multicast"
+            pkt, "/err/ip6-validate/source address is multicast"
         )
 
     def test_ip_is_zero_addr_ipv6_src(self):
         """IPv6: SRC=:: -> drop"""
         pkt = self.create_ipv6_packet(src_ip="::", dst_ip=None)
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip6-validate/source address is unspecified"
+            pkt, "/err/ip6-validate/source address is unspecified"
         )
 
     def test_src_ip_is_loopback_addr_ipv6(self):
         """IPv6: SRC=::1 -> drop"""
         pkt = self.create_ipv6_packet(src_ip="::1", dst_ip=None)
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip6-validate/source address is loopback"
+            pkt, "/err/ip6-validate/source address is loopback"
         )
 
     # ================================================================
@@ -317,14 +317,14 @@ class TestSonicIpValidate(VppTestCase):
         """IPv6: DST=:: -> drop"""
         pkt = self.create_ipv6_packet(src_ip="2001:db8::1", dst_ip="::")
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip6-validate/destination address is unspecified"
+            pkt, "/err/ip6-validate/destination address is unspecified"
         )
 
     def test_dst_ip_is_loopback_addr_ipv6(self):
         """IPv6: DST=::1 -> drop"""
         pkt = self.create_ipv6_packet(src_ip="2001:db8::1", dst_ip="::1")
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip6-validate/destination address is loopback"
+            pkt, "/err/ip6-validate/destination address is loopback"
         )
 
     # ================================================================
@@ -340,7 +340,7 @@ class TestSonicIpValidate(VppTestCase):
         """IPv6: valid packets traverse node and increment VALID counter"""
         pg0 = self.pg_interfaces[0]
         pg1 = self.pg_interfaces[1]
-        counter_path = "/err/sonic-ip6-validate/valid packets"
+        counter_path = "/err/ip6-validate/valid packets"
         counter_before = self.statistics.get_err_counter(counter_path)
 
         pkts = [
@@ -379,7 +379,7 @@ class TestSonicIpValidate(VppTestCase):
         sub.resolve_arp()
 
         counter_before = self.statistics.get_err_counter(
-            "/err/sonic-ip4-validate/unicast IP with multicast~broadcast L2 destination"
+            "/err/ip4-validate/unicast IP with multicast~broadcast L2 destination"
         )
 
         pkt = (
@@ -399,7 +399,7 @@ class TestSonicIpValidate(VppTestCase):
         )
 
         counter_after = self.statistics.get_err_counter(
-            "/err/sonic-ip4-validate/unicast IP with multicast~broadcast L2 destination"
+            "/err/ip4-validate/unicast IP with multicast~broadcast L2 destination"
         )
         self.assertGreater(
             counter_after,
@@ -449,7 +449,7 @@ class TestSonicIpValidate(VppTestCase):
         # The feature has refcount=2 on pg0 (auto-enable + explicit API
         # enable in setUpClass). Disable twice to fully remove.
         for _ in range(2):
-            self.vapi.sonic_ip_validate_enable_disable(
+            self.vapi.ip_validate_enable_disable(
                 sw_if_index=pg0.sw_if_index, is_enable=False
             )
 
@@ -459,14 +459,14 @@ class TestSonicIpValidate(VppTestCase):
 
         # Re-enable twice to restore original refcount
         for _ in range(2):
-            self.vapi.sonic_ip_validate_enable_disable(
+            self.vapi.ip_validate_enable_disable(
                 sw_if_index=pg0.sw_if_index, is_enable=True
             )
 
         # Loopback-source packet should be dropped again
         pkt = self.create_ipv4_packet(src_ip="127.0.0.1", dst_ip=None)
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip4-validate/source address is loopback"
+            pkt, "/err/ip4-validate/source address is loopback"
         )
 
     def test_disable_allows_invalid_ipv6(self):
@@ -474,7 +474,7 @@ class TestSonicIpValidate(VppTestCase):
         pg0 = self.pg_interfaces[0]
 
         for _ in range(2):
-            self.vapi.sonic_ip_validate_enable_disable(
+            self.vapi.ip_validate_enable_disable(
                 sw_if_index=pg0.sw_if_index, is_enable=False
             )
 
@@ -483,13 +483,13 @@ class TestSonicIpValidate(VppTestCase):
         self.send_and_assert_forwarded(pkt)
 
         for _ in range(2):
-            self.vapi.sonic_ip_validate_enable_disable(
+            self.vapi.ip_validate_enable_disable(
                 sw_if_index=pg0.sw_if_index, is_enable=True
             )
 
         pkt = self.create_ipv6_packet(src_ip="ff02::1", dst_ip=None)
         self.send_and_assert_dropped(
-            pkt, "/err/sonic-ip6-validate/source address is multicast"
+            pkt, "/err/ip6-validate/source address is multicast"
         )
 
     # ================================================================

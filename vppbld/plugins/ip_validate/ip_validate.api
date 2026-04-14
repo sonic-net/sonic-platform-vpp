@@ -16,7 +16,7 @@
 option version = "1.0.0";
 import "vnet/interface_types.api";
 
-/** \brief Enable/disable sonic IP validation on an interface
+/** \brief Enable/disable IP validation on an interface
     @param client_index - opaque cookie to identify the sender
     @param context - sender context, to match reply w/ request
     @param sw_if_index - the interface on which to enable/disable
@@ -28,7 +28,7 @@ import "vnet/interface_types.api";
     and as a hook for any future per-interface control if needed.
 */
 
-autoreply define sonic_ip_validate_enable_disable
+autoreply define ip_validate_enable_disable
 {
   u32 client_index;
   u32 context;

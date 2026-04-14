@@ -17,7 +17,7 @@
 #include <vnet/ip/ip4_packet.h>
 #include <vnet/ethernet/ethernet.h>
 #include <vnet/feature/feature.h>
-#include <sonic_ip_validate/sonic_ip_validate.h>
+#include <ip_validate/ip_validate.h>
 
 typedef struct
 {
@@ -25,24 +25,24 @@ typedef struct
   u32 next_index;
   u32 src_addr;
   u32 dst_addr;
-} sonic_ip4_validate_trace_t;
+} ip4_validate_trace_t;
 
 static u8 *
-format_sonic_ip4_validate_trace (u8 *s, va_list *args)
+format_ip4_validate_trace (u8 *s, va_list *args)
 {
   CLIB_UNUSED (vlib_main_t * vm) = va_arg (*args, vlib_main_t *);
   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
-  sonic_ip4_validate_trace_t *t =
-    va_arg (*args, sonic_ip4_validate_trace_t *);
+  ip4_validate_trace_t *t =
+    va_arg (*args, ip4_validate_trace_t *);
 
   s = format (s,
-	      "SONIC-IP4-VALIDATE: sw_if_index %d next %d src %U dst %U",
+	      "IP4-VALIDATE: sw_if_index %d next %d src %U dst %U",
 	      t->sw_if_index, t->next_index, format_ip4_address, &t->src_addr,
 	      format_ip4_address, &t->dst_addr);
   return s;
 }
 
-#define foreach_sonic_ip4_validate_error                                       \
+#define foreach_ip4_validate_error                                       \
   _ (VALID, "valid packets")                                                  \
   _ (SRC_LOOPBACK, "source address is loopback")                              \
   _ (SRC_MULTICAST, "source address is multicast")                            \
@@ -55,32 +55,32 @@ format_sonic_ip4_validate_trace (u8 *s, va_list *args)
 
 typedef enum
 {
-#define _(sym, str) SONIC_IP4_VALIDATE_ERROR_##sym,
-  foreach_sonic_ip4_validate_error
+#define _(sym, str) IP4_VALIDATE_ERROR_##sym,
+  foreach_ip4_validate_error
 #undef _
-    SONIC_IP4_VALIDATE_N_ERROR,
-} sonic_ip4_validate_error_t;
+    IP4_VALIDATE_N_ERROR,
+} ip4_validate_error_t;
 
-static char *sonic_ip4_validate_error_strings[] = {
+static char *ip4_validate_error_strings[] = {
 #define _(sym, string) string,
-  foreach_sonic_ip4_validate_error
+  foreach_ip4_validate_error
 #undef _
 };
 
 typedef enum
 {
-  SONIC_IP4_VALIDATE_NEXT_DROP,
-  SONIC_IP4_VALIDATE_NEXT_FEATURE,
-  SONIC_IP4_VALIDATE_N_NEXT,
-} sonic_ip4_validate_next_t;
+  IP4_VALIDATE_NEXT_DROP,
+  IP4_VALIDATE_NEXT_FEATURE,
+  IP4_VALIDATE_N_NEXT,
+} ip4_validate_next_t;
 
 /*
  * Validate a single IPv4 packet. Returns the error code and sets *next
  * to the appropriate next-node index (feature-arc next on success,
- * SONIC_IP4_VALIDATE_NEXT_DROP on failure).
+ * IP4_VALIDATE_NEXT_DROP on failure).
  */
-static_always_inline sonic_ip4_validate_error_t
-sonic_ip4_validate_x1 (vlib_buffer_t *b, u16 *next)
+static_always_inline ip4_validate_error_t
+ip4_validate_x1 (vlib_buffer_t *b, u16 *next)
 {
   ip4_header_t *ip = vlib_buffer_get_current (b);
   u32 feat_next;
@@ -97,8 +97,8 @@ sonic_ip4_validate_x1 (vlib_buffer_t *b, u16 *next)
     ethernet_header_t *eth = ethernet_buffer_get_header (b);
     if (PREDICT_FALSE (eth->dst_address[0] & 0x01))
       {
-	*next = SONIC_IP4_VALIDATE_NEXT_DROP;
-	return SONIC_IP4_VALIDATE_ERROR_L2_MCAST_BCAST;
+	*next = IP4_VALIDATE_NEXT_DROP;
+	return IP4_VALIDATE_ERROR_L2_MCAST_BCAST;
       }
   }
 
@@ -110,32 +110,32 @@ sonic_ip4_validate_x1 (vlib_buffer_t *b, u16 *next)
   /* Drop packets with source in 127.0.0.0/8 (loopback range) */
   if (PREDICT_FALSE ((src >> 24) == 127))
     {
-      *next = SONIC_IP4_VALIDATE_NEXT_DROP;
-      return SONIC_IP4_VALIDATE_ERROR_SRC_LOOPBACK;
+      *next = IP4_VALIDATE_NEXT_DROP;
+      return IP4_VALIDATE_ERROR_SRC_LOOPBACK;
     }
   /* Drop packets with source in 224.0.0.0/4 (multicast range) */
   if (PREDICT_FALSE ((src >> 28) == 0xE))
     {
-      *next = SONIC_IP4_VALIDATE_NEXT_DROP;
-      return SONIC_IP4_VALIDATE_ERROR_SRC_MULTICAST;
+      *next = IP4_VALIDATE_NEXT_DROP;
+      return IP4_VALIDATE_ERROR_SRC_MULTICAST;
     }
   /* Drop packets with source in 240.0.0.0/4 (class E reserved range) */
   if (PREDICT_FALSE ((src >> 28) == 0xF))
     {
-      *next = SONIC_IP4_VALIDATE_NEXT_DROP;
-      return SONIC_IP4_VALIDATE_ERROR_SRC_CLASS_E;
+      *next = IP4_VALIDATE_NEXT_DROP;
+      return IP4_VALIDATE_ERROR_SRC_CLASS_E;
     }
   /* Drop packets with source 0.0.0.0 (unspecified address) */
   if (PREDICT_FALSE (src == 0))
     {
-      *next = SONIC_IP4_VALIDATE_NEXT_DROP;
-      return SONIC_IP4_VALIDATE_ERROR_SRC_UNSPECIFIED;
+      *next = IP4_VALIDATE_NEXT_DROP;
+      return IP4_VALIDATE_ERROR_SRC_UNSPECIFIED;
     }
   /* Drop packets with source in 169.254.0.0/16 (link-local range) */
   if (PREDICT_FALSE ((src >> 16) == 0xA9FE))
     {
-      *next = SONIC_IP4_VALIDATE_NEXT_DROP;
-      return SONIC_IP4_VALIDATE_ERROR_SRC_LINK_LOCAL;
+      *next = IP4_VALIDATE_NEXT_DROP;
+      return IP4_VALIDATE_ERROR_SRC_LINK_LOCAL;
     }
 
   /* DST checks */
@@ -143,29 +143,29 @@ sonic_ip4_validate_x1 (vlib_buffer_t *b, u16 *next)
   /* Drop packets with destination in 127.0.0.0/8 (loopback range) */
   if (PREDICT_FALSE ((dst >> 24) == 127))
     {
-      *next = SONIC_IP4_VALIDATE_NEXT_DROP;
-      return SONIC_IP4_VALIDATE_ERROR_DST_LOOPBACK;
+      *next = IP4_VALIDATE_NEXT_DROP;
+      return IP4_VALIDATE_ERROR_DST_LOOPBACK;
     }
   /* Drop packets with destination in 169.254.0.0/16 (link-local range) */
   if (PREDICT_FALSE ((dst >> 16) == 0xA9FE))
     {
-      *next = SONIC_IP4_VALIDATE_NEXT_DROP;
-      return SONIC_IP4_VALIDATE_ERROR_DST_LINK_LOCAL;
+      *next = IP4_VALIDATE_NEXT_DROP;
+      return IP4_VALIDATE_ERROR_DST_LINK_LOCAL;
     }
 
   /* Valid packet - continue on feature arc */
   *next = (u16) feat_next;
-  return SONIC_IP4_VALIDATE_ERROR_VALID;
+  return IP4_VALIDATE_ERROR_VALID;
 }
 
 static_always_inline void
-sonic_ip4_validate_trace_one (vlib_main_t *vm, vlib_node_runtime_t *node,
+ip4_validate_trace_one (vlib_main_t *vm, vlib_node_runtime_t *node,
 			      vlib_buffer_t *b, u16 next)
 {
   if (PREDICT_FALSE (b->flags & VLIB_BUFFER_IS_TRACED))
     {
       ip4_header_t *ip = vlib_buffer_get_current (b);
-      sonic_ip4_validate_trace_t *t =
+      ip4_validate_trace_t *t =
 	vlib_add_trace (vm, node, b, sizeof (*t));
       t->sw_if_index = vnet_buffer (b)->sw_if_index[VLIB_RX];
       t->next_index = next;
@@ -174,13 +174,13 @@ sonic_ip4_validate_trace_one (vlib_main_t *vm, vlib_node_runtime_t *node,
     }
 }
 
-VLIB_NODE_FN (sonic_ip4_validate_node)
+VLIB_NODE_FN (ip4_validate_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
   u32 n_left_from, *from;
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b;
   u16 nexts[VLIB_FRAME_SIZE], *next;
-  u32 error_counts[SONIC_IP4_VALIDATE_N_ERROR] = { 0 };
+  u32 error_counts[IP4_VALIDATE_N_ERROR] = { 0 };
 
   from = vlib_frame_vector_args (frame);
   n_left_from = frame->n_vectors;
@@ -205,17 +205,17 @@ VLIB_NODE_FN (sonic_ip4_validate_node)
 	  vlib_prefetch_buffer_data (b[7], LOAD);
 	}
 
-      error_counts[sonic_ip4_validate_x1 (b[0], &next[0])]++;
-      error_counts[sonic_ip4_validate_x1 (b[1], &next[1])]++;
-      error_counts[sonic_ip4_validate_x1 (b[2], &next[2])]++;
-      error_counts[sonic_ip4_validate_x1 (b[3], &next[3])]++;
+      error_counts[ip4_validate_x1 (b[0], &next[0])]++;
+      error_counts[ip4_validate_x1 (b[1], &next[1])]++;
+      error_counts[ip4_validate_x1 (b[2], &next[2])]++;
+      error_counts[ip4_validate_x1 (b[3], &next[3])]++;
 
       if (PREDICT_FALSE (node->flags & VLIB_NODE_FLAG_TRACE))
 	{
-	  sonic_ip4_validate_trace_one (vm, node, b[0], next[0]);
-	  sonic_ip4_validate_trace_one (vm, node, b[1], next[1]);
-	  sonic_ip4_validate_trace_one (vm, node, b[2], next[2]);
-	  sonic_ip4_validate_trace_one (vm, node, b[3], next[3]);
+	  ip4_validate_trace_one (vm, node, b[0], next[0]);
+	  ip4_validate_trace_one (vm, node, b[1], next[1]);
+	  ip4_validate_trace_one (vm, node, b[2], next[2]);
+	  ip4_validate_trace_one (vm, node, b[3], next[3]);
 	}
 
       b += 4;
@@ -226,13 +226,13 @@ VLIB_NODE_FN (sonic_ip4_validate_node)
 
   while (n_left_from)
     {
-      error_counts[sonic_ip4_validate_x1 (b[0], &next[0])]++;
+      error_counts[ip4_validate_x1 (b[0], &next[0])]++;
 
       if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
 			 (b[0]->flags & VLIB_BUFFER_IS_TRACED)))
 	{
 	  ip4_header_t *ip = vlib_buffer_get_current (b[0]);
-	  sonic_ip4_validate_trace_t *t =
+	  ip4_validate_trace_t *t =
 	    vlib_add_trace (vm, node, b[0], sizeof (*t));
 	  t->sw_if_index = vnet_buffer (b[0])->sw_if_index[VLIB_RX];
 	  t->next_index = next[0];
@@ -247,32 +247,32 @@ VLIB_NODE_FN (sonic_ip4_validate_node)
 
   vlib_buffer_enqueue_to_next (vm, node, from, nexts, frame->n_vectors);
 
-  for (int i = 0; i < SONIC_IP4_VALIDATE_N_ERROR; i++)
+  for (int i = 0; i < IP4_VALIDATE_N_ERROR; i++)
     {
       if (error_counts[i])
-	vlib_node_increment_counter (vm, sonic_ip4_validate_node.index, i,
+	vlib_node_increment_counter (vm, ip4_validate_node.index, i,
 				     error_counts[i]);
     }
 
   return frame->n_vectors;
 }
 
-VLIB_REGISTER_NODE (sonic_ip4_validate_node) = {
-  .name = "sonic-ip4-validate",
+VLIB_REGISTER_NODE (ip4_validate_node) = {
+  .name = "ip4-validate",
   .vector_size = sizeof (u32),
-  .format_trace = format_sonic_ip4_validate_trace,
+  .format_trace = format_ip4_validate_trace,
   .type = VLIB_NODE_TYPE_INTERNAL,
-  .n_errors = ARRAY_LEN (sonic_ip4_validate_error_strings),
-  .error_strings = sonic_ip4_validate_error_strings,
-  .n_next_nodes = SONIC_IP4_VALIDATE_N_NEXT,
+  .n_errors = ARRAY_LEN (ip4_validate_error_strings),
+  .error_strings = ip4_validate_error_strings,
+  .n_next_nodes = IP4_VALIDATE_N_NEXT,
   .next_nodes = {
-    [SONIC_IP4_VALIDATE_NEXT_DROP] = "error-drop",
-    [SONIC_IP4_VALIDATE_NEXT_FEATURE] = "ip4-lookup",
+    [IP4_VALIDATE_NEXT_DROP] = "error-drop",
+    [IP4_VALIDATE_NEXT_FEATURE] = "ip4-lookup",
   },
 };
 
-VNET_FEATURE_INIT (sonic_ip4_validate_feat, static) = {
+VNET_FEATURE_INIT (ip4_validate_feat, static) = {
   .arc_name = "ip4-unicast",
-  .node_name = "sonic-ip4-validate",
+  .node_name = "ip4-validate",
   .runs_before = VNET_FEATURES ("ip4-lookup"),
 };

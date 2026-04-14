@@ -11,12 +11,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_vpp_plugin(sonic_ip_validate
+add_vpp_plugin(ip_validate
   SOURCES
-  sonic_ip_validate.c
-  sonic_ip4_validate_node.c
-  sonic_ip6_validate_node.c
+  ip_validate.c
+  ip4_validate_node.c
+  ip6_validate_node.c
 
   API_FILES
-  sonic_ip_validate.api
+  ip_validate.api
 )
