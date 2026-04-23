@@ -1,0 +1,88 @@
+diff --git a/src/vnet/bonding/node.c b/src/vnet/bonding/node.c
+index 821535d7a..b842e03d5 100644
+--- a/src/vnet/bonding/node.c
++++ b/src/vnet/bonding/node.c
+@@ -104,6 +104,9 @@ bond_sw_if_idx_rewrite (vlib_main_t * vm, vlib_node_runtime_t * node,
+ 			&& !packet_is_cdp (eth)
+ 			&& (ethertype != htons (ETHERNET_TYPE_802_1_LLDP))))
+ 	{
++	  /* Save original member interface before rewrite */
++	  vnet_buffer2 (b)->orig_rx_sw_if_index =
++	    vnet_buffer (b)->sw_if_index[VLIB_RX];
+ 	  /* Change the physical interface to bond interface */
+ 	  vnet_buffer (b)->sw_if_index[VLIB_RX] = bond_sw_if_index;
+ 	  return;
+@@ -124,6 +127,9 @@ bond_sw_if_idx_rewrite (vlib_main_t * vm, vlib_node_runtime_t * node,
+ 			&& (ethertype != htons (ETHERNET_TYPE_CDP))
+ 			&& (ethertype != htons (ETHERNET_TYPE_802_1_LLDP))))
+ 	{
++	  /* Save original member interface before rewrite */
++	  vnet_buffer2 (b)->orig_rx_sw_if_index =
++	    vnet_buffer (b)->sw_if_index[VLIB_RX];
+ 	  /* Change the physical interface to bond interface */
+ 	  vnet_buffer (b)->sw_if_index[VLIB_RX] = bond_sw_if_index;
+ 	  return;
+@@ -242,6 +248,13 @@ VLIB_NODE_FN (bond_input_node) (vlib_main_t * vm,
+       sw_if_index[2] = vnet_buffer (b[2])->sw_if_index[VLIB_RX];
+       sw_if_index[3] = vnet_buffer (b[3])->sw_if_index[VLIB_RX];
+ 
++      /* Clear orig_rx_sw_if_index; will be set by bond_sw_if_idx_rewrite
++         only for packets whose sw_if_index[VLIB_RX] is rewritten. */
++      vnet_buffer2 (b[0])->orig_rx_sw_if_index = 0;
++      vnet_buffer2 (b[1])->orig_rx_sw_if_index = 0;
++      vnet_buffer2 (b[2])->orig_rx_sw_if_index = 0;
++      vnet_buffer2 (b[3])->orig_rx_sw_if_index = 0;
++
+       x |= sw_if_index[0] ^ last_member_sw_if_index;
+       x |= sw_if_index[1] ^ last_member_sw_if_index;
+       x |= sw_if_index[2] ^ last_member_sw_if_index;
+@@ -338,6 +351,7 @@ VLIB_NODE_FN (bond_input_node) (vlib_main_t * vm,
+   while (n_left)
+     {
+       sw_if_index[0] = vnet_buffer (b[0])->sw_if_index[VLIB_RX];
++      vnet_buffer2 (b[0])->orig_rx_sw_if_index = 0;
+       bond_update_next (vm, node, &last_member_sw_if_index, sw_if_index[0],
+ 			&bond_sw_if_index, b[0], &next_index, &error);
+       next[0] = next_index;
+diff --git a/src/vnet/buffer.h b/src/vnet/buffer.h
+index 01bd69b5e..f85dd0524 100644
+--- a/src/vnet/buffer.h
++++ b/src/vnet/buffer.h
+@@ -530,7 +530,12 @@ typedef struct
+     } reass;
+   } ip;
+ 
+-  u32 unused[5];
++  /* Original RX sw_if_index before bond/other rewrites.
++     Set by bond-input so that error-drop/error-punt can also
++     count drops against the physical member interface. */
++  u32 orig_rx_sw_if_index;
++
++  u32 unused[4];
+ } vnet_buffer_opaque2_t;
+ 
+ #define vnet_buffer2(b) ((vnet_buffer_opaque2_t *) (b)->opaque2)
+diff --git a/src/vnet/interface_output.c b/src/vnet/interface_output.c
+index 7991f6c90..79a4ec368 100644
+--- a/src/vnet/interface_output.c
++++ b/src/vnet/interface_output.c
+@@ -1085,6 +1085,19 @@ interface_drop_punt (vlib_main_t * vm,
+       if (sw_if0->sup_sw_if_index != sw_if_index[0])
+ 	vlib_increment_simple_counter
+ 	  (cm, thread_index, sw_if0->sup_sw_if_index, count);
++
++      /* Also count against the original member interface if the
++         RX sw_if_index was rewritten (e.g. by bond-input). */
++      {
++	u32 orig_off = frame->n_vectors - n_left - count;
++	for (u32 j = 0; j < count; j++)
++	  {
++	    vlib_buffer_t *ob = bufs[orig_off + j];
++	    u32 orig = vnet_buffer2 (ob)->orig_rx_sw_if_index;
++	    if (orig && orig != sw_if_index[0])
++	      vlib_increment_simple_counter (cm, thread_index, orig, 1);
++	  }
++      }
+     }
+ 
+   vnet_interface_main_t *im = &vnm->interface_main;

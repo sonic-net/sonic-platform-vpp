@@ -35,10 +35,14 @@ repo_clone:
 	pushd $(VPP_REPO_DIR)
 	@VPP_VERSION=`cat ../vpp_version`
 	git checkout $$VPP_VERSION
-	# 1. use installed libnl from sonic. 
-	# 2. use libbpf pulled by vpp
-	# 3. export vxlan main
-	git apply ../vpp.patch
+	# Apply patches from series file
+	@while IFS= read -r line; do \
+		case "$$line" in \
+			''|\#*) continue ;; \
+		esac; \
+		echo "Applying patch: $$line"; \
+		git apply ../patches/$$line; \
+	done < ../patches/series
 	popd
 
 $(addprefix $(DEST)/, $(MAIN_TARGET)):
@@ -58,6 +62,23 @@ build_locally: repo_clone
 	@for target in *_$(CONFIGURED_ARCH).deb; do \
 		cp $$target $(DEST)/
 	done
+	popd
+
+CONFIGURED_ARCH ?= amd64
+CI_DEST ?= $(CURDIR)/artifacts
+
+.PHONY: ci-build
+ci-build: repo_clone
+	mkdir -p $(CI_DEST)
+	pushd $(VPP_REPO_DIR)
+	make UNATTENDED=y PLATFORM=vpp DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n install-dep && \
+	make PLATFORM=vpp DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n install-ext-deps && \
+	make UNATTENDED=y PLATFORM=vpp -j4 DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n pkg-deb
+	pushd build-root
+	@for target in *_$(CONFIGURED_ARCH).deb; do \
+		cp $$target $(CI_DEST)/; \
+	done
+	popd
 	popd
 
 $(addprefix $(DEST)/, $(DERIVED_TARGETS)): $(DEST)/% : $(DEST)/$(MAIN_TARGET)

@@ -1,0 +1,17 @@
+# VPP patches for SONiC build
+# 1. Use installed libnl from sonic, disable tshark
+0001-remove-libnl-and-tshark-dependencies.patch
+# 2. Use libbpf pulled by vpp
+0002-xdp-tools-force-subdir-libbpf.patch
+# 3. Export vxlan_main symbol
+0003-vxlan-export-vxlan_main-symbol.patch
+# 4. Remove ethertype registration conflict check
+0004-linux-cp-remove-ethertype-registration-check.patch
+# 5. Support CUSTOM_VERSION override in version script
+0005-version-support-custom-version-override.patch
+# 6. Fix curl conflicting -o and -O output options
+0006-fix-curl-conflicting-output-options.patch
+# 7. Add SRv6 LocalSID v2 API with uSID/custom length support and tests
+0007-srv6-localsid-v2-custom-usid-lengths.patch
+# 8. Track drop stats against original bond member interface
+0008-bond-drop-stats-track-original-member-interface.patch

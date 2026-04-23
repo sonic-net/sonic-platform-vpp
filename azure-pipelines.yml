@@ -4,15 +4,15 @@
 # https://aka.ms/yaml
 
 pr:
-- main
+- master
 
 trigger:
   batch: true
   branches:
     include:
-    - main
+    - master
 
-pool: 
+pool:
   vmImage: ubuntu-latest
 
 schedules:
@@ -30,21 +30,16 @@ parameters:
   - name: arch
     type: string
     default: amd64
-   
+
 variables:
   - name: BUILD_BRANCH
     ${{ if eq(variables['Build.Reason'], 'PullRequest') }}:
       value: $(System.PullRequest.TargetBranch)
     ${{ else }}:
       value: $(Build.SourceBranchName)
-  - name: SONIC_BRANCH
-    ${{ if eq(variables['BUILD_BRANCH'], 'main') }}:
-      value: master
-    ${{ else }}:
-      value: $(BUILD_BRANCH)
 stages:
 - stage: BuildVpp
-  
+
   jobs:
   - job:
     displayName: amd64
@@ -61,7 +56,7 @@ stages:
         project: build
         pipeline: Azure.sonic-buildimage.common_libs
         runVersion: 'latestFromBranch'
-        runBranch: 'refs/heads/master'
+        runBranch: 'refs/heads/$(BUILD_BRANCH)'
         path: $(Build.ArtifactStagingDirectory)/download
         artifact: common-lib
         patterns: |
@@ -72,7 +67,7 @@ stages:
       displayName: "Download common libs"
     - script: |
         set -ex
-        echo "SONIC_BRANCH: $(SONIC_BRANCH), BUILD_BRANCH: $(BUILD_BRANCH)"
+        echo "BUILD_BRANCH: $(BUILD_BRANCH)"
         # install libyang before install libswsscommon
         sudo dpkg -i $(find ./download -name *.deb)
         rm -rf download || true
@@ -82,17 +77,9 @@ stages:
       displayName: "Install libnl3"
     - script: |
         set -ex
-        mkdir repo
-        git clone https://gerrit.fd.io/r/vpp repo
-        cp -vr $(System.DefaultWorkingDirectory)/vppbld/plugins/* repo/src/plugins/
-        cd repo
-        git checkout $(cat $(System.DefaultWorkingDirectory)/vppbld/vpp_version)
-        git apply $(System.DefaultWorkingDirectory)/vppbld/vpp.patch
-        make UNATTENDED=y PLATFORM=vpp install-deps install-ext-deps
-        make UNATTENDED=y PLATFORM=vpp -j4 pkg-deb
-        mkdir artifacts
-        mv build-root/*.deb artifacts/
+        cd $(System.DefaultWorkingDirectory)/vppbld
+        make ci-build CONFIGURED_ARCH=${{ parameters.arch }} CI_DEST=$(System.DefaultWorkingDirectory)/vppbld/artifacts
       displayName: "Build VPP packages from source"
-    - publish: $(System.DefaultWorkingDirectory)/repo/artifacts
+    - publish: $(System.DefaultWorkingDirectory)/vppbld/artifacts
       artifact: vpp
       displayName: "Archive vpp debian packages"
