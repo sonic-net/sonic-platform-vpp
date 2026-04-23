@@ -1,0 +1,40 @@
+From dd656ea5f6aa069e7eee458091608d64d2eb2808 Mon Sep 17 00:00:00 2001
+From: Longxiang Lyu <lolv@microsoft.com>
+Date: Wed, 08 Apr 2026 07:45:44 +0000
+Subject: [PATCH] ipip: fix P2MP tunnel lookup
+
+What Changed: The tunnel lookup fallback order was previously P2P ->
+6RD, skipping the P2MP lookup entirely. This change inserts the P2MP
+lookup between P2P and 6RD.
+
+Type: fix
+Change-Id: Ibcbb2ede0fe9ed859382f2629a0b2153eecdedac
+Signed-off-by: Longxiang Lyu <lolv@microsoft.com>
+---
+
+diff --git a/src/vnet/ipip/node.c b/src/vnet/ipip/node.c
+index ae9317f44..14bde7500 100644
+--- a/src/vnet/ipip/node.c
++++ b/src/vnet/ipip/node.c
+@@ -136,14 +136,19 @@ ipip_input (vlib_main_t * vm, vlib_node_runtime_t * node,
+ 
+ 	  /*
+ 	   * Find tunnel. First a lookup for P2P tunnels, then a lookup
+-	   * for multipoint tunnels
++	   * for multipoint tunnels: P2MP first, then 6RD
+ 	   */
+ 	  ipip_tunnel_t *t0 = ipip_tunnel_db_find (&key0);
+ 	  if (!t0)
+ 	    {
+ 	      ip46_address_reset (&key0.dst);
+-	      key0.mode = IPIP_MODE_6RD;
++	      key0.mode = IPIP_MODE_P2MP;
+ 	      t0 = ipip_tunnel_db_find (&key0);
++	      if (!t0)
++		{
++		  key0.mode = IPIP_MODE_6RD;
++		  t0 = ipip_tunnel_db_find (&key0);
++		}
+ 	      if (!t0)
+ 		{
+ 		  next0 = IPIP_INPUT_NEXT_DROP;
