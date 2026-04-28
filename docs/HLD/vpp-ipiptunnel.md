@@ -171,7 +171,28 @@ The **tunnel encap nexthop** is the actionable object — routes pointing to thi
 
 ## 5. SONiC Configuration
 
-### 5.1 Decap — ASIC_DB State
+### 5.1 Decap - APPL_DB State
+
+```
+### TUNNEL_DECAP_TABLE
+    ; Stores a list of decap tunnels
+    key                 = TUNNEL_DECAP_TABLE:tunnel_name                ; tunnel name as key
+    tunnel_type         = "IPINIP"                                      ; tunnel type
+    dscp_mode           = "uniform"/"pipe"
+    ecn_mode            = "copy_from_outer"/"standard"
+    ttl_mode            = "uniform"/"pipe"
+    encap_ecn_mode      = "standard"
+
+### TUNNEL_DECAP_TERM_TABLE
+    ; Stores a list of decap terms.
+    key                 = TUNNEL_DECAP_TERM_TABLE:tunnel_name:dst_ip    ; tunnel name:dst IP prefix as key
+    term_type   	      = "P2P"/"P2MP"                                  ; tunnel decap term type
+    src_ip              = source IP prefix                              ; present if term_type is "P2P"
+    subnet_type         = "vlan"/"vip"                                  ; the subnet type of the dst IP prefix, present
+                                                                        ; if this is a subnet decap term
+```
+
+### 5.2 Decap — ASIC_DB State
 
 After orchagent processes the APP_DB entries, the following objects appear in ASIC_DB:
 
@@ -194,7 +215,7 @@ After orchagent processes the APP_DB entries, the following objects appear in AS
  "SAI_TUNNEL_TERM_TABLE_ENTRY_ATTR_DST_IP"           = "10.1.0.32"
 ```
 
-### 5.2 Encap — ASIC_DB State
+### 5.3 Encap — ASIC_DB State
 
 When `MuxOrch` creates a P2P encap tunnel:
 
@@ -388,7 +409,7 @@ sequenceDiagram
         TM->>TM: refcount++ → reuse existing sw_if_index
     else new tunnel
         TM->>VPP: vpp_ipip_tunnel_add(&req)
-        VPP-->>TM: sw_if_index (e.g. ipip0)
+        VPP-->>TM: sw_if_index (e.g. 76)
         TM->>VPP: refresh_interfaces_list()
         TM->>VPP: interface_set_state(ipip0, UP)
         TM->>TM: resolve_vrf_id(VR_ID) → vrf_id
