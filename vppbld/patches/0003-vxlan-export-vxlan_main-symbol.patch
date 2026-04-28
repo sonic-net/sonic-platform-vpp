@@ -1,8 +1,8 @@
 diff --git a/src/plugins/vxlan/vxlan.c b/src/plugins/vxlan/vxlan.c
-index 0885550d2..8b8cd66e4 100644
+index 46c014912..523e7b72d 100644
 --- a/src/plugins/vxlan/vxlan.c
 +++ b/src/plugins/vxlan/vxlan.c
-@@ -43,7 +43,7 @@
+@@ -34,7 +34,7 @@
   */
 
 
