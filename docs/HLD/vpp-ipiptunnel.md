@@ -159,11 +159,11 @@ SAI_OBJECT_TYPE_TUNNEL (defines tunnel endpoints + TTL/DSCP modes)
 │
 └── SAI_OBJECT_TYPE_NEXT_HOP (actionable — triggers encap for routes)
     ├── SAI_NEXT_HOP_ATTR_TYPE        = SAI_NEXT_HOP_TYPE_TUNNEL_ENCAP
-    ├── SAI_NEXT_HOP_ATTR_IP          = destination IP (inner packet dst)
+    ├── SAI_NEXT_HOP_ATTR_IP          = tunnel destination IP (peer endpoint, becomes outer dst)
     └── SAI_NEXT_HOP_ATTR_TUNNEL_ID   = reference to tunnel object above
 ```
 
-The **tunnel object** defines the P2P endpoints and QoS modes. For encap (unlike decap), the tunnel object carries `ENCAP_SRC_IP` and `ENCAP_DST_IP` that become the outer header source and destination.
+The **tunnel object** defines the P2P endpoints and QoS modes. For encap, the tunnel object carries `ENCAP_SRC_IP` (our loopback) which becomes the outer header source IP. The **nexthop's** `SAI_NEXT_HOP_ATTR_IP` provides the peer endpoint IP that becomes the outer header destination — this is the same value as the tunnel's `ENCAP_DST_IP` in the MuxOrch DualToR use case, but the VPP implementation reads it from the nexthop object.
 
 The **tunnel encap nexthop** is the actionable object — routes pointing to this nexthop will have their packets encapsulated through the tunnel. `MuxOrch` creates these nexthops for active-standby traffic steering.
 
