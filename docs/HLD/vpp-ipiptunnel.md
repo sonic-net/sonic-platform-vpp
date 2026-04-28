@@ -91,7 +91,7 @@ SONiC creates IPinIP encap tunnels to steer traffic through a P2P tunnel to a
 specific peer. The typical use case is MuxCable/Dualtor active-standby, where
 the standby ToR must forward traffic through the IPinIP tunnel to the active ToR.
 
-1. `MuxOrch` (or `TunnelDecapOrch`) creates a P2P tunnel object with `SAI_TUNNEL_ATTR_ENCAP_SRC_IP` and `SAI_TUNNEL_ATTR_ENCAP_DST_IP`
+1. `MuxOrch` creates a P2P tunnel object with `SAI_TUNNEL_ATTR_ENCAP_SRC_IP` and `SAI_TUNNEL_ATTR_ENCAP_DST_IP`
 2. A `TUNNEL_ENCAP` nexthop is created referencing the tunnel + destination IP
 3. Routes are programmed to use this tunnel nexthop
 4. Matching packets are encapsulated with the outer IP header and forwarded
@@ -325,16 +325,28 @@ SAI API (libsaivpp)
 │ ├── TunnelManager.h [MODIFY]                         │
 │ │   └── TunnelManagerIpIp class                      │
 │ │       ├── IpIpTunnelVPPData struct                 │
+│ │       ├── IpIpTunnelKey / IpIpTunnelRef (dedup)    │
+│ │       ├── PendingUnnumbered struct                 │
 │ │       ├── create_ipip_tunnel_term()   (decap)      │
 │ │       ├── remove_ipip_tunnel_term()   (decap)      │
 │ │       ├── ipip_encap_nexthop_action() (encap)      │
-│ │       └── get_tunnel_if()             (encap)      │
+│ │       ├── get_tunnel_if()             (encap)      │
+│ │       ├── create_ipip_vpp_tunnel()    (shared)     │
+│ │       ├── remove_ipip_vpp_tunnel()    (shared)     │
+│ │       └── retry_pending_unnumbered()  (deferred)   │
 │ │                                                    │
 │ ├── TunnelManager.cpp [MODIFY]                       │
 │ │   ├── map_sai_to_vpp_flags()                       │
+│ │   ├── create_ipip_vpp_tunnel()  (refcount + dedup) │
+│ │   ├── remove_ipip_vpp_tunnel()  (refcount guard)   │
 │ │   ├── create_ipip_tunnel_term()                    │
 │ │   ├── remove_ipip_tunnel_term()                    │
-│ │   └── ipip_encap_nexthop_action()                  │
+│ │   ├── ipip_encap_nexthop_action()                  │
+│ │   └── retry_pending_unnumbered()                   │
+│ │                                                    │
+│ ├── SwitchVppRif.cpp [MODIFY]                        │
+│ │   └── calls retry_pending_unnumbered() after IP    │
+│ │       address add on physical/loopback interfaces  │
 │ │                                                    │
 │ └── vppxlate/                                        │
 │     ├── SaiVppXlate.h [MODIFY]                       │
@@ -342,7 +354,7 @@ SAI API (libsaivpp)
 │     │   ├── vpp_ipip_tunnel_add()                    │
 │     │   ├── vpp_ipip_tunnel_del()                    │
 │     │   ├── sw_interface_set_unnumbered()            │
-│     │   └── vpp_sw_interface_find_by_ip()            │
+│     │   └── vpp_sw_interface_find_by_ip(ip, vrf)     │
 │     └── SaiVppXlate.c [MODIFY]                       │
 │         └── implement all wrappers above             │
 └──────────────────────────────────────────────────────┘
@@ -370,18 +382,27 @@ sequenceDiagram
     TM->>TM: map_sai_to_vpp_flags()
     TM->>TM: Build vpp_ipip_tunnel_t (src=DST_IP, dst=SRC_IP, mode, flags)
 
-    TM->>VPP: vpp_ipip_tunnel_add(&req)
-    VPP-->>TM: sw_if_index (e.g. ipip0)
-
-    TM->>VPP: refresh_interfaces_list()
-    TM->>VPP: interface_set_state(ipip0, UP)
-
-    TM->>TM: vpp_get_ip_vrf(VR_ID) → vrf_id
-    TM->>VPP: set_interface_vrf(ipip0, vrf_id)
-
-    TM->>VPP: vpp_sw_interface_find_by_ip(DST_IP)
-    VPP-->>TM: owner_sw_if_index (e.g. loop0)
-    TM->>VPP: sw_interface_set_unnumbered(ipip0, loop0)
+    TM->>TM: create_ipip_vpp_tunnel(req, vrf_id)
+    Note right of TM: Check refcount: {src, dst, mode} key
+    alt tunnel already exists (refcount > 0)
+        TM->>TM: refcount++ → reuse existing sw_if_index
+    else new tunnel
+        TM->>VPP: vpp_ipip_tunnel_add(&req)
+        VPP-->>TM: sw_if_index (e.g. ipip0)
+        TM->>VPP: refresh_interfaces_list()
+        TM->>VPP: interface_set_state(ipip0, UP)
+        TM->>TM: resolve_vrf_id(VR_ID) → vrf_id
+        TM->>VPP: set_interface_vrf(ipip0, vrf_id)
+        TM->>VPP: vpp_sw_interface_find_by_ip(DST_IP, vrf_id)
+        alt owner interface found
+            VPP-->>TM: owner_sw_if_index (e.g. loop0)
+            TM->>VPP: sw_interface_set_unnumbered(ipip0, loop0)
+        else owner not found yet (RIF not programmed)
+            TM->>TM: Defer → m_pending_unnumbered[ip_str]
+            Note right of TM: Retried when createRouterif adds IP
+        end
+        TM->>TM: m_ipip_tunnel_refcount[key] = {sw_if_index, 1}
+    end
 
     TM->>TM: Store in m_ipip_term_map
     TM-->>SW: SAI_STATUS_SUCCESS
@@ -394,8 +415,15 @@ sequenceDiagram
     alt not found
         TM-->>SW: SAI_STATUS_SUCCESS (idempotent)
     else found
-        TM->>VPP: interface_set_state(ipip0, DOWN)
-        TM->>VPP: vpp_ipip_tunnel_del(sw_if_index)
+        TM->>TM: remove_ipip_vpp_tunnel(sw_if_index)
+        alt refcount > 1
+            TM->>TM: refcount-- → skip physical delete
+        else refcount == 1
+            TM->>TM: Erase from m_ipip_tunnel_refcount
+            TM->>TM: Clean up m_pending_unnumbered
+            TM->>VPP: interface_set_state(ipip0, DOWN)
+            TM->>VPP: vpp_ipip_tunnel_del(sw_if_index)
+        end
         TM->>TM: Erase from m_ipip_term_map
         TM-->>SW: SAI_STATUS_SUCCESS
     end
@@ -424,19 +452,30 @@ sequenceDiagram
     IPIP->>DB: 1. Read tunnel attrs (ENCAP_SRC_IP, ENCAP_DST_IP, TTL/DSCP/ECN)
     DB-->>IPIP: tunnel attributes
     IPIP->>IPIP: map_sai_to_vpp_flags()
-    IPIP->>IPIP: 2. Build vpp_ipip_tunnel_t (src=ENCAP_SRC_IP, dst=ENCAP_DST_IP, P2P)
+    IPIP->>IPIP: 3. Build vpp_ipip_tunnel_t (src=ENCAP_SRC_IP, dst=NH_ATTR_IP, P2P)
+    Note right of IPIP: ENCAP_INNER_HASH (0x20) flag always set for P2P
 
-    IPIP->>VPP: 3. vpp_ipip_tunnel_add(&req)
-    VPP-->>IPIP: sw_if_index (e.g. ipip1)
+    IPIP->>IPIP: 4. create_ipip_vpp_tunnel(req, vrf_id)
+    Note right of IPIP: Check refcount: {src, dst, mode} key
+    alt tunnel already exists (refcount > 0)
+        IPIP->>IPIP: refcount++ → reuse existing sw_if_index
+    else new tunnel
+        IPIP->>VPP: vpp_ipip_tunnel_add(&req)
+        VPP-->>IPIP: sw_if_index (e.g. 76)
+        IPIP->>VPP: 5. refresh_interfaces_list()
+        IPIP->>VPP: 6. interface_set_state(ipip1, UP)
+        IPIP->>VPP: 7. set_interface_vrf(ipip1, vrf_id)
+        IPIP->>VPP: vpp_sw_interface_find_by_ip(ENCAP_SRC_IP, vrf_id)
+        alt owner found
+            VPP-->>IPIP: owner_sw_if_index (e.g. loop0)
+            IPIP->>VPP: sw_interface_set_unnumbered(ipip1, loop0)
+        else owner not found yet
+            IPIP->>IPIP: Defer → m_pending_unnumbered[ip_str]
+        end
+        IPIP->>IPIP: m_ipip_tunnel_refcount[key] = {sw_if, 1}
+    end
 
-    IPIP->>VPP: 4. refresh_interfaces_list()
-    IPIP->>VPP: 5. interface_set_state(ipip1, UP)
-
-    IPIP->>VPP: 6. vpp_sw_interface_find_by_ip(ENCAP_SRC_IP)
-    VPP-->>IPIP: owner_sw_if_index (e.g. loop0)
-    IPIP->>VPP: sw_interface_set_unnumbered(ipip1, loop0)
-
-    IPIP->>IPIP: 7. Store in m_ipip_encap_nh_map
+    IPIP->>IPIP: 8. Store in m_ipip_encap_nh_map
     IPIP-->>TM: SAI_STATUS_SUCCESS
 
     Note over Orch, VPP: ── Remove Flow ──
@@ -448,8 +487,15 @@ sequenceDiagram
     alt not found
         IPIP-->>TM: SAI_STATUS_SUCCESS (idempotent)
     else found
-        IPIP->>VPP: interface_set_state(ipip1, DOWN)
-        IPIP->>VPP: vpp_ipip_tunnel_del(sw_if_index)
+        IPIP->>IPIP: remove_ipip_vpp_tunnel(sw_if_index)
+        alt refcount > 1
+            IPIP->>IPIP: refcount-- → skip physical delete
+        else refcount == 1
+            IPIP->>IPIP: Erase from m_ipip_tunnel_refcount
+            IPIP->>IPIP: Clean up m_pending_unnumbered
+            IPIP->>VPP: interface_set_state(ipip1, DOWN)
+            IPIP->>VPP: vpp_ipip_tunnel_del(sw_if_index)
+        end
         IPIP->>IPIP: Erase from m_ipip_encap_nh_map
         IPIP-->>TM: SAI_STATUS_SUCCESS
     end
@@ -467,10 +513,52 @@ sequenceDiagram
 | `SAI_TUNNEL_ATTR_ENCAP_TTL_MODE` | `SAI_TUNNEL_TTL_MODE_UNIFORM_MODEL` | `TUNNEL_API_ENCAP_DECAP_FLAG_ENCAP_COPY_HOP_LIMIT` | 0x40 |
 | `SAI_TUNNEL_ATTR_ENCAP_DSCP_MODE` | `SAI_TUNNEL_DSCP_MODE_UNIFORM_MODEL` | `TUNNEL_API_ENCAP_DECAP_FLAG_ENCAP_COPY_DSCP` | 0x04 |
 | `SAI_TUNNEL_ATTR_ENCAP_ECN_MODE` | `SAI_TUNNEL_ENCAP_ECN_MODE_USER_DEFINED` | `TUNNEL_API_ENCAP_DECAP_FLAG_ENCAP_COPY_ECN` | 0x08 |
+| *(P2P tunnels only)* | *(always set)* | `TUNNEL_API_ENCAP_DECAP_FLAG_ENCAP_INNER_HASH` | 0x20 |
 
-**Limitations**: Only the attribute/value combinations listed above are supported.
+**Note**: The `ENCAP_INNER_HASH` flag (0x20) is unconditionally added for all P2P tunnels (both decap P2P terms and encap nexthops). It causes VPP to hash on the inner 5-tuple for ECMP load balancing instead of the outer header.
 
-### 7.5 VPP Translation Changes
+### 7.5 Tunnel Deduplication (Refcount)
+
+Both decap (`create_ipip_tunnel_term`) and encap (`ipip_encap_nexthop_action`) paths share a common `create_ipip_vpp_tunnel()` / `remove_ipip_vpp_tunnel()` pair that implements **refcount-based deduplication**.
+
+**Problem:** Multiple SAI objects (e.g., multiple tunnel term entries or multiple encap nexthops) can map to the same VPP IPIP tunnel `{src, dst, mode}`. Creating duplicate VPP tunnels with the same key would fail.
+
+**Solution:** A dedup map `m_ipip_tunnel_refcount` keyed by `IpIpTunnelKey{src, dst, mode}`:
+
+```
+create_ipip_vpp_tunnel(req, vrf_id, &sw_if_index):
+  key = {req.src, req.dst, req.mode}
+  if key in m_ipip_tunnel_refcount:
+      refcount++
+      sw_if_index = existing sw_if_index
+      return SUCCESS  // no VPP API call
+  else:
+      vpp_ipip_tunnel_add(...)
+      ... bring UP, assign VRF, set unnumbered ...
+      m_ipip_tunnel_refcount[key] = {sw_if_index, refcount=1}
+
+remove_ipip_vpp_tunnel(sw_if_index):
+  find entry by sw_if_index in m_ipip_tunnel_refcount
+  if --refcount > 0:
+      return SUCCESS  // tunnel still in use
+  else:
+      erase from refcount map
+      interface DOWN + vpp_ipip_tunnel_del()
+```
+
+### 7.6 Deferred Unnumbered Interface Setup
+
+**Problem:** When an IPIP tunnel is created, it needs to borrow its IP address from the interface owning the tunnel source IP (e.g., `Loopback0`). However, the tunnel term may be created before the loopback RIF's IP address is programmed in VPP — `vpp_sw_interface_find_by_ip()` returns `-ENOENT`.
+
+**Solution:** A `m_pending_unnumbered` multimap defers the `sw_interface_set_unnumbered` call:
+
+1. **On tunnel create:** If `vpp_sw_interface_find_by_ip()` fails, store a `PendingUnnumbered{sw_if_index, src_address, vrf_id}` entry keyed by the IP string.
+2. **On RIF IP add:** After `interface_ip_address_add_del()` succeeds in `SwitchVppRif.cpp`, call `m_tunnel_mgr_ipip.retry_pending_unnumbered(ip_prefix.prefix_addr)`.
+3. **On retry:** `retry_pending_unnumbered()` re-calls `vpp_sw_interface_find_by_ip()` (which now succeeds), applies `sw_interface_set_unnumbered()` for all pending tunnels, and erases completed entries.
+
+This handles the ordering dependency between `TunnelDecapOrch` (creates tunnels early) and `IntfsOrch` (assigns IPs to loopback later).
+
+### 7.7 VPP Translation Changes
 
 **File**: `vslib/vpp/vppxlate/SaiVppXlate.h` / `SaiVppXlate.c`
 
@@ -499,7 +587,7 @@ typedef struct _vpp_ipip_tunnel {
 | `vpp_ipip_tunnel_add(vpp_ipip_tunnel_t *tunnel, uint32_t *sw_if_index)` | `IPIP_ADD_TUNNEL` | Creates an IPIP tunnel interface in VPP. Returns the allocated `sw_if_index` (e.g. `ipip0`). |
 | `vpp_ipip_tunnel_del(uint32_t sw_if_index)` | `IPIP_DEL_TUNNEL` | Deletes an IPIP tunnel interface by its `sw_if_index`. |
 | `sw_interface_set_unnumbered(uint32_t unnumbered_sw_if_index, uint32_t ip_sw_if_index, bool is_add)` | `SW_INTERFACE_SET_UNNUMBERED` | Configures an unnumbered interface: `unnumbered_sw_if_index` borrows its IP from `ip_sw_if_index`. |
-| `vpp_sw_interface_find_by_ip(vpp_ip_addr_t *search_ip, uint32_t *out_sw_if_index)` | `IP_ADDRESS_DUMP` | Finds the `sw_if_index` of the interface owning a given IP address. Iterates all known interfaces from `interface_name_by_sw_index` hash via per-interface `IP_ADDRESS_DUMP` queries. Returns `-ENOENT` if no match. |
+| `vpp_sw_interface_find_by_ip(vpp_ip_addr_t *search_ip, uint32_t vrf_id, uint32_t *out_sw_if_index)` | `IP_ADDRESS_DUMP` | Finds the `sw_if_index` of the interface owning a given IP address within the specified VRF. Iterates all known interfaces from `interface_name_by_sw_index` hash via per-interface `IP_ADDRESS_DUMP` queries. Returns `-ENOENT` if no match. |
 
 #### `vpp_sw_interface_find_by_ip` — Implementation Note
 
