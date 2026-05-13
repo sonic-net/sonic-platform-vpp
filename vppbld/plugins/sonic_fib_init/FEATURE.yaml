@@ -1,0 +1,13 @@
+---
+name: SONiC FIB Init
+maintainer: Longxiang Lyu <lolv@microsoft.com>
+features:
+  - Removes the built-in FIB_SOURCE_SPECIAL drop entry for
+    240.0.0.0/4 (IPv4 class E reserved range) from the default
+    IPv4 FIB at VPP startup so that SONiC-installed routes win the
+    longest-prefix match instead of the hard-coded VPP drop.
+  - Exposes a `sonic_fib_strip_specials { vrf_id }` binary API for
+    the SAI shim to invoke after creating additional IPv4 VRFs, so
+    the same cleanup is applied to user-created tables.
+description: "SONiC-specific FIB initialization adjustments"
+state: experimental
