@@ -88,6 +88,17 @@ ip4_validate_x1 (vlib_buffer_t *b, u16 *next)
 
   vnet_feature_next (&feat_next, b);
 
+  src = clib_net_to_host_u32 (ip->src_address.as_u32);
+  dst = clib_net_to_host_u32 (ip->dst_address.as_u32);
+
+  /* Only validate unicast packets */
+  /* skip broadcast (255.255.255.255) and multicast (224.0.0.0/4) */
+  if (PREDICT_FALSE (dst == 0xFFFFFFFFu || (dst >> 28) == 0xE))
+    {
+      *next = (u16) feat_next;
+      return IP4_VALIDATE_ERROR_VALID;
+    }
+
   /*
    * L2 check: unicast IP but multicast/broadcast ETH dst.
    * Use ethernet_buffer_get_header() which correctly handles VLAN-tagged
@@ -101,9 +112,6 @@ ip4_validate_x1 (vlib_buffer_t *b, u16 *next)
 	return IP4_VALIDATE_ERROR_L2_MCAST_BCAST;
       }
   }
-
-  src = clib_net_to_host_u32 (ip->src_address.as_u32);
-  dst = clib_net_to_host_u32 (ip->dst_address.as_u32);
 
   /* SRC checks */
 

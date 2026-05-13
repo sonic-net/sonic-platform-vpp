@@ -4,7 +4,8 @@ maintainer: Akeel Ali <akeali@cisco.com>
 features:
   - Validates incoming IP packets and drops those with invalid
     source/destination addresses. Runs on the ip4-unicast and
-    ip6-unicast feature arcs.
+    ip6-unicast feature arcs, and only inspects unicast packets;
+    broadcast and multicast traffic is passed through unchanged.
   - When the plugin is enabled, filtering is automatically
     applied to every interface.
   - IPv4 source filtering:
