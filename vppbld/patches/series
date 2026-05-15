@@ -17,3 +17,5 @@
 0008-bond-drop-stats-track-original-member-interface.patch
 # 9. Add ipip mp2p tunnel
 0009-ipip-add-mp2p-ipip-tunnel.patch
+# 10. Allow SONiC routes to override VPP's Class E default drop
+0010-ip4-fib-allow-class-e-route-override.patch
