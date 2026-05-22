@@ -22,6 +22,7 @@
 |-----|------|-----------|---------|
 | v0.1 | 05/19/2026 | Jianquan Ye (jianquanye@microsoft.com) | Initial Draft |
 | v0.2 | 05/19/2026 | Jianquan Ye (jianquanye@microsoft.com) | Review fixes: correct `bond.api` LB enum table; rename helper to `ip_inner_v6_walk_ext_headers`; tighten test-count and class list; disambiguate `BOND_API_LB_ALGO_L34` vs `VPP_BOND_API_LB_ALGO_L34`; add §5.2 DUT verification; expand §6.1 rationale; add §9 Known Issues / Open Items. |
+| v0.3 | 05/22/2026 | Jianquan Ye (jianquanye@microsoft.com) | LAG redesign per upstream review (Fred Wang / lolyu): introduce a **new** opt-in LAG algorithm `BOND_API_LB_ALGO_L34_INNER = 6` (CLI `l34-inner`) backed by a **new** registered hash function `hash-eth-l34-inner`.  Existing `BOND_API_LB_ALGO_L34` (= 1) and `hash-eth-l34` are byte-for-byte unchanged, so LAGs that don't ask for the new algorithm are unaffected.  libsaivs `vpp_create_lag()` now explicitly selects the new value.  ABI compatibility is preserved by the new enum value's `[backwards_compatible]` annotation (same pattern as `sr_behavior` for SRv6 uSID and `ipsec_crypto_alg` for `CHACHA20_POLY1305` / `AES_NULL_GMAC_*`).  Added SRv6 to §2 Scope and §4.5 Not Hashed; rewrote §4.4, §5, §6, §7.1, §7.7, Appendix A, Appendix B.2, Appendix B.3 to match.  v0.2's "always-on with safe fallback" wording is gone. |
 
 ---
 
@@ -38,6 +39,14 @@ RFC 8926 §3.3 recommend that the outer UDP source port carry the
 inner-flow entropy, so compliant encapsulators already balance through
 the existing outer-only hash.  Non-compliant senders that use a
 constant outer UDP source port remain out of scope here too; see §4.5.
+
+SRv6 is also explicitly **out of scope** — the IPv6 flow label is the
+architecture-defined entropy carrier for segment-routed traffic
+(RFC 6437, RFC 8754 §7), so the existing outer-only hash already
+distributes SRv6 flows when the ingress sets a per-flow flow label.
+The helper introduced by this design deliberately does not parse the
+IPv6 Routing extension header (next-header 43); SRv6 packets fall
+through to the outer 5-tuple hash unchanged.
 
 ---
 
@@ -58,7 +67,7 @@ This HLD covers two cooperating pieces:
 | Feature | Description | VPP Core Change | SAI VPP Change |
 |---|---|---|---|
 | IP-layer opt-in peek | New `IP_FLOW_HASH_PEEK_INNER` flag in `flow_hash_config_t`.  When set on a FIB, `ip4/ip6_compute_flow_hash` reads the inner 5-tuple of IPinIP / 6in4 / 4in6 / 6in6 / GRE / NVGRE traffic. | **Yes** — new flag + shared helper `ip_inner_resolve()`; `IP_FLOW_HASH_DEFAULT` is unchanged (0x9F) so existing users see no behaviour change. | **Yes** — `vpp_add_ip_vrf()` ORs the new bit into the default-VRF hash mask (IPv4 + IPv6). |
-| LAG always-on peek | Default `hash-eth-l34` bond load-balance function transparently peeks into IPinIP / 6in4 / 4in6 / 6in6 / GRE / NVGRE inner packets and falls back to the outer-only hash when the inner header cannot be resolved. | **Yes** — `hash_eth_l34_inline` extended with the same helper. | **None** — libsaivs continues to set `lb = VPP_BOND_API_LB_ALGO_L34` (value `1`), which maps to the unchanged VPP-side `BOND_API_LB_ALGO_L34` in `bond.api`; no new enumerator is added on either side, so libsaivs <-> libvppinfra ABI / CRC compatibility is preserved. |
+| LAG opt-in algorithm | New `BOND_API_LB_ALGO_L34_INNER = 6` (CLI `l34-inner`) in `src/vnet/bonding/bond.api`, backed by a new registered Ethernet hash function `hash-eth-l34-inner` (priority 50).  The new function peeks into IPinIP / 6in4 / 4in6 / 6in6 / GRE / NVGRE inner packets and falls back to the outer 5-tuple otherwise.  The existing `BOND_API_LB_ALGO_L34` (= 1) and `hash-eth-l34` are **byte-for-byte unchanged**, so a LAG that doesn't ask for the new algorithm sees zero behaviour change and zero extra cost. | **Yes** — new enum value (annotated `[backwards_compatible]`, see §4.4), new hash function, plus a small reorder of the `foreach_bond_lb` table so `unformat()` greedy prefix matching picks `l34-inner` before `l34`. | **Yes** — `vpp_create_lag()` selects `lb = VPP_BOND_API_LB_ALGO_L34_INNER` (6) instead of the prior `L34` (1).  ABI / CRC of every `bond_create*` / `sw_interface_bond_details` / `sw_bond_interface_details` message is preserved because the new enum value is `[backwards_compatible]` — same pattern as `sr_behavior` (SRv6 uSID) and `ipsec_crypto_alg` (`CHACHA20_POLY1305` / `AES_NULL_GMAC_*`). |
 
 ---
 
@@ -67,10 +76,15 @@ This HLD covers two cooperating pieces:
 ### 4.1 Motivation
 
 SONiC's `tests/fib/test_fib.py` exercises ECMP and LAG distribution of
-transit tunnel traffic (`test_ipinip_hash`, `test_nvgre_hash`, the inner
-phase of `test_vxlan_hash`).  Each test sends thousands of distinct inner
-flows that share **one** outer 5-tuple — exactly the SmartNIC / DPU
-scenario where many tenant flows live under a single outer tunnel pair.
+transit tunnel traffic (`test_ipinip_hash`, `test_nvgre_hash`).  Each
+test sends thousands of distinct inner flows that share **one** outer
+5-tuple — exactly the SmartNIC / DPU scenario where many tenant flows
+live under a single outer tunnel pair.  `test_vxlan_hash` exercises
+the same scenario for VxLAN; that test is fixed by an adjacent change
+shipped in the same patch (programming a 5-tuple hash mask on the
+IPv6 FIB plus letting outer UDP src-port entropy from compliant
+encapsulators drive the existing outer hash) rather than by the
+inner-aware peek itself.  See §8.3 for the test-by-test breakdown.
 
 Stock VPP hashes only the outer 5-tuple.  For these tests:
 
@@ -122,17 +136,24 @@ because the IP forwarding hash and the LAG hash are computed by
                    │  → bond-input                    │
                    └────────────────┬─────────────────┘
                                     │
-                       calls hash_eth_l34() to pick
-                       a bond member
+                       calls the bond's selected
+                       hash function to pick a member
                                     │
               ┌─────────────────────▼─────────────────────┐
-              │ Surface 2: LAG (always-on with fallback)  │
+              │ Surface 2: LAG (opt-in via new algorithm) │
               │                                           │
-              │   ip_inner_resolve(...)                   │
-              │   if (inner.valid)                        │
-              │      return hash_eth_inner_lb_hash(...)   │
-              │   else                                    │
-              │      return outer-only L34 hash           │
+              │   if (bif->lb == BOND_LB_L34_INNER) {     │
+              │     /* hash-eth-l34-inner */              │
+              │     ip_inner_resolve(...)                 │
+              │     if (inner.valid)                      │
+              │        return hash_eth_inner_lb_hash(...) │
+              │     else                                  │
+              │        return outer-only L34 hash         │
+              │   } else if (bif->lb == BOND_LB_L34) {    │
+              │     /* hash-eth-l34, byte-for-byte same   │
+              │      * as upstream, no inner peek */      │
+              │     return outer-only L34 hash            │
+              │   }                                       │
               └───────────────────────────────────────────┘
 ```
 
@@ -156,34 +177,125 @@ Rationale for opt-in:
   existing `set ip flow-hash` CLI / API — no new SAI attribute is
   required.
 
-### 4.4 LAG Surface — Always-On with Safe Fallback
+### 4.4 LAG Surface — Opt-In New Algorithm
 
-The LAG surface is **always-on** but never harmful.  The existing
-registered hash function `hash-eth-l34` is extended:
+The LAG surface is also **opt-in**, but via a different mechanism than
+the IP layer: a brand-new bond load-balance algorithm.
 
-1. If the L3 header is IPv4, attempt `ip_inner_resolve` on the IPv4
-   payload (skipping fragmented outers).
-2. If `ip_inner_resolve` returns `valid == 1`, compute the load-balance
-   hash from the **inner** 5-tuple.
-3. Otherwise (non-tunnel, fragmented outer, truncated, unsupported
-   inner protocol, ...) fall through to the existing outer-only `L34`
-   hash.
+* A new value `BOND_API_LB_ALGO_L34_INNER = 6` is appended to
+  `enum bond_lb_algo` in `src/vnet/bonding/bond.api`.  The CLI keyword
+  is `l34-inner`.
+* A new registered Ethernet hash function `hash-eth-l34-inner`
+  (priority 50) is added to `src/vnet/hash/hash_eth.c`.  It is wired
+  into `bond_create_if()` (`src/vnet/bonding/cli.c`) so that the new
+  enum value resolves to the new hash function.
+* `hash-eth-l34-inner` calls the shared `ip_inner_resolve` helper.
+  If `inner.valid`, the hash is computed from the inner 5-tuple via a
+  new `hash_eth_inner_lb_hash()` inline that reuses VPP's
+  `lb_hash_hash` / `lb_hash_hash_2_tuples` primitives.  If
+  `inner.valid == 0`, the function falls back to the same outer-only
+  computation that `hash-eth-l34` would have produced.
+* `BOND_API_LB_ALGO_L34` (= 1) and the registered function
+  `hash-eth-l34` are **not modified**.  A LAG configured with
+  `lb l34` continues to execute exactly the upstream code path and
+  produces byte-for-byte identical hashes — verified by the
+  `TestLagL34LegacyOuterOnly` class in `test_inner_aware_hash.py`
+  (collapses tunnel traffic onto one member, distributes plain
+  traffic — same observable behaviour as pre-patch).
 
-Rationale for always-on at LAG:
+Rationale for an opt-in new algorithm at LAG (instead of teaching the
+existing `hash-eth-l34` to peek):
 
-* The LAG hash runs once per packet (no per-FIB knob to gate it
-  against), and there is no SAI attribute today on the LAG LB
-  algorithm enum to toggle it.
-* Crucially, **the SAI / libsaivs <-> libvppinfra ABI is preserved**:
-  libsaivs `SwitchVppFdb.cpp` continues to set
-  `lb = VPP_BOND_API_LB_ALGO_L34` (value `1`); the matching VPP-side
-  enumerator `BOND_API_LB_ALGO_L34` in `src/vnet/bonding/bond.api`
-  (also value `1`) is **not modified**, and no new enumerator is added
-  on either side.  `BOND_API_LB_ALGO_L34` continues to mean "L34" —
-  it simply load-balances tunnel traffic more effectively now.
-  Without this constraint, a new enum value would require
-  regenerating libsaivs against the patched VPP and bumping the
-  sonic-buildimage submodule before any deploy.
+* **Zero-surprise for existing deployments.**  Operators running with
+  `lb l34` today get exactly the same hashes after the patch lands.
+  No new fall-back path is added to the hot code path of
+  `hash-eth-l34`; the cost of the inner peek is paid only by LAGs
+  that explicitly select `l34-inner`.
+* **Per-LAG control.**  Different LAGs on the same DUT can choose
+  different algorithms.  A LAG that intentionally collapses transit
+  tunnel flows onto one member (e.g. for ordering guarantees) can
+  stay on `l34`; the SmartNIC / DPU transit LAGs that benefit from
+  inner-aware distribution opt in via `l34-inner`.
+* **No accidental inner peek in unrelated code paths.**  The
+  in-place "always-on" alternative would have changed the meaning of
+  the default LAG hash on every platform that already used `l34`;
+  switching the active algorithm to a clearly-named new value makes
+  the behaviour change unambiguously visible in `show bond` /
+  `show hash` and in the VPP API.
+
+#### 4.4.1 ABI Compatibility (`[backwards_compatible]`)
+
+Adding a new value to `enum bond_lb_algo` would normally bump the
+CRCs of every API message that references `vl_api_bond_lb_algo_t`
+(`bond_create`, `bond_create2`, `sw_interface_bond_details`,
+`sw_bond_interface_details`), forcing a coordinated rebuild of every
+client.  This is critical for SONiC because `libsaivs.so` embeds the
+CRCs of the messages it calls at build time and rejects mismatched
+servers at runtime.
+
+The new enum value carries the `[backwards_compatible]` keyword:
+
+```text
+/* src/vnet/bonding/bond.api */
+enum bond_lb_algo
+{
+  BOND_API_LB_ALGO_L2  = 0,
+  BOND_API_LB_ALGO_L34 = 1,
+  BOND_API_LB_ALGO_L23 = 2,
+  BOND_API_LB_ALGO_RR  = 3,
+  BOND_API_LB_ALGO_BC  = 4,
+  BOND_API_LB_ALGO_AB  = 5,
+  BOND_API_LB_ALGO_L34_INNER = 6 [backwards_compatible],
+};
+```
+
+`vppapigen` treats `[backwards_compatible]` enum members the same way
+it treats `[backwards_compatible]` message fields: the value is
+excluded from CRC computation.  The CRCs of every production
+`bond_create*` / `sw_interface_bond_details` / `sw_bond_interface_details`
+message therefore stay identical to upstream.
+
+CRC compatibility means the binary API messages remain wire-compatible
+across patched / unpatched VPP — the same struct layout, the same
+opcode, the same per-message CRC.  It does **not** mean every
+combination of patched / unpatched libsaivs and libvppinfra works at
+runtime:
+
+* **Patched VPP + unpatched libsaivs (`lb = 1`, L34)**: works.  Unpatched
+  libsaivs only ever sends enum values the patched VPP knows.
+* **Patched VPP + patched libsaivs (`lb = 6`, L34_INNER)**: works.  This
+  is the deployed combination.
+* **Unpatched VPP + patched libsaivs (`lb = 6`, L34_INNER)**: rejected
+  at runtime by `bond_create_if()` — unpatched VPP does not know
+  `BOND_LB_L34_INNER` and returns `VNET_API_ERROR_INVALID_ARGUMENT`.
+  No wire-format corruption, no silent fall-through; the
+  `bond_create_reply` carries the error code and libsaivs surfaces
+  it as a SAI failure.
+
+In practice this is fine because sonic-buildimage bumps the
+`sonic-sairedis` submodule only after `sonic-platform-vpp` has
+shipped the new `vpp-dev` deb, so libsaivs is always built against a
+patched libvppinfra-dev header that defines `L34_INNER`.
+
+Precedents for the same `[backwards_compatible]` enum-value pattern in
+upstream VPP:
+
+* `src/vnet/srv6/sr_types.api` — `enum sr_behavior` has three
+  trailing `[backwards_compatible]` values: `SR_BEHAVIOR_API_END_UN_PERF`
+  (11), `SR_BEHAVIOR_API_END_UN` (12), `SR_BEHAVIOR_API_UA` (13).
+  Messages that carry `vl_api_sr_behavior_t` (e.g. `sr_localsid_add_del`,
+  `sr_localsid_add_del_v2`, `sr_localsids_details`) kept their CRCs
+  stable across these additions.
+* `src/vnet/ipsec/ipsec_types.api` — `IPSEC_API_CRYPTO_ALG_CHACHA20_POLY1305`
+  plus three `AES_NULL_GMAC_{128,192,256}` algorithms (four added
+  values in total) were all added with `[backwards_compatible]` to
+  `enum ipsec_crypto_alg`, and the CRCs of messages referencing
+  `vl_api_ipsec_crypto_alg_t` did not change.
+
+The `option version` line in `bond.api` also bumps 2.1.0 → 2.1.1.
+That is API-semantic metadata emitted by `vppapigen` as a separate
+`vl_api_version_tuple` symbol; it does **not** affect per-message CRCs
+or the binary API wire format.
 
 ### 4.5 What Is Not Hashed
 
@@ -195,6 +307,7 @@ header, or the inner content cannot be safely peeked:
 |---|---|
 | VxLAN (UDP/4789) | RFC 7348 §4.2 recommends the outer UDP src port carry inner-flow entropy.  Compliant encapsulators do this; non-compliant senders with a constant outer UDP src port remain out of scope for both ECMP and LAG. |
 | Geneve (UDP/6081) | RFC 8926 §3.3 — same convention as VxLAN. |
+| SRv6 (IPv6 next-header 43, Routing) | RFC 6437 / RFC 8754 §7 — the IPv6 flow label is the architecture-defined entropy carrier for segment-routed traffic, so the outer 5-tuple hash already distributes SRv6 flows when the ingress sets a per-flow flow label.  The helper deliberately does not parse the IPv6 Routing extension header (next-header 43); SRv6 packets fall through to the outer 5-tuple hash unchanged. |
 | Fragmented outer IPv4 | Inner is split across fragments; reading the first fragment's payload would mis-attribute the flow. |
 | Fragmented inner | Same risk after the outer is stripped. |
 | ESP / IPsec inner | Encrypted payload — no meaningful hash. |
@@ -209,27 +322,33 @@ caller falls back to the outer-only hash.
 ## 5. SONiC Configuration
 
 There is **no new SAI attribute** and **no new SONiC CONFIG_DB schema**.
-The feature is plumbed entirely through the existing VRF lifecycle:
+The feature is plumbed entirely through two existing SAI lifecycles —
+the VRF create (for ECMP) and the LAG create (for bond hashing):
 
 ```
-Orchagent creates the default VR
-    │
-    ▼
-SAI:  sai_virtual_router_api->create_virtual_router(...)
-    │
-    ▼
-libsaivs SwitchVpp::vpp_add_ip_vrf()  (defined in SwitchVppRif.cpp)
-    │
-    ▼
-vpp_ip_flow_hash_set(vrf_id, mask, AF_INET)    ┐
-vpp_ip_flow_hash_set(vrf_id, mask, AF_INET6)   ┘ (v6 path is new — see §7)
-    │
-    ▼
-VPP control plane sets flow_hash_config_t on the FIB
-    │
-    ▼
-Subsequent ip4/ip6_compute_flow_hash() observes IP_FLOW_HASH_PEEK_INNER
+Orchagent creates the default VR                 Orchagent creates a LAG
+        │                                                │
+        ▼                                                ▼
+SAI:  sai_virtual_router_api->create_virtual_router(...) SAI:  sai_lag_api->create_lag(...)
+        │                                                │
+        ▼                                                ▼
+libsaivs SwitchVpp::vpp_add_ip_vrf()             libsaivs SwitchVpp::vpp_create_lag()
+  (SwitchVppRif.cpp)                               (SwitchVppFdb.cpp)
+        │                                                │
+        ▼                                                ▼
+vpp_ip_flow_hash_set(vrf_id, mask, AF_INET)     bond_create (..., lb = VPP_BOND_API_LB_ALGO_L34_INNER /* 6 */, ...)
+vpp_ip_flow_hash_set(vrf_id, mask, AF_INET6)            │
+        │                                                ▼
+        ▼                                       VPP bond_create_if() picks hash_func =
+VPP control plane sets flow_hash_config_t       vnet_hash_function_from_name("hash-eth-l34-inner", ...)
+on the FIB                                              │
+        │                                                ▼
+        ▼                                       Subsequent select_member() observes the inner peek
+Subsequent ip4/ip6_compute_flow_hash() observes
+IP_FLOW_HASH_PEEK_INNER
 ```
+
+### 5.1 Default VRF — IP-Layer Opt-In
 
 The libsaivs adapter constructs `hash_mask` for the default VRF as:
 
@@ -249,20 +368,39 @@ programmed the IPv4 FIB.  IPv6 transit-tunnel flows
 (`test_ipinip_hash[ipv6]`, `test_nvgre_hash[ipv6-*]`) require the same
 treatment.
 
-Verification:
+### 5.2 LAG — Opt-In via New Algorithm
 
+The libsaivs adapter selects the new algorithm at LAG create time:
+
+```c
+/* vslib/vpp/SwitchVppFdb.cpp, vpp_create_lag() */
+- uint32_t lb = VPP_BOND_API_LB_ALGO_L34;        /* old: value 1 */
++ uint32_t lb = VPP_BOND_API_LB_ALGO_L34_INNER;  /* new: value 6 */
+
+/* lb is then passed to bond_create (via create_bond_interface) over
+ * the VPP binary API. */
 ```
-vpp# show ip fib | head -1
-ipv4-VRF:0, fib_index:0, flow hash:[src dst sport dport proto peek_inner ] ...
 
-vpp# show hash
-Name                 Prio  Description
-hash-eth-l34         50    Hash ethernet L34 headers, peek into IPinIP/GRE/NVGRE inner
-hash-eth-l23         50    Hash ethernet L23 headers
-...
+The matching mirror constant lives in `vslib/vpp/vppxlate/SaiVppXlate.h`:
+
+```c
+typedef enum {
+    VPP_BOND_API_LB_ALGO_L2  = 0,
+    VPP_BOND_API_LB_ALGO_L34 = 1,
+    VPP_BOND_API_LB_ALGO_L23 = 2,
+    VPP_BOND_API_LB_ALGO_RR  = 3,
+    VPP_BOND_API_LB_ALGO_BC  = 4,
+    VPP_BOND_API_LB_ALGO_AB  = 5,
+    VPP_BOND_API_LB_ALGO_L34_INNER = 6,          /* new */
+} vpp_bond_api_lb_algo_t;
 ```
 
-### 5.1 VRF Scope
+ABI compatibility (CRC of every `bond_create*` /
+`sw_interface_bond_details` / `sw_bond_interface_details` message) is
+preserved because the new value is `[backwards_compatible]` on the VPP
+side — see §4.4.1.
+
+### 5.3 VRF Scope
 
 `vpp_add_ip_vrf()` programs `PEEK_INNER` on the default VRF
 (`vrf_id == 0`) **and** on every non-default VRF that it successfully
@@ -273,12 +411,13 @@ are programmed through other code paths can still opt in via the
 existing `set ip flow-hash table N ... peek_inner` CLI without any
 further SAI or SONiC change.
 
-### 5.2 Verifying on a Running DUT
+### 5.4 Verifying on a Running DUT
 
-After `orchagent` brings up the default VRF the bit is set
-automatically and persists for the life of `syncd_vpp`.  Operators do
-**not** need to touch CONFIG_DB or run any vppctl command for the
-default VRF to be inner-aware.  To confirm the configuration end-to-end:
+After `orchagent` brings up the default VRF and creates the LAGs, both
+opt-ins are programmed automatically and persist for the life of
+`syncd_vpp`.  Operators do **not** need to touch CONFIG_DB or run any
+vppctl command for the default VRF / default LAG to be inner-aware.
+To confirm end-to-end:
 
 ```bash
 # 1. Confirm IPv4 FIB has peek_inner enabled
@@ -288,12 +427,20 @@ docker exec syncd vppctl show ip fib | head -1
 # 2. Same for IPv6 FIB
 docker exec syncd vppctl show ip6 fib | head -1
 
-# 3. Confirm the LAG hash function description carries the new wording
-docker exec syncd vppctl show hash | grep hash-eth-l34
-# expected: hash-eth-l34   50   Hash ethernet L34 headers, peek into IPinIP/GRE/NVGRE inner
+# 3. Confirm both LAG hash functions are registered.  The existing
+#    hash-eth-l34 is unchanged; hash-eth-l34-inner is the new one.
+docker exec syncd vppctl show hash
+# expected (subset):
+#   hash-eth-l34         50   Hash ethernet L34 headers
+#   hash-eth-l34-inner   50   Hash ethernet L34 headers, peek into IPinIP/GRE/NVGRE inner
 
-# 4. Trace which component opted the FIB in (should be syncd, on VRF create)
+# 4. Confirm the BondEthernets created by syncd are using the new algo
+docker exec syncd vppctl show bond
+# expected: BondEthernet0 ... mode lacp load-balance l34-inner ...
+
+# 5. Trace which component opted the FIB / LAG in (should be syncd)
 docker exec syncd grep -E 'ip flow hash set for VRF.*status 0' /var/log/syslog | tail -2
+docker exec syncd grep -E 'bond_create.*lb=6'                     /var/log/syslog | tail -2
 ```
 
 This is intentional: SmartNIC / DPU operators get inner-aware ECMP and
@@ -335,7 +482,7 @@ Rationale for *not* introducing a new SAI attribute:
 | SAI call (already exists) | What changes inside libsaivs |
 |---|---|
 | `sai_virtual_router_api->create_virtual_router()` → libsaivs `SwitchVpp::vpp_add_ip_vrf()` (defined in `SwitchVppRif.cpp`) | OR `VPP_IP_API_FLOW_HASH_PEEK_INNER` into the existing hash mask; additionally invoke `vpp_ip_flow_hash_set` for `AF_INET6` so v6 traffic in the same VRF gets the same treatment. |
-| `sai_lag_api->create_lag()` → libsaivs `SwitchVpp::vpp_create_lag()` (defined in `SwitchVppFdb.cpp`) | No behavioural change — the existing call selects `lb = VPP_BOND_API_LB_ALGO_L34` (value `1`, mapping to VPP's `BOND_API_LB_ALGO_L34`) and the LAG inner peek is unconditional inside the registered VPP hash function.  The change here is comment-only, noting that L34 is now tunnel-aware. |
+| `sai_lag_api->create_lag()` → libsaivs `SwitchVpp::vpp_create_lag()` (defined in `SwitchVppFdb.cpp`) | Change the `lb` field sent to the VPP `bond_create` binary-API message (via the `create_bond_interface()` wrapper in `SaiVppXlate.c`) from `VPP_BOND_API_LB_ALGO_L34` (value `1`) to `VPP_BOND_API_LB_ALGO_L34_INNER` (value `6`).  On the VPP side this resolves to the new registered hash function `hash-eth-l34-inner`.  CRC of `bond_create` (and of the `bond_create2` / `sw_interface_bond_details` / `sw_bond_interface_details` messages that also reference `vl_api_bond_lb_algo_t`) is unchanged because the new enum value carries `[backwards_compatible]` (see §4.4.1). |
 
 ---
 
@@ -362,14 +509,38 @@ Rationale for *not* introducing a new SAI attribute:
 │ src/vnet/ip/ip6_inlines.h          [MODIFY]                  │
 │   └── ip6_compute_flow_hash gated on PEEK_INNER + ext walk   │
 │                                                              │
-│ src/vnet/hash/hash_eth.c           [MODIFY]                  │
-│   └── hash_eth_l34_inline calls ip_inner_resolve             │
-│   └── hash_eth_inner_lb_hash() inner-aware hash              │
-│   └── registered description updated                         │
+│ src/vnet/bonding/bond.api          [MODIFY]                  │
+│   └── BOND_API_LB_ALGO_L34_INNER = 6 [backwards_compatible]  │
+│   └── option version 2.1.0 -> 2.1.1                          │
 │                                                              │
-│ test/test_inner_aware_hash.py      [NEW]   42 cases / 4 cls  │
-│ test/test_inner_aware_perf.py      [NEW]   perf harness      │
+│ src/vnet/bonding/node.h            [MODIFY]                  │
+│   └── foreach_bond_lb: add L34_INNER first (greedy unformat) │
+│   └── foreach_bond_lb_algo: append L34_INNER                 │
+│                                                              │
+│ src/vnet/bonding/cli.c             [MODIFY]                  │
+│   └── bond_create_if(): map BOND_LB_L34_INNER to             │
+│       hash-eth-l34-inner                                     │
+│   └── lb validator: accept L34_INNER                         │
+│   └── 'create bond' CLI short_help: add 'l34-inner'          │
+│                                                              │
+│ src/vnet/hash/hash_eth.c           [MODIFY]                  │
+│   └── #include ip_inner_aware_hash.h                         │
+│   └── hash_eth_inner_lb_hash() inline (new)                  │
+│   └── hash_eth_l34_inner_inline() / _l34_inner() (new)       │
+│   └── VNET_REGISTER_HASH_FUNCTION (hash_eth_l34_inner)       │
+│   └── hash-eth-l34 / hash_eth_l34() are UNCHANGED            │
+│                                                              │
+│ test/test_inner_aware_hash.py      [NEW]                     │
+│   └── TestInnerAwareECMP, TestInnerAwareLAG,                 │
+│       TestLagL34LegacyOuterOnly (regression-safety witness   │
+│       for unmodified BOND_API_LB_ALGO_L34), TestPeekInnerOff,│
+│       TestSafetyEdges                                        │
+│ test/test_inner_aware_perf.py      [NEW]                     │
+│   └── TestInnerAwarePerf, TestInnerAwareLAGPerf,             │
+│       TestInnerAwareLAGLegacyPerf                            │
 │ docs/developer/corearchitecture/inner_aware_hash.rst [NEW]   │
+│ docs/developer/corearchitecture/index.rst         [MODIFY]   │
+│ docs/spelling_wordlist.txt                        [MODIFY]   │
 └──────────────────────────────────────────────────────────────┘
                           ▲
                           │ depends on
@@ -380,13 +551,15 @@ Rationale for *not* introducing a new SAI attribute:
 │ vslib/vpp/vppxlate/SaiVppXlate.h   [MODIFY]                  │
 │   └── VPP_IP_API_FLOW_HASH_PEEK_INNER = 512 in enum          │
 │   └── VPP_IP_API_FLOW_HASH_GTPV1_TEID = 256 (track upstream) │
+│   └── VPP_BOND_API_LB_ALGO_L34_INNER = 6 in bond LB enum     │
 │                                                              │
 │ vslib/vpp/SwitchVppRif.cpp         [MODIFY]                  │
 │   └── vpp_add_ip_vrf: OR PEEK_INNER into mask                │
 │   └── vpp_add_ip_vrf: add AF_INET6 hash_set call             │
 │                                                              │
-│ vslib/vpp/SwitchVppFdb.cpp         [COMMENT-ONLY]            │
-│   └── Note that L34 LAG hash is now tunnel-aware             │
+│ vslib/vpp/SwitchVppFdb.cpp         [MODIFY]                  │
+│   └── vpp_create_lag: lb = VPP_BOND_API_LB_ALGO_L34_INNER (6)│
+│       (was VPP_BOND_API_LB_ALGO_L34 = 1)                     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -421,34 +594,39 @@ sequenceDiagram
 
 ### 7.3 LAG Hash — Sequence
 
+The sequence below applies to a LAG that selected the new
+`l34-inner` algorithm.  A LAG configured with the legacy `l34`
+algorithm follows the original upstream path through
+`hash_eth_l34_inline` and never enters this peek logic.
+
 ```mermaid
 sequenceDiagram
     participant Pkt as Pkt about to be enqueued on bond
     participant Tx as bond-input load-balance
     participant Reg as VNET_HASH_FN registry
-    participant L34 as hash_eth_l34_inline
+    participant L34i as hash_eth_l34_inner_inline
     participant Helper as ip_inner_resolve
 
     Pkt->>Tx: select_member(buffer)
     Tx->>Reg: lookup VNET_HASH_FN_TYPE_ETHERNET (priority 50)
-    Reg-->>Tx: hash-eth-l34
-    Tx->>L34: hash_eth_l34_inline(buffer)
-    L34->>L34: parse ethertype → IPv4 / IPv6 / other
+    Reg-->>Tx: hash-eth-l34-inner (selected at bond_create_if time)
+    Tx->>L34i: hash_eth_l34_inner_inline(buffer)
+    L34i->>L34i: parse ethertype → IPv4 / IPv6 / other
     alt IPv4 outer and not fragmented
-        L34->>Helper: ip_inner_resolve(outer_proto, payload, remaining, &inner)
-        Helper-->>L34: inner.valid
+        L34i->>Helper: ip_inner_resolve(outer_proto, payload, remaining, &inner)
+        Helper-->>L34i: inner.valid
     else IPv6 outer
-        L34->>Helper: ip_inner_resolve(outer_proto, payload, payload_length, &inner)
-        Helper-->>L34: inner.valid
+        L34i->>Helper: ip_inner_resolve(outer_proto, payload, payload_length, &inner)
+        Helper-->>L34i: inner.valid
     else non-IP
-        L34->>L34: fall through to hash_eth_l2
+        L34i->>L34i: fall through to hash_eth_l2
     end
     alt inner.valid
-        L34->>L34: hash_eth_inner_lb_hash(&inner)
-        L34-->>Tx: 32-bit hash (inner 5-tuple)
+        L34i->>L34i: hash_eth_inner_lb_hash(&inner)
+        L34i-->>Tx: 32-bit hash (inner 5-tuple)
     else not valid
-        L34->>L34: outer-only L34 hash (existing path)
-        L34-->>Tx: 32-bit hash (outer 5-tuple)
+        L34i->>L34i: outer-only L34 hash (same as hash-eth-l34)
+        L34i-->>Tx: 32-bit hash (outer 5-tuple)
     end
     Tx->>Tx: member = hash % n_members
 ```
@@ -466,8 +644,9 @@ be load-balanced.
 
 The helper is the single piece of code that knows how to look inside a
 tunneled packet.  It is used identically from three callers
-(`ip4_compute_flow_hash`, `ip6_compute_flow_hash`, `hash_eth_l34_inline`)
-so the parsing rules cannot drift between hash surfaces.
+(`ip4_compute_flow_hash`, `ip6_compute_flow_hash`,
+`hash_eth_l34_inner_inline`) so the parsing rules cannot drift
+between hash surfaces.
 
 #### Shared inline helper
 
@@ -579,10 +758,15 @@ of those, the peek is skipped and the hash falls back to the outer
 which place the encapsulation next-header directly on the outer IPv6
 header.
 
-### 7.7 LAG Hash Entry
+### 7.7 LAG Hash Entry — New `hash_eth_l34_inner`
+
+The opt-in path is implemented as a **new** static function
+`hash_eth_l34_inner_inline` (vector wrapper `hash_eth_l34_inner`) added
+to `src/vnet/hash/hash_eth.c`.  The existing `hash_eth_l34_inline` /
+`hash_eth_l34` are not touched.
 
 ```c
-/* in hash_eth_l34_inline (IPv4 outer branch) */
+/* src/vnet/hash/hash_eth.c, hash_eth_l34_inner_inline (IPv4 outer branch) */
 ip_inner_hdr_t inner = { .valid = 0 };
 
 if (!PREDICT_FALSE (ip4_is_fragment (ip4)))
@@ -597,7 +781,30 @@ if (!PREDICT_FALSE (ip4_is_fragment (ip4)))
 if (PREDICT_FALSE (inner.valid))
     return hash_eth_inner_lb_hash (&inner);
 
-/* else fall through to existing outer-only L34 hash */
+/* else fall through to the same outer-only L34 computation that
+ * hash_eth_l34_inline performs.  On non-tunnel traffic this branch
+ * is intentionally identical to hash-eth-l34; the new algorithm
+ * differs only when ip_inner_resolve succeeds on a recognized
+ * encapsulation (IPinIP / 6in4 / 4in6 / 6in6 / GRE / NVGRE).
+ */
+```
+
+The function is registered as a new VPP hash function and wired into
+`bond_create_if()` via the `BOND_LB_L34_INNER` arm:
+
+```c
+/* src/vnet/hash/hash_eth.c */
+VNET_REGISTER_HASH_FUNCTION (hash_eth_l34_inner, static) = {
+  .name = "hash-eth-l34-inner",
+  .description = "Hash ethernet L34 headers, peek into IPinIP/GRE/NVGRE inner",
+  .priority = 50,
+  .function[VNET_HASH_FN_TYPE_ETHERNET] = hash_eth_l34_inner,
+};
+
+/* src/vnet/bonding/cli.c, bond_create_if() */
+else if (bif->lb == BOND_LB_L34_INNER)
+  bif->hash_func = vnet_hash_function_from_name (
+      "hash-eth-l34-inner", VNET_HASH_FN_TYPE_ETHERNET);
 ```
 
 The negated `!PREDICT_FALSE(ip4_is_fragment(ip4))` is a deliberate
@@ -622,15 +829,17 @@ produces a deterministic-per-flow hash without dereferencing past the
 ### 8.1 VPP Unit Tests — `test/test_inner_aware_hash.py`
 
 A new pytest module exercises the helper end-to-end through the IPv4,
-IPv6, and `hash-eth-l34` hash surfaces on a host-launched
-`vpp_main` instance.  **42 test methods across 4 classes** covering:
+IPv6, `hash-eth-l34-inner` (new), and `hash-eth-l34` (legacy /
+regression) hash surfaces on a host-launched `vpp_main` instance.
+Cases cover:
 
 | Class | Cases | What it proves |
 |---|---|---|
-| `TestInnerAwareECMP` | 16 — IPv4inIPv4 / IPv4inIPv6 / IPv6inIPv4 / IPv6inIPv6 / GRE / NVGRE × {distribution, fixed-inner collapse}, plus plain UDP-over-v4 / -v6 regression | Inner entropy drives ECMP; outer-only flows still collapse to one path; non-tunnel hashing is unaffected. |
-| `TestInnerAwareLAG` | 16 — same matrix on a `BondEthernet` | LAG transparently uses inner. |
-| `TestPeekInnerOff` | 5 — same fixtures as `TestInnerAwareECMP` with `IP_FLOW_HASH_PEEK_INNER` not set | Default behaviour is exactly upstream's. |
-| `TestSafetyEdges` | 5 — fragmented outer, truncated GRE (3-byte payload), truncated IPinIP (4-byte inner), inner IPv6 HBH ext-header, inner IPv6 Fragment ext-header | No crash, helper falls back to outer-only without leaking any past-buffer reads. |
+| `TestInnerAwareECMP` | IPv4inIPv4 / IPv4inIPv6 / IPv6inIPv4 / IPv6inIPv6 / GRE / NVGRE × {distribution, fixed-inner collapse}, plus plain UDP-over-v4 / -v6 regression | Inner entropy drives ECMP when `PEEK_INNER` is set; outer-only flows still collapse to one path; non-tunnel hashing is unaffected. |
+| `TestInnerAwareLAG` | Same matrix on a `BondEthernet` configured with `lb l34-inner` (new algorithm) | New LAG algorithm uses inner 5-tuple. |
+| `TestLagL34LegacyOuterOnly` | Same matrix on a `BondEthernet` configured with `lb l34` (legacy algorithm) — tunnel traffic must collapse onto one member, plain traffic must distribute. | Existing `BOND_API_LB_ALGO_L34` / `hash-eth-l34` is byte-for-byte unchanged after the patch — directly evidences the regression-safety claim in §4.4. |
+| `TestPeekInnerOff` | Same fixtures as `TestInnerAwareECMP` with `IP_FLOW_HASH_PEEK_INNER` not set on the FIB | Default IP-layer behaviour is exactly upstream's. |
+| `TestSafetyEdges` | Fragmented outer, truncated GRE (3-byte payload), truncated IPinIP (4-byte inner), inner IPv6 HBH ext-header, inner IPv6 Fragment ext-header | No crash, helper falls back to outer-only without leaking any past-buffer reads. |
 
 Result on `master @ 2b05793 + this patch`:
 
@@ -644,16 +853,30 @@ TEST RESULTS:
 
 ### 8.2 VPP Performance Harness — `test/test_inner_aware_perf.py`
 
-Same fixtures as `TestInnerAwareECMP` but instead of asserting on
-distribution, it measures wall-clock send/receive throughput for a
-fixed packet count and exports the result, then dumps `show runtime`
-so a reviewer can read off per-node clocks/vector for `ip4-lookup`,
-`ip6-lookup`, and `hash-eth-l34`.
+The in-tree harness adds three perf classes that all run under the
+same compiled VPP binary, varying only the runtime configuration:
+
+| Class | Configuration | What it isolates |
+|---|---|---|
+| `TestInnerAwarePerf` | `enable_peek_inner` toggle on default-VRF FIB; ECMP scenarios | Per-packet cost of the IP-layer peek (PEEK_INNER off vs on) on `ip4-lookup` / `ip6-lookup`. |
+| `TestInnerAwareLAGPerf` | BondEthernet configured with `lb_algo_name = "BOND_API_LB_ALGO_L34_INNER"` | Cost of the new opt-in LAG algorithm with peek enabled. |
+| `TestInnerAwareLAGLegacyPerf` | Same fixtures, BondEthernet configured with `lb_algo_name = "BOND_API_LB_ALGO_L34"` | Direct A/B comparison: confirms the legacy `hash-eth-l34` code path costs the same as it did pre-patch (regression-safety for existing deployments). |
+
+Each class measures wall-clock send/receive throughput for a fixed
+packet count and dumps `show runtime` so a reviewer can read off
+per-node clocks/vector for `ip4-lookup`, `ip6-lookup`, `hash-eth-l34`,
+and `hash-eth-l34-inner`.
 
 This is **not** a rigorous PPS benchmark — VPP unit tests run inside a
-software-only scapy harness without DPDK — but it is enough to confirm
-no order-of-magnitude regression on the non-opt-in plain-UDP path
-and to give a relative number for the opt-in tunnel path.
+software-only scapy harness without DPDK — but the three-class
+structure is sufficient to demonstrate that the legacy path is
+unchanged and to put a cycles-per-packet figure on the opt-in path.
+
+For absolute per-packet cycle numbers we additionally ran an
+out-of-tree A/B/C methodology on the dev VM (three separately-built
+VPP binaries — unpatched, patched-off, patched-on — driven by the same
+packet-generator harness).  Those numbers were used for the upstream
+commit message; the in-tree classes above are what CI runs.
 
 ### 8.3 sonic-mgmt — `tests/fib/test_fib.py`
 
@@ -669,8 +892,9 @@ End-to-end on `vms-kvm-vpp-t1-lag`:
 | `test_nvgre_hash[ipv4-ipv4]` / `[ipv4-ipv6]` / `[ipv6-ipv6]` / `[ipv6-ipv4]` | FAIL (single path) | **PASS** |
 | `test_ecmp_group_member_flap` | PASS | PASS |
 
-End state on `inner-aware-flow-hash` HEAD `f2f9182` (re-validated
-after the 0011 → 0010 squash on 2026-05-19):
+End state on `inner-aware-flow-hash` HEAD `f2f9182` (re-validated as
+regression r13 after the 0010 squash carrying the v0.3 opt-in
+redesign — `BOND_API_LB_ALGO_L34_INNER = 6` + `hash-eth-l34-inner`):
 
 ```
 ========= 16 passed, 698 warnings, 2 errors in 7264.48s (2:01:04) ========
@@ -681,10 +905,25 @@ The 2 errors are syncd-shutdown teardown analyzer matches
 flow hashing — they occur with or without this patch.
 
 > **Note on `test_vxlan_hash`** — this patch does **not** parse VxLAN;
-> the test passes because the SONiC traffic generator varies the outer
-> UDP src port across distinct inner flows per RFC 7348 §4.2, and the
-> existing outer L4 hash already balances them once the LAG hash
-> stopped collapsing them onto one member.  See §4.5.
+> `hash_eth_l34_inner_inline` and `ip{4,6}_compute_flow_hash` both
+> fall through to the outer-only hash for VxLAN/UDP traffic.  The test
+> passes post-patch because of two unrelated but cooperating changes
+> the patch ships:
+>
+> 1. The IPv6 outer cases (`[ipv6-ipv4]`, `[ipv6-ipv6]`) benefit from
+>    the new `vpp_ip_flow_hash_set(vrf_id, mask, AF_INET6)` call in
+>    `vpp_add_ip_vrf()` — stock SONiC-VPP only programmed the IPv4
+>    FIB, so the IPv6 FIB had no proper 5-tuple hash mask and IPv6
+>    outer flows collapsed regardless of LAG state.  Programming the
+>    v6 FIB with the same mask lets the existing outer 5-tuple hash
+>    distribute IPv6-outer VxLAN.
+> 2. The IPv4 outer cases (`[ipv4-ipv4]`, `[ipv4-ipv6]`) pass because
+>    the SONiC traffic generator varies the outer UDP src port across
+>    distinct inner flows per RFC 7348 §4.2, and `hash-eth-l34-inner`
+>    falls back to the same outer-5-tuple hash as `hash-eth-l34` for
+>    a UDP/4789 outer.  No inner peek is involved.
+>
+> See §4.5 for the explicit VxLAN out-of-scope rationale.
 
 ---
 
@@ -723,9 +962,9 @@ does not raise the same questions.
 
 | Issue | Resolution |
 |---|---|
-| `hash_eth.c` carried `PREDICT_FALSE (!ip4_is_fragment(...))`, which inverts the branch hint (predicts "non-fragment is rare") — opposite of what VPP idiom and reality require. | Rewritten as `!PREDICT_FALSE (ip4_is_fragment(...))`, matching the existing usage in `ip4_to_ip6.h` and `ip4_forward.c`. |
-| `ip_inner_aware_hash.h` file-header comment and `inner_aware_hash.rst` claimed the LAG surface was reached via a separately-registered `hash-eth-l34-inner` function gated by a new `BOND_API_LB_ALGO_L34_INNER` enum value (= 6).  Neither symbol exists in the implementation. | Both files now describe the actual design: `hash-eth-l34` was updated in place to be always-on with safe fallback; no new hash function and no new enum value were added. |
-| v0.1 of this HLD listed a `BOND_API_LB_ALGO_L4 = 3` value in Appendix B.3 alongside the other algorithms.  No such enumerator exists in `src/vnet/bonding/bond.api` — the real values are `L2 = 0`, `L34 = 1`, `L23 = 2`, `RR = 3`, `BC = 4`, `AB = 5`. | Appendix B.3 rewritten in v0.2 to list both the VPP-side `BOND_API_LB_ALGO_*` enum from `bond.api` and the libsaivs mirror `VPP_BOND_API_LB_ALGO_*` from `SaiVppXlate.h`, with the correct six values on each side. |
+| `hash_eth.c` carried `PREDICT_FALSE (!ip4_is_fragment(...))`, which inverts the branch hint (predicts "non-fragment is rare") — opposite of what VPP idiom and reality require. | Rewritten as `!PREDICT_FALSE (ip4_is_fragment(...))` in the new `hash_eth_l34_inner_inline`, matching the existing usage in `ip4_to_ip6.h` and `ip4_forward.c`. |
+| v0.1 / v0.2 of this HLD described the LAG surface as an in-place edit to `hash-eth-l34` ("always-on with safe fallback") that kept the existing `BOND_API_LB_ALGO_L34 = 1` enum value, justifying the choice with libsaivs / libvppinfra CRC stability.  Upstream review (Fred Wang, lolyu) pushed back that this changes the meaning of the existing default LAG algorithm and is fragile. | Reworked into the v0.3 opt-in design: new `BOND_API_LB_ALGO_L34_INNER = 6 [backwards_compatible]` + new registered function `hash-eth-l34-inner`; legacy `hash-eth-l34` is byte-for-byte unchanged and proven so by a dedicated `TestLagL34LegacyOuterOnly` test class.  CRC stability is now provided by the `[backwards_compatible]` keyword (same mechanism as `sr_behavior` and `ipsec_crypto_alg`), not by avoiding the enum extension. |
+| v0.1 of this HLD listed a `BOND_API_LB_ALGO_L4 = 3` value in Appendix B.3 alongside the other algorithms.  No such enumerator exists in `src/vnet/bonding/bond.api` — the real values are `L2 = 0`, `L34 = 1`, `L23 = 2`, `RR = 3`, `BC = 4`, `AB = 5`. | Appendix B.3 rewritten to list both the VPP-side `BOND_API_LB_ALGO_*` enum from `bond.api` and the libsaivs mirror `VPP_BOND_API_LB_ALGO_*` from `SaiVppXlate.h`, with the correct seven values on each side (v0.3 adds `L34_INNER = 6`). |
 
 ---
 
@@ -735,8 +974,8 @@ does not raise the same questions.
 
 | File | Change | Description |
 |---|---|---|
-| `vppbld/patches/0010-sonic-inner-aware-flow-hash.patch` | **New** | Single squashed patch carrying the VPP changes (1927 lines) |
-| `vppbld/patches/series` | Modify | Add the new patch to the apply list |
+| `vppbld/patches/0010-sonic-inner-aware-flow-hash.patch` | **New** | Single squashed patch carrying the VPP changes (2849 lines, 13 files, +2326 / -52) |
+| `vppbld/patches/series` | Modify | Add the new patch to the apply list, with a 5-line scope comment listing in-scope encapsulations (IPinIP / 6in4 / 4in6 / 6in6 / GRE / NVGRE) and out-of-scope ones (VxLAN / Geneve / SRv6), plus a "byte-for-byte unchanged" note about `hash-eth-l34` and `IP_FLOW_HASH_DEFAULT` |
 | `docs/HLD/vpp-inner-aware-flow-hash.md` | **New** | This document |
 
 Files touched by the patch inside the VPP tree:
@@ -747,29 +986,42 @@ Files touched by the patch inside the VPP tree:
 | `src/vnet/ip/ip_inner_aware_hash.h` | **New** — shared helper for all three hash surfaces |
 | `src/vnet/ip/ip4_inlines.h` | Gate `ip4_compute_flow_hash` on `PEEK_INNER` |
 | `src/vnet/ip/ip6_inlines.h` | Gate `ip6_compute_flow_hash` on `PEEK_INNER` + extension-header walk |
-| `src/vnet/hash/hash_eth.c` | Extend `hash_eth_l34_inline`; update registered description |
-| `test/test_inner_aware_hash.py` | **New** — 42 unit-test methods across 4 classes |
-| `test/test_inner_aware_perf.py` | **New** — perf harness |
+| `src/vnet/bonding/bond.api` | Add `BOND_API_LB_ALGO_L34_INNER = 6 [backwards_compatible]`; bump `option version 2.1.0 -> 2.1.1`; document `l34-inner` in the `lb` parameter help |
+| `src/vnet/bonding/node.h` | Add `L34_INNER` to `foreach_bond_lb` (placed **first** so `unformat()` greedy prefix matching picks `l34-inner` before `l34`) and append to `foreach_bond_lb_algo`; multi-line comment explains the ordering rule |
+| `src/vnet/bonding/cli.c` | Extend lb-range validator to accept `BOND_LB_L34_INNER`; map `BOND_LB_L34_INNER` to `hash-eth-l34-inner` in `bond_create_if()`; update `create bond` CLI short_help to list `l34-inner` |
+| `src/vnet/hash/hash_eth.c` | Include `ip_inner_aware_hash.h`; new inline `hash_eth_inner_lb_hash`; new functions `hash_eth_l34_inner_inline` / `hash_eth_l34_inner`; register `hash-eth-l34-inner` via `VNET_REGISTER_HASH_FUNCTION`. Existing `hash-eth-l34` / `hash_eth_l34_inline` / `hash_eth_l34` are **unchanged**. |
+| `test/test_inner_aware_hash.py` | **New** — unit tests including `TestLagL34LegacyOuterOnly` to pin down the regression-safety claim for `BOND_API_LB_ALGO_L34` |
+| `test/test_inner_aware_perf.py` | **New** — A/B/C perf harness |
 | `docs/developer/corearchitecture/inner_aware_hash.rst` | **New** — VPP-side reference doc |
+| `docs/developer/corearchitecture/index.rst` | Modify — add `inner_aware_hash` to the toctree |
+| `docs/spelling_wordlist.txt` | Modify — add `inners`, `outers` to the rst spell-check wordlist |
 
 ### sonic-sairedis
 
 | File | Change | Description |
 |---|---|---|
-| `vslib/vpp/vppxlate/SaiVppXlate.h` | Modify | Add `VPP_IP_API_FLOW_HASH_PEEK_INNER` (512) and `VPP_IP_API_FLOW_HASH_GTPV1_TEID` (256) to `vpp_ip_flow_hash_mask_e` |
+| `vslib/vpp/vppxlate/SaiVppXlate.h` | Modify | Add `VPP_IP_API_FLOW_HASH_PEEK_INNER` (512) and `VPP_IP_API_FLOW_HASH_GTPV1_TEID` (256) to `vpp_ip_flow_hash_mask_e`; add `VPP_BOND_API_LB_ALGO_L34_INNER = 6` to the bond LB mirror enum |
 | `vslib/vpp/SwitchVppRif.cpp` | Modify | OR `PEEK_INNER` into default-VRF hash mask; add `AF_INET6` hash-set call |
-| `vslib/vpp/SwitchVppFdb.cpp` | Comment-only | Note that `BOND_API_LB_ALGO_L34` is now tunnel-aware |
+| `vslib/vpp/SwitchVppFdb.cpp` | Modify | `vpp_create_lag()` now sets `lb = VPP_BOND_API_LB_ALGO_L34_INNER` (`6`); was `VPP_BOND_API_LB_ALGO_L34` (`1`).  Code change is one line; comment block explains why |
 
 ### sonic-buildimage
 
 Submodule bump for `src/sonic-sairedis` once the sairedis change merges,
-to roll the new behaviour into `sonic-vpp.img`.
+**and** for `src/sonic-platform-vpp` once the VPP patch lands.  The two
+bumps must land in the same image build (or sairedis after
+sonic-platform-vpp) so that libsaivs and libvppinfra agree on the new
+`lb = 6` semantics; the `[backwards_compatible]` annotation guarantees
+they will not disagree on CRC.
 
 ### sonic-mgmt
 
 Existing `tests/fib/test_fib.py` scenarios that were skipped on the
-`vpp` platform via `tests_mark_conditions_sonic_vpp.yaml` are removed
-from the skip-list once the change lands.
+`vpp` platform via `tests_mark_conditions_sonic_vpp.yaml`
+(`test_ipinip_hash`, `test_nvgre_hash`, `test_vxlan_hash`) are removed
+from the skip-list once the change lands.  `test_nvgre_hash` also gets
+a `vpp` asic_type branch that sets `hash_keys` to the inner 5-tuple
+only (the VPP helper does **not** mix inner Ethernet MACs into the
+NVGRE hash — same carve-out as marvell-teralynx and mellanox).
 
 ---
 
@@ -806,11 +1058,21 @@ ipv4-VRF:0, fib_index:0, flow hash:[src dst sport dport proto peek_inner ] ...
 
 ```c
 /* src/vnet/hash/hash_eth.c, after the patch */
+
+/* Unchanged — same priority, same description, byte-for-byte same hash */
 VNET_REGISTER_HASH_FUNCTION (hash_eth_l34, static) = {
   .name = "hash-eth-l34",
-  .description = "Hash ethernet L34 headers, peek into IPinIP/GRE/NVGRE inner",
+  .description = "Hash ethernet L34 headers",
   .priority = 50,
   .function[VNET_HASH_FN_TYPE_ETHERNET] = hash_eth_l34,
+};
+
+/* New */
+VNET_REGISTER_HASH_FUNCTION (hash_eth_l34_inner, static) = {
+  .name = "hash-eth-l34-inner",
+  .description = "Hash ethernet L34 headers, peek into IPinIP/GRE/NVGRE inner",
+  .priority = 50,
+  .function[VNET_HASH_FN_TYPE_ETHERNET] = hash_eth_l34_inner,
 };
 ```
 
@@ -819,24 +1081,27 @@ Verification via `vppctl`:
 ```
 vpp# show hash
 Name                     Prio    Description
-hash-eth-l34             50      Hash ethernet L34 headers, peek into IPinIP/GRE/NVGRE inner
-hash-eth-l23             50      Hash ethernet L23 headers
 hash-eth-l2              50      Hash ethernet L2 headers
+hash-eth-l23             50      Hash ethernet L23 headers
+hash-eth-l34             50      Hash ethernet L34 headers
+hash-eth-l34-inner       50      Hash ethernet L34 headers, peek into IPinIP/GRE/NVGRE inner
 ...
 ```
 
-### B.3 Bond Load-Balance Algorithm Enum (Unchanged)
+### B.3 Bond Load-Balance Algorithm Enum
 
 ```c
-/* VPP-side, src/vnet/bonding/bond.api — NOT modified by this patch */
+/* VPP-side, src/vnet/bonding/bond.api — modified by this patch */
+option version = "2.1.1";  /* was "2.1.0" */
 enum bond_lb_algo
 {
   BOND_API_LB_ALGO_L2  = 0,
-  BOND_API_LB_ALGO_L34 = 1,    /* libsaivs continues to use this value */
+  BOND_API_LB_ALGO_L34 = 1,    /* unchanged; still valid for libsaivs */
   BOND_API_LB_ALGO_L23 = 2,
   BOND_API_LB_ALGO_RR  = 3,
   BOND_API_LB_ALGO_BC  = 4,
   BOND_API_LB_ALGO_AB  = 5,
+  BOND_API_LB_ALGO_L34_INNER = 6 [backwards_compatible],   /* new */
 };
 ```
 
@@ -844,17 +1109,34 @@ libsaivs mirrors the same numeric values in
 `vslib/vpp/vppxlate/SaiVppXlate.h` with a `VPP_` prefix:
 
 ```c
-/* libsaivs-side, mirrors the values above — also NOT modified */
-enum {
-  VPP_BOND_API_LB_ALGO_L2  = 0,
-  VPP_BOND_API_LB_ALGO_L34 = 1,    /* SwitchVppFdb.cpp sets lb to this */
-  VPP_BOND_API_LB_ALGO_L23 = 2,
-  VPP_BOND_API_LB_ALGO_RR  = 3,
-  VPP_BOND_API_LB_ALGO_BC  = 4,
-  VPP_BOND_API_LB_ALGO_AB  = 5,
-};
+/* libsaivs-side, mirrors the values above */
+typedef enum {
+    VPP_BOND_API_LB_ALGO_L2  = 0,
+    VPP_BOND_API_LB_ALGO_L34 = 1,
+    VPP_BOND_API_LB_ALGO_L23 = 2,
+    VPP_BOND_API_LB_ALGO_RR  = 3,
+    VPP_BOND_API_LB_ALGO_BC  = 4,
+    VPP_BOND_API_LB_ALGO_AB  = 5,
+    VPP_BOND_API_LB_ALGO_L34_INNER = 6,     /* new — SwitchVppFdb.cpp uses this */
+} vpp_bond_api_lb_algo_t;
 ```
 
-Keeping both enums unchanged is what gives the LAG inner peek **zero**
-SAI / ABI churn — libsaivs and libvppinfra-dev built before the patch
-continue to interoperate with VPP built after the patch.
+The `[backwards_compatible]` keyword on the VPP-side enum value tells
+`vppapigen` to exclude `L34_INNER = 6` from the CRC calculation of
+every message that references `vl_api_bond_lb_algo_t`.  The CRCs of
+`bond_create`, `bond_create2`, `sw_interface_bond_details`, and
+`sw_bond_interface_details` therefore stay byte-for-byte identical to
+upstream — a libsaivs that knows about `L34_INNER` and a libsaivs that
+doesn't both interoperate cleanly with a libvppinfra built from a
+patched tree.  Semantically, an unpatched VPP rejects `lb = 6` at
+runtime in `bond_create_if()` because it does not know
+`BOND_LB_L34_INNER`; sonic-buildimage avoids that combination by
+bumping the `sonic-platform-vpp` and `sonic-sairedis` submodules
+together (see §6.2 / Appendix A).  This is the same `[backwards_compatible]`
+mechanism used by `enum sr_behavior` in `src/vnet/srv6/sr_types.api`
+and `enum ipsec_crypto_alg` in `src/vnet/ipsec/ipsec_types.api`.
+
+The `option version` bump from `2.1.0` to `2.1.1` is API-semantic
+metadata emitted by `vppapigen` as a `vl_api_version_tuple` symbol;
+it has **no** effect on per-message CRCs or on the binary API wire
+format.
