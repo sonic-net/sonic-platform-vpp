@@ -47,8 +47,13 @@ while [ $SECONDS -lt $deadline ]; do
 done
 
 if [ "$ready" != 1 ]; then
-    echo "vpp_promisc.sh: timed out after ${WAIT_TIMEOUT}s waiting for bobm* interfaces" >&2
-    exit 1
+    # bobm* never appeared. Most likely DPDK is not configured on this
+    # platform (DPDK_DISABLE may not have been set explicitly). Log once
+    # and exit cleanly so supervisord does not enter a restart storm.
+    # autorestart=unexpected (see vpp_promisc.conf) then leaves the
+    # program in EXITED state instead of cycling.
+    echo "vpp_promisc.sh: timed out after ${WAIT_TIMEOUT}s waiting for bobm* interfaces; exiting (no DPDK ports to manage)" >&2
+    exit 0
 fi
 
 # Phase 2: keep promiscuous mode on for every discovered bobm* port.
@@ -57,8 +62,11 @@ while true; do
     intfs=$(vppctl show interface 2>/dev/null \
         | awk '/^bobm[0-9]+ /{print $1}')
     for intf in $intfs; do
+        # Allow trivial whitespace and format variation across VPP
+        # releases (e.g. extra spaces, key reordering). The previous
+        # fixed-substring check was fragile against minor format drift.
         if vppctl show hardware-interfaces "$intf" 2>/dev/null \
-            | grep -q "promiscuous: unicast on"; then
+            | grep -qE 'promiscuous:[[:space:]]+unicast[[:space:]]+on'; then
             continue
         fi
         if vppctl set interface promiscuous on "$intf" >/dev/null 2>&1; then
