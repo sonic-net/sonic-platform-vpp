@@ -97,6 +97,14 @@ ip6_validate_x1 (vlib_buffer_t *b, u16 *next)
 
   vnet_feature_next (&feat_next, b);
 
+  /* Only validate unicast packets */
+  /* skip multicast (ff00::/8) */
+  if (PREDICT_FALSE (ip->dst_address.as_u8[0] == 0xFF))
+    {
+      *next = (u16) feat_next;
+      return IP6_VALIDATE_ERROR_VALID;
+    }
+
   /*
    * L2 check: unicast IP but multicast/broadcast ETH dst.
    * Use ethernet_buffer_get_header() which correctly handles VLAN-tagged

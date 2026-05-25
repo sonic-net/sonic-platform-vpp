@@ -131,6 +131,27 @@ class TestIpValidate(VppTestCase):
         capture = pg1.get_capture(1)
         self.assertEqual(len(capture), 1)
 
+    def send_and_assert_passed_validate(self, pkt, node):
+        """Send a packet and verify it was passed (not dropped) by the
+        ip_validate plugin. Confirms the node's VALID counter incremented;
+        if the validate node had dropped the packet it would have bumped a
+        different error counter instead.  Useful for traffic that the plugin
+        should ignore (e.g. broadcast/multicast) but that may still be
+        dropped further downstream."""
+        valid_counter = "/err/%s/valid packets" % node
+        valid_before = self.statistics.get_err_counter(valid_counter)
+
+        self.pg_interfaces[0].add_stream([pkt])
+        self.pg_interfaces[1].enable_capture()
+        self.pg_start()
+
+        valid_after = self.statistics.get_err_counter(valid_counter)
+        self.assertGreater(
+            valid_after, valid_before,
+            "%s did not pass packet (VALID counter %s did not increment)"
+            % (node, valid_counter),
+        )
+
     # ================================================================
     # IPv4 L2 check tests
     # ================================================================
@@ -158,6 +179,21 @@ class TestIpValidate(VppTestCase):
         self.send_and_assert_dropped(
             pkt, "/err/ip4-validate/unicast IP with multicast~broadcast L2 destination"
         )
+
+    # ================================================================
+    # IPv4 unicast-only early-out tests (broadcast/multicast pass through)
+    # ================================================================
+
+    def test_ipv4_limited_broadcast_passthrough(self):
+        """IPv4: DHCP-style limited broadcast (255.255.255.255) -> passthrough"""
+        pg0 = self.pg_interfaces[0]
+        pkt = (
+            Ether(src=pg0.remote_mac, dst="ff:ff:ff:ff:ff:ff")
+            / IP(src="0.0.0.0", dst="255.255.255.255")
+            / UDP(sport=68, dport=67)
+            / Raw(b"\xa5" * 100)
+        )
+        self.send_and_assert_passed_validate(pkt, node="ip4-validate")
 
     # ================================================================
     # IPv4 SRC address check tests
