@@ -301,6 +301,12 @@ plugins {
 
 # Why not support sub interfaces
 linux-cp {
-   lcp-auto-subint
+   # lcp-auto-subint disabled: auto-pair "BondEthernet<id>.<vlan>" <-> "be<id>.<vlan>"
+   # punts ARP to be<id>.<vlan>, but SONiC writes the sub-port IP on
+   # "PortChannel<id>.<vlan>" (separate teamd vlan netdev), so the kernel drops
+   # the unsolicited ARP and the VPP neighbor table never gets populated.
+   # Disabled so sairedis (vpp_create_router_interface, SUB_PORT path) creates the
+   # LCP pair + tc mirred bridge between be<id>.<vlan> and PortChannel<id>.<vlan>.
+   # lcp-auto-subint
    lcp-sync
 }
