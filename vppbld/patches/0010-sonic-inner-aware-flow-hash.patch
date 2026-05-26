@@ -216,12 +216,12 @@ Signed-off-by: Jianquan Ye <jianquanye@microsoft.com>
  src/vnet/bonding/node.h                       |   34 +-
  src/vnet/hash/hash_eth.c                      |  157 +++
  src/vnet/ip/ip4_inlines.h                     |   71 +-
- src/vnet/ip/ip6_inlines.h                     |   84 +-
+ src/vnet/ip/ip6_inlines.h                     |   93 +-
  src/vnet/ip/ip_flow_hash.h                    |   21 +-
  src/vnet/ip/ip_inner_aware_hash.h             |  267 +++++
- test/test_inner_aware_hash.py                 | 1005 +++++++++++++++++
+ test/test_inner_aware_hash.py                 | 1058 +++++++++++++++++
  test/test_inner_aware_perf.py                 |  463 ++++++++
- 13 files changed, 2326 insertions(+), 52 deletions(-)
+ 13 files changed, 2388 insertions(+), 52 deletions(-)
  create mode 100644 docs/developer/corearchitecture/inner_aware_hash.rst
  create mode 100644 src/vnet/ip/ip_inner_aware_hash.h
  create mode 100644 test/test_inner_aware_hash.py
@@ -970,7 +970,7 @@ index 9bd475224..a48b0da90 100644
  
    if (PREDICT_TRUE ((protocol == IP_PROTOCOL_TCP) || is_udp))
      {
-@@ -66,29 +77,76 @@ ip6_compute_flow_hash (const ip6_header_t * ip,
+@@ -66,29 +77,85 @@ ip6_compute_flow_hash (const ip6_header_t * ip,
      }
    else
      {
@@ -1008,7 +1008,16 @@ index 9bd475224..a48b0da90 100644
 +	  outer_fragmented = 1;
  	}
 -      else if (protocol == IP_PROTOCOL_TCP || protocol == IP_PROTOCOL_UDP)
-+      if (protocol == IP_PROTOCOL_TCP || protocol == IP_PROTOCOL_UDP)
++      /* Fragmentation invariant: a packet that carries a Fragment ext
++       header IS itself one fragment of the original L4 datagram --
++       never a complete L4 message.  Only fragment-0 carries the real
++       TCP/UDP src/dst ports; later fragments carry arbitrary
++       inner-payload bytes at the same buffer offset.  Hashing those
++       bytes as ports would send fragments of the same flow down
++       different paths and break reassembly at the destination.
++       Thus we must NOT read tcp->src/dst when outer_fragmented is
++       set.  This restores upstream pre-patch behaviour.  */
++      else if (!outer_fragmented && (protocol == IP_PROTOCOL_TCP || protocol == IP_PROTOCOL_UDP))
  	{
  	  is_tcp_udp = 1;
 -	  tcp = cur;
@@ -1369,7 +1378,7 @@ new file mode 100644
 index 000000000..2a4e2d238
 --- /dev/null
 +++ b/test/test_inner_aware_hash.py
-@@ -0,0 +1,1005 @@
+@@ -0,0 +1,1058 @@
 +#!/usr/bin/env python3
 +
 +# SPDX-License-Identifier: Apache-2.0
@@ -2370,6 +2379,59 @@ index 000000000..2a4e2d238
 +            non_zero,
 +            1,
 +            "truncated GRE peek must NOT distribute; got %s" % per_if,
++        )
++
++    def test_outer_v6_fragmented_falls_back(self):
++        """Fragmented outer v6 collapses to 1 path (no L4 read).
++
++        Regression test for v6 fragmentation invariant in
++        ``ip6_compute_flow_hash``.  After walking a Fragment ext header
++        ``cur`` is positioned at the start of the fragment payload --
++        which is the real L4 header only for offset==0 fragments and
++        is arbitrary payload bytes for later fragments.  Hashing those
++        bytes as L4 ports would split fragments of the same flow across
++        ECMP paths and break reassembly at the destination.
++
++        The helper MUST ignore the bytes following the Fragment ext
++        header.  This test sends N packets that share the same outer
++        v6 src/dst (so a correct hash collapses them to one path) but
++        carry varying ``UDP(sport, dport)`` right after the Fragment
++        header.  A broken helper would distribute on ports; the fixed
++        helper collapses to a single path.
++        """
++        seed = 0xF7A6
++        rng = random.Random(seed)
++        outer_src, outer_dst = _outer_addrs(IPv6)
++        pkts = []
++        for _ in range(N_PKTS):
++            sport, dport = _rand_port(rng), _rand_port(rng)
++            # nh=44 (Fragment) on the IPv6 header, then the Fragment ext
++            # header carries nh=17 (UDP) and offset=0, m=1 (i.e., the
++            # first fragment of a multi-fragment datagram).  Even when
++            # the L4 header IS present (first fragment), the helper
++            # must refuse to read its ports -- otherwise the SECOND
++            # fragment (which would not carry these ports) would hash
++            # to a different path.
++            outer = (
++                IPv6(src=outer_src, dst=outer_dst, nh=44, hlim=64)
++                / IPv6ExtHdrFragment(nh=17, offset=0, m=1, id=0x1234)
++                / UDP(sport=sport, dport=dport)
++            )
++            pkts.append(outer)
++
++        dst_net, prefix = _outer_dst_route(IPv6)
++        rip = self._add_ecmp_route(dst_net, prefix, is_ipv6=True)
++        try:
++            per_if, total = self._send(pkts)
++        finally:
++            rip.remove_vpp_config()
++        self.assertEqual(total, N_PKTS)
++        non_zero = sum(1 for c in per_if.values() if c > 0)
++        self.assertEqual(
++            non_zero,
++            1,
++            "fragmented outer v6 must NOT hash L4 ports "
++            "(would break reassembly); got %s" % per_if,
 +        )
 +
 +
