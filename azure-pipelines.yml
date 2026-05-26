@@ -20,7 +20,7 @@ schedules:
   displayName: Daily midnight build
   branches:
     include:
-    - main
+    - master
   always: true
 
 parameters:
