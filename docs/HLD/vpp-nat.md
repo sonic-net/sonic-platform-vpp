@@ -527,6 +527,23 @@ sai_status_t SwitchVpp::setRifNatZone(sai_object_id_t rif_oid, uint32_t zone)
 
 The SONiC HLD permits the Loopback IP to be used as the public NAT IP. In SONiC the Loopback zone is "not propagated to the hardware" — it's only used in the kernel by NatMgrd to install the mangle MARK rules. For sonic-vpp we follow the same approach: Loopback zone is recorded in the SAI cache but no `nat44 in/out` is called on the loopback interface in VPP. This is safe because loopback is never traversed as a packet-forwarding interface — it is purely an IP address. Zone-crossing in VPP is decided by the `nat44 in/out` feature on the physical, VLAN, or PortChannel ingress/egress interfaces, not by any property of the loopback.
 
+#### VLAN, PortChannel, and sub-interface RIFs
+
+SONiC supports `nat_zone` on Ethernet, VLAN, PortChannel, and (sub-)interface RIFs. VPP represents each of these as a single `sw_if_index`, and `nat44 in/out` can be attached to any of them:
+
+| SONiC RIF type | VPP representation | NAT feature attachment |
+|---|---|---|
+| `Ethernet0` (port RIF) | Hardware interface `GigabitEthernet0/8/0` | `set int nat44 in/out GigabitEthernet0/8/0` |
+| `Vlan1000` (VLAN RIF) | BVI (`loop0` with `bvi 1`) in a bridge-domain | `set int nat44 in/out loop0` |
+| `PortChannel01` (LAG RIF) | `bond0` interface | `set int nat44 in/out bond0` |
+| `Ethernet0.100` (sub-interface) | `GigabitEthernet0/8/0.100` | `set int nat44 in/out GigabitEthernet0/8/0.100` |
+
+The zone assignment code in `SwitchVppRif::setRifNatZone()` resolves the SAI RIF object to the appropriate VPP `sw_if_index` (via the existing `rifToHwif()` helper used for IP address assignment) and calls `vpp_nat44_interface_add_del_feature` on that index. **No special-case handling per RIF type is needed.**
+
+For the VLAN/BVI case in particular: NAT44 runs on the BVI's feature arc, so the L3-routed traffic crossing the VLAN boundary is subject to NAT; pure L2 traffic between bridge members (same VLAN, no routing) bypasses the BVI and is not NAT'd — which is the correct semantic.
+
+When a packet ingresses on a physical port, gets L2-bridged into a VLAN, hits the BVI, and the nat44 slow path punts it, the `nat44-lcp-punt` plugin uses the **BVI's `sw_if_index`** as the rx interface. The BVI's LCP pair is the `Vlan1000` tap, so the kernel sees the punted packet on `Vlan1000` (not on the underlying physical port). This matches what kernel iptables / NatMgrd expect: the zone MARK rules are keyed by Linux interface name (`Vlan1000`).
+
 #### How VPP decides zone-crossing
 
 VPP does not have an explicit "zone" attribute. The feature-arc placement of `nat44-ed-in2out` (on `is_inside=1` interfaces) and `nat44-ed-out2in` (on `is_outside=1` interfaces) implicitly defines zone boundaries:
