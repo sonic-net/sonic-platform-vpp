@@ -82,7 +82,10 @@ Legend:
   EXISTING: VPP, libsaivs.so, sai_test, sai_thrift, PTF, af_packet plugin
   NEW:      Dockerfile, run_test.sh, sai.profile, port-map.ini, Makefile patch
 ```
-
+OEthernetX represents an out-facing interface. It is where vpp receives and sends packet to the wire.
+There are also EthernetX interfaces. They are the inside interfaces facing SONiC control
+plane. Packets sent to SONiC control plane, such as ARP or BGP packets, are received from OEthernetX. vpp redirects such packets and sends them to SONiC through the corresponding
+EthernetX interface.
 ### 4.2 Component Breakdown
 
 | Component | Source | Status | Role |
@@ -96,7 +99,7 @@ Legend:
 | AF_PACKET plugin | VPP plugin (af_packet_plugin.so) | **Existing** | VPP ↔ veth attachment |
 | Dockerfile | .azure-pipelines/docker-sai-test-vpp/ | **NEW** | Container image definition |
 | run_test.sh | .azure-pipelines/docker-sai-test-vpp/ | **NEW** | Orchestration script |
-| sai.profile + maps | .azure-pipelines/docker-sai-test-vpp/ | **NEW** | VPP SAI configuration |
+| sai.profile + maps | .azure-pipelines/docker-sai-test-vpp/ | **NEW** | VPP SAI CI configuration |
 | Makefile VPP case | SAI/test/saithriftv2/Makefile | **NEW** (1 block) | Link saiserver with VPP libs |
 
 ### 4.3 Data Flow
@@ -204,6 +207,93 @@ SAI/test/sai_test/ (same checkout) ───────────────
       log_artifact_name: log-sai-vpp
 ```
 
+### 4.6 Test Result Reporting
+
+The pipeline needs two independent signals: a process **exit code** (so the
+CI step turns red on failure) and a **JUnit-XML report** (so individual test
+cases are visible in the Azure Pipelines test tab).
+
+#### Exit code contract
+
+`run_test.sh` is the container entrypoint and must propagate PTF's exit
+code through teardown:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+start_vpp                      # fails → exit ≥2 before any test runs
+start_saiserver
+wait_for_saiserver_ready       # times out → exit ≥2
+
+# Run PTF; capture its rc without aborting the script
+set +e
+ptf --test-dir /sai_test \
+    --interface 0@OEthernet0_peer \
+    --interface 1@OEthernet1_peer \
+    ...                                    \
+    --xunit --xunit-dir /test-results       \
+    "${TEST_FILTER:-}"
+TEST_RC=$?
+set -e
+
+stop_saiserver
+stop_vpp
+exit $TEST_RC
+```
+
+Exit-code categories:
+
+| Code   | Meaning                                            | CI behavior |
+|--------|----------------------------------------------------|-------------|
+| `0`    | All PTF tests passed                               | step green  |
+| `1`    | One or more PTF failures or errors                 | step red, per-case results in JUnit |
+| `≥2`   | Setup failure (VPP/saiserver didn't come up)       | step red, no JUnit (logs artifact only) |
+| other  | Container/infra error                              | reported by the agent itself |
+
+`docker run` forwards the container exit code to the Azure Pipelines agent,
+which fails the step on any non-zero value. `set -euo pipefail` ensures
+setup errors propagate immediately; the explicit `set +e`/`TEST_RC=$?`
+block ensures teardown always runs without masking the test result.
+
+#### JUnit XML output
+
+PTF is invoked with `--xunit --xunit-dir /test-results`, producing one
+JUnit-XML file per test module. The `/test-results` directory is bind-
+mounted from the CI agent so the XML survives container exit.
+
+#### Azure Pipelines wiring
+
+```yaml
+# .azure-pipelines/test-sai-vpp-template.yml
+steps:
+- script: |
+    mkdir -p $(Build.ArtifactStagingDirectory)/test-results
+    docker run --privileged \
+      -v $(Build.ArtifactStagingDirectory)/test-results:/test-results \
+      docker-sai-test-vpp
+  displayName: Run VPP SAI PTF tests
+  # Note: do NOT add `|| true` — we want the step to fail on non-zero exit.
+
+- task: PublishTestResults@2
+  condition: always()           # publish even when previous step failed
+  inputs:
+    testResultsFormat: JUnit
+    testResultsFiles: '$(Build.ArtifactStagingDirectory)/test-results/*.xml'
+    testRunTitle: 'VPP SAI PTF'
+    failTaskOnFailedTests: true # belt-and-suspenders; primary signal is exit code
+
+- task: PublishBuildArtifacts@1
+  condition: always()
+  inputs:
+    pathToPublish: '$(Build.ArtifactStagingDirectory)/test-results'
+    artifactName: ${{ parameters.log_artifact_name }}
+```
+
+`condition: always()` on both publish tasks is required — without it a
+non-zero exit short-circuits the job before the XML and logs are uploaded,
+and reviewers cannot see which cases failed.
+
 ## 5. Phases
 
 ### Phase 1: Foundation (MVP)
@@ -227,16 +317,7 @@ SAI/test/sai_test/ (same checkout) ───────────────
 
 **Deliverables**: L3 compatibility matrix, bug fixes to VPP SAI
 
-### Phase 3: Extended Coverage
-**Goal**: Run L2 and advanced L3 tests.
-
-- Enable `sai_vlan_test`, `sai_fdb_test`, `sai_lag_test`
-- Enable `sai_tunnel_test` (VXLAN)
-- Track full compatibility matrix across all SAI object types
-
-**Deliverables**: Full compatibility matrix, expanded coverage
-
-### Phase 4: CI Integration
+### Phase 3: CI Integration
 **Goal**: Automated regression testing on every PR in sonic-sairedis.
 
 - Add `BuildSaiTestVpp` and `TestSaiVpp` stages to `azure-pipelines.yml`
@@ -246,7 +327,7 @@ SAI/test/sai_test/ (same checkout) ───────────────
 
 **Deliverables**: CI pipeline templates, automated test execution, published results
 
-### Phase 5: Event Notification Verification
+### Phase 4: Event Notification Verification
 **Goal**: Verify VPP SAI asynchronous event notifications (port state, BFD).
 
 VPP SAI implements an event pipeline:
@@ -276,17 +357,17 @@ Implementation notes:
 
 **Deliverables**: Notification test cases, verified event pipeline
 
-### Phase 6: Control Plane Packet Verification
+### Phase 5: Control Plane Packet Verification
 **Goal**: Verify packets punted to/from the control plane via VPP LCP TAP interfaces.
 
-VPP's Linux Control Plane (linux-cp) plugin creates TAP interfaces paired to VPP hardware interfaces. When `sai_create_hostif(SAI_HOSTIF_TYPE_NETDEV, port, "IEthernet0")` is called, VPP SAI invokes `lcp_itf_pair_add_del` to create a TAP device. Punted packets appear on the TAP; packets written to the TAP enter VPP's dataplane.
+VPP's Linux Control Plane (linux-cp) plugin creates TAP interfaces paired to VPP hardware interfaces. When `sai_create_hostif(SAI_HOSTIF_TYPE_NETDEV, port, "Ethernet0")` is called, VPP SAI invokes `lcp_itf_pair_add_del` to create a TAP device. Punted packets appear on the TAP; packets written to the TAP enter VPP's dataplane.
 
 #### Packet Flow
 
 ```
 Wire side (OEthernet_peer)           Control plane side (TAP)
         │                                      │
-   AF_PACKET                              "IEthernet0"
+   AF_PACKET                              "Ethernet0"
         │                                      │
    VPP datapath ──── punt (ARP/LLDP/IP-to-me) ────►  TAP
         │                                      │
@@ -302,18 +383,38 @@ Wire side (OEthernet_peer)           Control plane side (TAP)
 | LACP | 0x8809 | `vpp_lcp_ethertype_enable()` |
 | BGP/OSPF/DHCP | IP | VPP FIB "ip-to-me" → linux-cp TAP delivery |
 
-#### PTF Port Mapping
+#### PTF Port Mapping vs. Dynamic Hostif TAPs
 
-PTF must bind to both wire-side and control-plane interfaces:
+Only the **wire-side** veth peers are pre-created in `run_test.sh` and
+bound to PTF port ids at startup:
+
 ```
 --interface 0@OEthernet0_peer   # wire side port 0 (inject/capture forwarded traffic)
 --interface 1@OEthernet1_peer   # wire side port 1
 ...
---interface 32@IEthernet0       # control plane port 0 (capture punted traffic)
---interface 33@IEthernet1       # control plane port 1
 ```
 
-This allows tests to use `send_packet(self, 0, pkt)` for wire injection and `verify_packet(self, pkt, 32)` for control-plane capture on the same logical port.
+The **control-plane TAPs** (`Ethernet0`, `Ethernet1`, ...) do **not**
+exist until a test calls `sai_thrift_create_hostif(name="EthernetN")`,
+which happens *after* PTF is already running. PTF's port table is fixed
+at startup, so these TAPs cannot be registered as additional PTF ports.
+
+Hostif TAPs are therefore accessed via the **scapy helpers** described
+in Phase 6 (`wait_for_netdev`, `scapy_send`, `scapy_verify_packet`,
+`scapy_verify_no_packet`). A typical test sends on a PTF wire port and
+captures on the hostif TAP through scapy:
+
+```python
+def test_arp_punt(self):
+    sai_thrift_create_hostif(self.client, type=NETDEV,
+                             obj_id=port0, name="Ethernet0")
+    wait_for_netdev("Ethernet0")
+
+    self.send_packet(0, arp_request_pkt)          # wire side via PTF
+    self.scapy_verify_packet("Ethernet0",          # TAP via scapy
+                             Mask(arp_request_pkt),
+                             timeout=2.0)
+```
 
 #### Test Cases
 
@@ -328,14 +429,216 @@ This allows tests to use `send_packet(self, 0, pkt)` for wire injection and `ver
 
 #### Implementation Notes
 
-- TAP interfaces are created dynamically when `create_hostif` is called via Thrift
-- PTF `--platform-config` must account for TAP interface naming: IEthernet{N} (port offset by 32)
-- `run_test.sh` must wait for IEthernet TAP interfaces to appear before starting PTF
-- Tests require privileged mode (raw sockets on both veth peers and TAPs)
-- New PTF test file: `sai_hostif_punt_test.py`
+- Hostif TAPs are created dynamically by `sai_create_hostif()` Thrift
+  calls; they cannot be pre-registered with PTF. Tests use the scapy
+  mixin (see Phase 6) for inject/capture on these TAPs.
+- `run_test.sh` only pre-creates the wire-side `OEthernetN`/
+  `OEthernetN_peer` veth pairs and starts VPP + saiserver. It does
+  **not** create any `Ethernet*` TAPs — those are owned by the test.
+- Each test must `wait_for_netdev("EthernetN")` after `create_hostif`
+  to handle the linux-cp async TAP creation, and must delete the hostif
+  in `tearDown` so stale TAPs do not accumulate across tests.
+- Tests require privileged mode (raw sockets on veth peers and TAPs).
+- New PTF test file: `sai_hostif_punt_test.py`.
 
-**Deliverables**: Control-plane punt/inject test cases, dual-interface PTF configuration
+**Deliverables**: Control-plane punt/inject test cases using the scapy
+hostif mixin from Phase 6.
 
+### Phase 6: Dynamic Control-Plane Interfaces (Hostif TAPs and Pseudo Interfaces)
+**Goal**: Verify control-plane punt/inject for **any** interface whose
+kernel netdev is created mid-test by SAI. This covers:
+
+- Per-port hostif TAPs (`Ethernet0`, `Ethernet1`, …) created by
+  `sai_create_hostif(SAI_HOSTIF_TYPE_NETDEV)` (Phase 5 test cases).
+- Pseudo (logical) interfaces are created by SONiC based on config. Tests
+  should simulate the same behavior. When tests call `sai_create_lag()`
+  (`PortChannel1`), `sai_create_router_interface(type=VLAN)` (`Vlan10`),
+  loopback RIFs, etc, lcp creates tap interface with _tap suffix, such as
+  PortChannel1_tap. saivpp use linux TC to connect the tap interface to the
+  corresponding pseduo interface.
+All of these share the same constraint and use the same helper layer.
+
+#### Problem: PTF's port table is fixed at startup
+
+`ptf --interface N@dev` resolves device names to AF_PACKET sockets when
+the PTF process starts; the port table is immutable for the life of the
+run. Any netdev that SAI creates later — a hostif TAP, a LAG carrier,
+a VLAN SVI — cannot be added to PTF's port table afterward.
+
+For LAG/VLAN, linux-cp creates an internal tap (e.g.,
+`PortChannel1_tap`, `Vlan10_tap`) and tc-links it to the
+user-visible `PortChannel1` / `Vlan10` netdev. The user-facing name is
+what tests bind to.
+
+#### Approach: bypass the PTF port table with raw scapy
+
+For every dynamically-created netdev (hostif TAP or pseudo interface),
+send and receive packets via scapy directly on the runtime-created name.
+The test orchestrates:
+
+1. Call SAI Thrift to create the object (hostif / LAG / VLAN RIF / Loopback).
+2. Wait for the kernel netdev to appear (poll `/sys/class/net/<name>` with
+   a short timeout — the linux-cp creation is asynchronous).
+3. Use scapy bound to that netdev name for inject and capture.
+4. In `tearDown`, delete the SAI object; linux-cp removes the netdev.
+
+Wire-side traffic continues to use the normal PTF helpers on the
+pre-created `OEthernetN_peer` veth ports.
+
+#### ScapyPortMixin — the bridge between PTF and scapy
+
+A mixin in `sai_base_test.py` recovers most of PTF's verification
+semantics for the dynamic-netdev side. It reuses PTF's `Mask` and the
+standalone `match_exp_pkt` helper so that field-level don't-cares,
+negative assertions, and multi-port disjunction continue to work —
+these are the parts of PTF that hurt most to lose.
+
+```python
+# sai_base_test.py
+import os, time
+from scapy.all import sendp, AsyncSniffer
+from ptf.mask import Mask
+from ptf.dataplane import match_exp_pkt   # works on a bare scapy pkt
+
+class ScapyPortMixin:
+    """Pseudo-port helpers that mimic the PTF dataplane API on raw netdevs."""
+
+    # --- lifecycle ---------------------------------------------------
+    def wait_for_netdev(self, name, timeout=5.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if os.path.exists(f"/sys/class/net/{name}"):
+                return
+            time.sleep(0.1)
+        raise RuntimeError(f"netdev {name} did not appear within {timeout}s")
+
+    # --- send --------------------------------------------------------
+    def scapy_send(self, iface, pkt):
+        sendp(pkt, iface=iface, verbose=False)
+
+    # --- positive verification (PTF-equivalent: verify_packet) -------
+    def scapy_verify_packet(self, iface, expected, timeout=2.0):
+        """Wait for one packet on `iface` that matches `expected`
+        (scapy pkt or ptf.mask.Mask). Raises AssertionError otherwise."""
+        sniffer = AsyncSniffer(iface=iface, timeout=timeout, store=True)
+        sniffer.start(); sniffer.join()
+        for got in sniffer.results:
+            if match_exp_pkt(expected, bytes(got)):
+                return got
+        raise AssertionError(
+            f"no matching packet on {iface} within {timeout}s; "
+            f"captured {len(sniffer.results)} pkts")
+
+    # --- negative verification (PTF-equivalent: verify_no_packet) ----
+    def scapy_verify_no_packet(self, iface, unexpected, timeout=1.0):
+        sniffer = AsyncSniffer(iface=iface, timeout=timeout, store=True)
+        sniffer.start(); sniffer.join()
+        for got in sniffer.results:
+            if match_exp_pkt(unexpected, bytes(got)):
+                raise AssertionError(
+                    f"unexpected packet on {iface}: {got.summary()}")
+
+    # --- multi-iface disjunction (LAG / ECMP) ------------------------
+    def scapy_verify_packet_any_iface(self, ifaces, expected, timeout=2.0):
+        """Returns the iface on which `expected` arrived; fails if
+        none or more than one."""
+        sniffers = {ifc: AsyncSniffer(iface=ifc, timeout=timeout, store=True)
+                    for ifc in ifaces}
+        for s in sniffers.values(): s.start()
+        for s in sniffers.values(): s.join()
+        hits = [ifc for ifc, s in sniffers.items()
+                if any(match_exp_pkt(expected, bytes(p)) for p in s.results)]
+        if not hits:
+            raise AssertionError(f"expected packet on none of {ifaces}")
+        if len(hits) > 1:
+            raise AssertionError(f"expected on one iface, got {hits}")
+        return hits[0]
+```
+
+#### Scapy ↔ PTF capability map
+
+| PTF dataplane API                  | ScapyPortMixin equivalent          | Notes |
+|------------------------------------|------------------------------------|-------|
+| `send_packet(port, pkt)`           | `scapy_send(iface, pkt)`           | identical semantics |
+| `verify_packet(pkt, port)`         | `scapy_verify_packet(iface, pkt)`  | `Mask(pkt)` works as `expected` |
+| `verify_no_packet(pkt, port)`      | `scapy_verify_no_packet(iface, pkt)` | uses sniff-with-timeout |
+| `verify_packet_any_port(pkt, [ports])` | `scapy_verify_packet_any_iface(ifaces, pkt)` | LAG / ECMP |
+| `Mask(pkt, ignore_fields=[...])`   | identical — imported from `ptf.mask` | no rewrite needed |
+| Per-port counters / `DataPlane.get_counters()` | **not provided**             | not needed for unit tests |
+| `verify_each_packet_on_each_port`  | **not provided**                   | implementable; only if a test needs it |
+
+What is genuinely lost: per-port long-running counters and ordered
+multi-packet/multi-port assertions. Neither is required by any test
+case planned in Phase 5/6.
+
+#### Usage example
+
+```python
+class HostifPuntTest(SaiBaseTest, ScapyPortMixin):
+    def test_arp_punt(self):
+        sai_thrift_create_hostif(self.client, type=NETDEV,
+                                 obj_id=self.port0, name="Ethernet0")
+        self.wait_for_netdev("Ethernet0")
+
+        self.send_packet(0, arp_req)                       # PTF wire port
+        self.scapy_verify_packet("Ethernet0", Mask(arp_req))
+
+class LagPuntTest(SaiBaseTest, ScapyPortMixin):
+    def test_portchannel_arp_punt(self):
+        lag = sai_thrift_create_lag(self.client, ...)
+        sai_thrift_create_lag_member(self.client, lag, port_oid=self.port0)
+        self.wait_for_netdev("PortChannel1")
+
+        self.send_packet(0, arp_req)                       # member's wire side
+        self.scapy_verify_packet("PortChannel1", Mask(arp_req))
+```
+
+#### Constraints
+
+- **Wire side stays on PTF**: `OEthernetN_peer` veths are pre-created in
+  `run_test.sh` and bound at PTF startup. Only the dynamic-netdev side
+  uses scapy.
+- **Privileged container is already required** (raw AF_PACKET on TAPs);
+  scapy uses the same socket type, no extra capability needed.
+- **Cleanup**: tests must delete SAI objects in `tearDown` so the
+  netdev goes away before the next test, otherwise stale netdevs and
+  sniffer threads accumulate.
+
+#### Test Cases
+
+- **Hostif TAP punt/inject** (Phase 5): ARP / LLDP / LACP / IP-to-me on
+  `EthernetN` via the mixin.
+- **PortChannel punt**: LAG with one member → send ARP on member's wire
+  side → `scapy_verify_packet("PortChannel1", …)`.
+- **PortChannel inject**: `scapy_send("PortChannel1", arp_reply)` →
+  verify on member's wire-side PTF port.
+- **LAG hashing**: send N flows on wire-side →
+  `scapy_verify_packet_any_iface([member0, member1, …], pkt)`.
+- **VLAN SVI punt**: VLAN 10 + member ports + SVI RIF → send ARP for
+  SVI IP on a member's wire side → `scapy_verify_packet("Vlan10", …)`.
+- **Loopback IP-to-me**: Loopback RIF with IP → route a packet to that
+  IP via a wire-side port → `scapy_verify_packet("Loopback0", …)`.
+
+#### Implementation Notes
+
+- `ScapyPortMixin` lives in `sai_base_test.py`; every test class that
+  touches a dynamic netdev mixes it in.
+- `run_test.sh` only pre-creates wire-side veths and starts VPP +
+  saiserver; it has no knowledge of hostif or pseudo-iface names.
+- New PTF test files: `sai_hostif_punt_test.py` (Phase 5),
+  `sai_pseudo_iface_test.py` (Phase 6 — LAG/VLAN/Loopback).
+
+**Deliverables**: `ScapyPortMixin` in the test base class; hostif and
+pseudo-interface test cases using it.
+
+### Phase 7: Extended Coverage
+**Goal**: Run L2 and advanced L3 tests.
+
+- Enable `sai_vlan_test`, `sai_fdb_test`, `sai_lag_test`
+- Enable `sai_tunnel_test` (VXLAN)
+- Track full compatibility matrix across all SAI object types
+
+**Deliverables**: Full compatibility matrix, expanded coverage
 ## 7. Future Plan
 
 ### 7.1 Data-Driven Tests (YAML/JSON)
