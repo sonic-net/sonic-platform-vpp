@@ -1,0 +1,422 @@
+From 696f83b12114d02c4c8a225678aac8b77dffe177 Mon Sep 17 00:00:00 2001
+From: Longxiang Lyu <lolv@microsoft.com>
+Date: Fri, 1 May 2026 04:33:32 +0000
+Subject: [PATCH] ipip: add mp2p ipip tunnel
+
+Introduce a new multipoint-to-point (MP2P) tunnel mode for IPIP. An
+MP2P tunnel decapsulates traffic from many remote peers arriving at a
+single local source, but does not encapsulate towards any peer; it is
+effectively a decap-only sibling of the existing P2MP mode.
+
+This is for the SONiC VPP project to support the SAI P2MP IPINIP tunnel
+behavior that SONiC accepts/decaps traffic from any peer to the local.
+
+Type: feature
+Change-Id: Ia772ae35d80c90469801bc43fdaa15b63ea8753b
+Signed-off-by: Longxiang Lyu <lolv@microsoft.com>
+---
+ src/plugins/gre/interface.c      |   3 +
+ src/vnet/ipip/ipip.c             |  32 ++++--
+ src/vnet/ipip/ipip.h             |   1 +
+ src/vnet/ipip/ipip_api.c         |   2 +
+ src/vnet/ipip/ipip_cli.c         |  14 ++-
+ src/vnet/ipip/node.c             |   9 +-
+ src/vnet/tunnel/tunnel.c         |   2 +
+ src/vnet/tunnel/tunnel.h         |   7 +-
+ src/vnet/tunnel/tunnel_types.api |   2 +
+ test/test_ipip.py                | 172 +++++++++++++++++++++++++++++++
+ 10 files changed, 227 insertions(+), 17 deletions(-)
+
+diff --git a/src/plugins/gre/interface.c b/src/plugins/gre/interface.c
+index 446301289..d7c86e526 100644
+--- a/src/plugins/gre/interface.c
++++ b/src/plugins/gre/interface.c
+@@ -237,6 +237,9 @@ gre_tunnel_restack (gre_tunnel_t *gt)
+       case TUNNEL_MODE_MP:
+ 	adj_nbr_walk (gt->sw_if_index, proto, mgre_adj_walk_cb, NULL);
+ 	break;
++      case TUNNEL_MODE_MP2P:
++	/* not supported for GRE */
++	break;
+       }
+   }
+ }
+diff --git a/src/vnet/ipip/ipip.c b/src/vnet/ipip/ipip.c
+index 3464cdd1d..bfbf5465d 100644
+--- a/src/vnet/ipip/ipip.c
++++ b/src/vnet/ipip/ipip.c
+@@ -367,6 +367,16 @@ ipip_update_adj (vnet_main_t * vnm, u32 sw_if_index, adj_index_t ai)
+   if (!t)
+     return;
+ 
++  /* MP2P tunnels are decap-only. They share the P2P HW class but have
++   * a wildcard tunnel_dst (0.0.0.0 / ::), so building an encap rewrite
++   * would emit packets with an invalid outer destination. Leave the
++   * adjacency incomplete so any forwarding via the tunnel is dropped. */
++  if (t->mode == IPIP_MODE_MP2P)
++    {
++      adj_nbr_midchain_update_rewrite (ai, NULL, NULL, ADJ_FLAG_NONE, NULL);
++      return;
++    }
++
+   /*
+    * the user has not requested that the load-balancing be based on
+    * a flow hash of the inner packet. so use the stacking to choose
+@@ -754,10 +764,15 @@ ipip_add_tunnel (ipip_transport_t transport,
+   ipip_tunnel_key_t key;
+   ipip_mode_t mode;
+ 
+-  if (tmode == TUNNEL_MODE_MP && !ip46_address_is_zero (dst))
++  if ((tmode == TUNNEL_MODE_MP || tmode == TUNNEL_MODE_MP2P) && !ip46_address_is_zero (dst))
+     return (VNET_API_ERROR_INVALID_DST_ADDRESS);
+ 
+-  mode = (tmode == TUNNEL_MODE_P2P ? IPIP_MODE_P2P : IPIP_MODE_P2MP);
++  if (tmode == TUNNEL_MODE_P2P)
++    mode = IPIP_MODE_P2P;
++  else if (tmode == TUNNEL_MODE_MP2P)
++    mode = IPIP_MODE_MP2P;
++  else
++    mode = IPIP_MODE_P2MP;
+   ipip_mk_key_i (transport, mode, src, dst, fib_index, &key);
+ 
+   t = ipip_tunnel_db_find (&key);
+@@ -786,11 +801,14 @@ ipip_add_tunnel (ipip_transport_t transport,
+   t->dev_instance = t_idx;	/* actual */
+   t->user_instance = u_idx;	/* name */
+ 
+-  hw_if_index = vnet_register_interface (vnm, ipip_device_class.index, t_idx,
+-					 (mode == IPIP_MODE_P2P ?
+-					  ipip_hw_interface_class.index :
+-					  mipip_hw_interface_class.index),
+-					 t_idx);
++  /* P2MP tunnels use the multipoint (NBMA) HW class which resolves
++   * per-peer next-hops via the TEIB. P2P and MP2P share the simple
++   * P2P HW class: P2P has a fixed peer, and MP2P is decap-only so
++   * its encap-side rewrite is unused. */
++  hw_if_index = vnet_register_interface (
++    vnm, ipip_device_class.index, t_idx,
++    (mode == IPIP_MODE_P2MP ? mipip_hw_interface_class.index : ipip_hw_interface_class.index),
++    t_idx);
+ 
+   hi = vnet_get_hw_interface (vnm, hw_if_index);
+   sw_if_index = hi->sw_if_index;
+diff --git a/src/vnet/ipip/ipip.h b/src/vnet/ipip/ipip.h
+index fd6f50172..132147430 100644
+--- a/src/vnet/ipip/ipip.h
++++ b/src/vnet/ipip/ipip.h
+@@ -44,6 +44,7 @@ typedef enum
+   IPIP_MODE_P2P = 0,
+   IPIP_MODE_P2MP,
+   IPIP_MODE_6RD,
++  IPIP_MODE_MP2P,
+ } __clib_packed ipip_mode_t;
+ 
+ typedef struct
+diff --git a/src/vnet/ipip/ipip_api.c b/src/vnet/ipip/ipip_api.c
+index 7a46bc35a..630cf7b74 100644
+--- a/src/vnet/ipip/ipip_api.c
++++ b/src/vnet/ipip/ipip_api.c
+@@ -101,6 +101,8 @@ ipip_tunnel_mode_encode (ipip_mode_t mode)
+       return TUNNEL_API_MODE_P2P;
+     case IPIP_MODE_P2MP:
+       return TUNNEL_API_MODE_MP;
++    case IPIP_MODE_MP2P:
++      return TUNNEL_API_MODE_MP2P;
+     case IPIP_MODE_6RD:
+       return TUNNEL_API_MODE_P2P;
+     default:
+diff --git a/src/vnet/ipip/ipip_cli.c b/src/vnet/ipip/ipip_cli.c
+index 2523fe014..7e658777c 100644
+--- a/src/vnet/ipip/ipip_cli.c
++++ b/src/vnet/ipip/ipip_cli.c
+@@ -187,11 +187,11 @@ done:
+   return error;
+ }
+ 
+-VLIB_CLI_COMMAND(create_ipip_tunnel_command, static) = {
+-    .path = "create ipip tunnel",
+-    .short_help = "create ipip tunnel src <addr> dst <addr> [instance <n>] "
+-                  "[outer-table-id <ID>] [p2mp]",
+-    .function = create_ipip_tunnel_command_fn,
++VLIB_CLI_COMMAND (create_ipip_tunnel_command, static) = {
++  .path = "create ipip tunnel",
++  .short_help = "create ipip tunnel src <addr> dst <addr> [instance <n>] "
++		"[outer-table-id <ID>] [p2mp] [mp2p]",
++  .function = create_ipip_tunnel_command_fn,
+ };
+ VLIB_CLI_COMMAND(delete_ipip_tunnel_command, static) = {
+     .path = "delete ipip tunnel",
+@@ -230,6 +230,10 @@ format_ipip_tunnel (u8 * s, va_list * args)
+ 		  t->dev_instance, t->user_instance,
+ 		  format_ip46_address, &t->tunnel_src, type);
+       break;
++    case IPIP_MODE_MP2P:
++      s = format (s, "[%d] instance %d mp2p src %U ", t->dev_instance, t->user_instance,
++		  format_ip46_address, &t->tunnel_src, type);
++      break;
+     }
+ 
+   s = format (s, "table-ID %d sw-if-idx %d flags [%U] dscp %U",
+diff --git a/src/vnet/ipip/node.c b/src/vnet/ipip/node.c
+index 800d9a3e8..0b404fdda 100644
+--- a/src/vnet/ipip/node.c
++++ b/src/vnet/ipip/node.c
+@@ -125,14 +125,19 @@ ipip_input (vlib_main_t * vm, vlib_node_runtime_t * node,
+ 
+ 	  /*
+ 	   * Find tunnel. First a lookup for P2P tunnels, then a lookup
+-	   * for multipoint tunnels
++	   * for multipoint tunnels: P2MP first, then 6RD
+ 	   */
+ 	  ipip_tunnel_t *t0 = ipip_tunnel_db_find (&key0);
+ 	  if (!t0)
+ 	    {
+ 	      ip46_address_reset (&key0.dst);
+-	      key0.mode = IPIP_MODE_6RD;
++	      key0.mode = IPIP_MODE_MP2P;
+ 	      t0 = ipip_tunnel_db_find (&key0);
++	      if (!t0)
++		{
++		  key0.mode = IPIP_MODE_6RD;
++		  t0 = ipip_tunnel_db_find (&key0);
++		}
+ 	      if (!t0)
+ 		{
+ 		  next0 = IPIP_INPUT_NEXT_DROP;
+diff --git a/src/vnet/tunnel/tunnel.c b/src/vnet/tunnel/tunnel.c
+index 072c56903..85f70ad7e 100644
+--- a/src/vnet/tunnel/tunnel.c
++++ b/src/vnet/tunnel/tunnel.c
+@@ -45,6 +45,8 @@ unformat_tunnel_mode (unformat_input_t * input, va_list * args)
+ 
+   if (unformat (input, "p2p"))
+     *m = TUNNEL_MODE_P2P;
++  else if (unformat (input, "mp2p"))
++    *m = TUNNEL_MODE_MP2P;
+   else if (unformat (input, "p2mp") || unformat (input, "mp"))
+     *m = TUNNEL_MODE_MP;
+   else
+diff --git a/src/vnet/tunnel/tunnel.h b/src/vnet/tunnel/tunnel.h
+index a0cf51ec7..26adcb47f 100644
+--- a/src/vnet/tunnel/tunnel.h
++++ b/src/vnet/tunnel/tunnel.h
+@@ -10,9 +10,10 @@
+ #include <vnet/ip/ip_types.h>
+ #include <vnet/fib/fib_node.h>
+ 
+-#define foreach_tunnel_mode     \
+-  _(P2P, "point-to-point")      \
+-  _(MP, "multi-point")          \
++#define foreach_tunnel_mode                                                                        \
++  _ (P2P, "point-to-point")                                                                        \
++  _ (MP, "multi-point")                                                                            \
++  _ (MP2P, "multi-point-to-point")
+ 
+ typedef enum tunnel_mode_t_
+ {
+diff --git a/src/vnet/tunnel/tunnel_types.api b/src/vnet/tunnel/tunnel_types.api
+index 142671737..2a29a557b 100644
+--- a/src/vnet/tunnel/tunnel_types.api
++++ b/src/vnet/tunnel/tunnel_types.api
+@@ -51,6 +51,8 @@ enum tunnel_mode : u8
+   TUNNEL_API_MODE_P2P = 0,
+   /** multi-point */
+   TUNNEL_API_MODE_MP,
++  /** multi-point to point */
++  TUNNEL_API_MODE_MP2P [backwards_compatible],
+ };
+ 
+ /**
+diff --git a/test/test_ipip.py b/test/test_ipip.py
+index 85b35fa7f..0c9a220b9 100644
+--- a/test/test_ipip.py
++++ b/test/test_ipip.py
+@@ -521,6 +521,90 @@ class TestIPIP(VppTestCase):
+     def payload(self, len):
+         return "x" * len
+ 
++    def test_ipip4_mp2p(self):
++        """ip{v4,v6} over ip4 MP2P tunnel (decap any source)"""
++
++        self.pg1.generate_remote_hosts(4)
++        self.pg1.configure_ipv4_neighbors()
++
++        # Create an MP2P IPIP tunnel - decaps from any source without TEIB
++        tun = VppIpIpTunInterface(
++            self,
++            self.pg0,
++            self.pg0.local_ip4,
++            "0.0.0.0",
++            mode=(VppEnum.vl_api_tunnel_mode_t.TUNNEL_API_MODE_MP2P),
++        )
++        tun.add_vpp_config()
++
++        self.vapi.sw_interface_set_flags(tun.sw_if_index, 1)
++        self.vapi.sw_interface_set_unnumbered(
++            sw_if_index=self.pg0.sw_if_index,
++            unnumbered_sw_if_index=tun.sw_if_index,
++        )
++
++        p_ether = Ether(src=self.pg1.remote_mac, dst=self.pg1.local_mac)
++        p_payload = UDP(sport=1234, dport=1234) / Raw(b"X" * 100)
++
++        # Various source IPs - all in pg1's subnet so they pass src-RPF.
++        # No TEIB entries are required for MP2P decap.
++        src_ips = [h.ip4 for h in self.pg1.remote_hosts[:4]]
++
++        # IPv4 inner
++        for src_ip in src_ips:
++            p_ip4_encap = IP(src=src_ip, dst=self.pg0.local_ip4)
++            p_ip4_inner = IP(src="1.2.3.4", dst=self.pg0.remote_ip4)
++            p4 = p_ether / p_ip4_encap / p_ip4_inner / p_payload
++
++            p4_reply = p_ip4_inner / p_payload
++            p4_reply.ttl -= 1
++
++            rx = self.send_and_expect(self.pg1, p4 * N_PACKETS, self.pg0)
++            for p in rx:
++                self.validate(p[1], p4_reply)
++                self.assert_packet_checksums_valid(p)
++
++        # IPv6 inner
++        for src_ip in src_ips:
++            p_ip4_encap = IP(src=src_ip, dst=self.pg0.local_ip4)
++            p_ip6_inner = IPv6(src="1:2:3::4", dst=self.pg0.remote_ip6)
++            p6 = p_ether / p_ip4_encap / p_ip6_inner / p_payload
++
++            p6_reply = p_ip6_inner / p_payload
++            p6_reply.hlim = 63
++
++            rx = self.send_and_expect(self.pg1, p6 * N_PACKETS, self.pg0)
++            for p in rx:
++                self.validate(p[1], p6_reply)
++                self.assert_packet_checksums_valid(p)
++
++        # Encap via an MP2P tunnel is forbidden: an adjacency on the
++        # tunnel has no real destination, so any packet routed into it
++        # must be dropped rather than encapsulated to 0.0.0.0.
++        encap_route = VppIpRoute(
++            self,
++            "10.10.10.0",
++            24,
++            [
++                VppRoutePath(
++                    "0.0.0.0",
++                    tun.sw_if_index,
++                    proto=FibPathProto.FIB_PATH_NH_PROTO_IP4,
++                )
++            ],
++        )
++        encap_route.add_vpp_config()
++        p_encap = (
++            Ether(src=self.pg0.remote_mac, dst=self.pg0.local_mac)
++            / IP(src="1.2.3.4", dst="10.10.10.1")
++            / UDP(sport=1234, dport=1234)
++            / Raw(b"X" * 100)
++        )
++        self.send_and_assert_no_replies(self.pg0, p_encap * N_PACKETS)
++        encap_route.remove_vpp_config()
++
++        tun.admin_down()
++
+     def test_mipip4(self):
+         """p2mp IPv4 tunnel Tests"""
+ 
+@@ -1328,6 +1412,94 @@ class TestIPIP6(VppTestCase):
+         sw_if_index = rv.sw_if_index
+         self.vapi.ipip_del_tunnel(sw_if_index)
+ 
++    def test_ipip6_mp2p(self):
++        """ip{v4,v6} over ip6 MP2P tunnel (decap any source)"""
++
++        # destroy the default tunnel created in setUp
++        self.destroy_tunnel()
++
++        # Generate routable remote hosts on pg1 so their source IPs pass
++        # ip6-local source RPF.
++        self.pg1.generate_remote_hosts(4)
++        self.pg1.configure_ipv6_neighbors()
++
++        tun = VppIpIpTunInterface(
++            self,
++            self.pg0,
++            self.pg0.local_ip6,
++            "::",
++            mode=(VppEnum.vl_api_tunnel_mode_t.TUNNEL_API_MODE_MP2P),
++        )
++        tun.add_vpp_config()
++
++        self.vapi.sw_interface_set_flags(tun.sw_if_index, 1)
++        self.vapi.sw_interface_set_unnumbered(
++            sw_if_index=self.pg0.sw_if_index,
++            unnumbered_sw_if_index=tun.sw_if_index,
++        )
++
++        p_ether = Ether(src=self.pg1.remote_mac, dst=self.pg1.local_mac)
++        p_payload = UDP(sport=1234, dport=1234) / Raw(b"X" * 100)
++
++        src_ip6s = [h.ip6 for h in self.pg1.remote_hosts[:4]]
++
++        # IPv4 inner from various v6 sources
++        for src_ip6 in src_ip6s:
++            p_ip6_encap = IPv6(src=src_ip6, dst=self.pg0.local_ip6)
++            p_ip4_inner = IP(src="1.2.3.4", dst=self.pg0.remote_ip4)
++            p4 = p_ether / p_ip6_encap / p_ip4_inner / p_payload
++
++            p4_reply = p_ip4_inner / p_payload
++            p4_reply.ttl -= 1
++
++            rx = self.send_and_expect(self.pg1, p4 * N_PACKETS, self.pg0)
++            for p in rx:
++                self.validate(p[1], p4_reply)
++                self.assert_packet_checksums_valid(p)
++
++        # IPv6 inner
++        for src_ip6 in src_ip6s:
++            p_ip6_encap = IPv6(src=src_ip6, dst=self.pg0.local_ip6)
++            p_ip6_inner = IPv6(src="1:2:3::4", dst=self.pg0.remote_ip6)
++            p6 = p_ether / p_ip6_encap / p_ip6_inner / p_payload
++
++            p6_reply = p_ip6_inner / p_payload
++            p6_reply.hlim = 63
++
++            rx = self.send_and_expect(self.pg1, p6 * N_PACKETS, self.pg0)
++            for p in rx:
++                self.validate(p[1], p6_reply)
++                self.assert_packet_checksums_valid(p)
++
++        # Encap via an MP2P tunnel is forbidden: an adjacency on the
++        # tunnel has no real destination, so any packet routed into it
++        # must be dropped rather than encapsulated to ::.
++        encap_route = VppIpRoute(
++            self,
++            "dead:beef::",
++            64,
++            [
++                VppRoutePath(
++                    "::",
++                    tun.sw_if_index,
++                    proto=FibPathProto.FIB_PATH_NH_PROTO_IP6,
++                )
++            ],
++        )
++        encap_route.add_vpp_config()
++        p_encap = (
++            Ether(src=self.pg0.remote_mac, dst=self.pg0.local_mac)
++            / IPv6(src="1::1", dst="dead:beef::1")
++            / UDP(sport=1234, dport=1234)
++            / Raw(b"X" * 100)
++        )
++        self.send_and_assert_no_replies(self.pg0, p_encap * N_PACKETS)
++        encap_route.remove_vpp_config()
++
++        tun.admin_down()
++        # Re-create default tunnel for tearDown
++        self.setup_tunnel()
++
+     def payload(self, len):
+         return "x" * len
+ 
+-- 
+2.34.1
+
