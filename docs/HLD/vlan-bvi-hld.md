@@ -75,6 +75,113 @@ config vlan member add -u 10 Ethernet4 # untagged
 config interface ip add Vlan10 10.0.0.1/24
 ```
 
+### 2.1 ASIC_DB Representation
+
+The CONFIG_DB configuration above flows through orchagent and surfaces in ASIC_DB as the following SAI objects. The sonic-vpp SAI layer translates each of these into VPP bridge-domain, sub-interface, BVI, LCP, and classify operations.
+
+#### Bridge object (SAI 1Q bridge)
+
+```
+ASIC_STATE:SAI_OBJECT_TYPE_BRIDGE:oid:0x39000000000001
+    SAI_BRIDGE_ATTR_TYPE = SAI_BRIDGE_TYPE_1Q
+```
+
+Created implicitly at boot. The default 1Q bridge is the container for VLANs.
+
+#### VLAN object
+
+```
+ASIC_STATE:SAI_OBJECT_TYPE_VLAN:oid:0x2600000000064f
+    SAI_VLAN_ATTR_VLAN_ID = 10
+```
+
+→ sonic-vpp creates VPP bridge-domain id 10 and BVI `bvi10`.
+
+#### VLAN member objects (one per port)
+
+```
+ASIC_STATE:SAI_OBJECT_TYPE_VLAN_MEMBER:oid:0x270000000007a0
+    SAI_VLAN_MEMBER_ATTR_VLAN_ID            = oid:0x2600000000064f
+    SAI_VLAN_MEMBER_ATTR_BRIDGE_PORT_ID     = oid:0x3a00000000079f   # bridge port for Ethernet0
+    SAI_VLAN_MEMBER_ATTR_VLAN_TAGGING_MODE  = SAI_VLAN_TAGGING_MODE_TAGGED
+
+ASIC_STATE:SAI_OBJECT_TYPE_VLAN_MEMBER:oid:0x270000000007a1
+    SAI_VLAN_MEMBER_ATTR_VLAN_ID            = oid:0x2600000000064f
+    SAI_VLAN_MEMBER_ATTR_BRIDGE_PORT_ID     = oid:0x3a00000000079e   # bridge port for Ethernet4
+    SAI_VLAN_MEMBER_ATTR_VLAN_TAGGING_MODE  = SAI_VLAN_TAGGING_MODE_UNTAGGED
+```
+
+→ sonic-vpp action:
+- **Tagged** (`Ethernet0`): create `GigabitEthernet0/8/0.10` dot1q sub-interface, set `l2 tag-rewrite pop 1`, add to BD 10.
+- **Untagged** (`Ethernet4`): add the parent hardware interface `GigabitEthernet0/8/1` directly to BD 10.
+- Install l2-input-classify sessions on the member's `sw_if_index` (per the protocol matrix in §3.3).
+
+#### Bridge port objects (one per port that participates in any bridge)
+
+```
+ASIC_STATE:SAI_OBJECT_TYPE_BRIDGE_PORT:oid:0x3a00000000079f
+    SAI_BRIDGE_PORT_ATTR_TYPE          = SAI_BRIDGE_PORT_TYPE_PORT
+    SAI_BRIDGE_PORT_ATTR_PORT_ID       = oid:0x10000000000004        # Ethernet0
+    SAI_BRIDGE_PORT_ATTR_BRIDGE_ID     = oid:0x39000000000001
+    SAI_BRIDGE_PORT_ATTR_ADMIN_STATE   = true
+    SAI_BRIDGE_PORT_ATTR_FDB_LEARNING_MODE = SAI_BRIDGE_PORT_FDB_LEARNING_MODE_HW
+```
+
+→ sonic-vpp records the port-to-BD relationship; actual `set int l2 bridge` is deferred until VLAN_MEMBER object resolves which BD and which sub-interface to use.
+
+#### Router interface object (the SVI / BVI)
+
+```
+ASIC_STATE:SAI_OBJECT_TYPE_ROUTER_INTERFACE:oid:0x600000000064d
+    SAI_ROUTER_INTERFACE_ATTR_VIRTUAL_ROUTER_ID = oid:0x3000000000040
+    SAI_ROUTER_INTERFACE_ATTR_TYPE              = SAI_ROUTER_INTERFACE_TYPE_VLAN
+    SAI_ROUTER_INTERFACE_ATTR_VLAN_ID           = oid:0x2600000000064f
+    SAI_ROUTER_INTERFACE_ATTR_SRC_MAC_ADDRESS   = 1C:23:CD:51:EB:00
+    SAI_ROUTER_INTERFACE_ATTR_MTU               = 9100
+```
+
+→ sonic-vpp action: This is the trigger for BVI creation.
+- Create `bvi10` (loopback interface with `bvi 1`) in BD 10.
+- Set MAC address from `SAI_ROUTER_INTERFACE_ATTR_SRC_MAC_ADDRESS`.
+- Create LCP pair `bvi10` ↔ `tap_Vlan10`; set up tc filter `tap_Vlan10` ↔ kernel `Vlan10`.
+- Enable IP on the BVI; subsequent `SAI_OBJECT_TYPE_ROUTER_INTERFACE` IP-address attribute updates and `SAI_OBJECT_TYPE_NEIGHBOR_ENTRY` / `SAI_OBJECT_TYPE_ROUTE_ENTRY` operations use this BVI's `sw_if_index`.
+
+#### Hostif object (for the SVI Linux netdev)
+
+```
+ASIC_STATE:SAI_OBJECT_TYPE_HOSTIF:oid:0xd000000000a5e
+    SAI_HOSTIF_ATTR_TYPE      = SAI_HOSTIF_TYPE_NETDEV
+    SAI_HOSTIF_ATTR_OBJ_ID    = oid:0x600000000064d                  # the VLAN RIF
+    SAI_HOSTIF_ATTR_NAME      = "Vlan10"
+    SAI_HOSTIF_ATTR_OPER_STATUS = true
+```
+
+→ sonic-vpp action: The `Vlan10` netdev already exists in the kernel (created by orchagent's host-interface manager); sonic-vpp ensures the LCP tap is wired to it via tc redirect.
+
+#### Putting it together
+
+```
+config_db.json
+   │
+   ▼
+orchagent (VlanMgr, IntfMgr, ...)
+   │
+   ▼
+ASIC_DB objects (above)
+   │
+   ▼
+sonic-vpp SAI layer
+   ├── SAI_OBJECT_TYPE_VLAN              → create BD 10
+   ├── SAI_OBJECT_TYPE_VLAN_MEMBER (tagged)   → dot1q sub-if + tag-rewrite + add to BD + classify sessions
+   ├── SAI_OBJECT_TYPE_VLAN_MEMBER (untagged) → parent hwif + add to BD + classify sessions
+   ├── SAI_OBJECT_TYPE_ROUTER_INTERFACE  → bvi10 + LCP pair + tc redirect to Vlan10
+   └── SAI_OBJECT_TYPE_HOSTIF            → ensure Vlan10 netdev ↔ tap_Vlan10 tc link
+```
+
+ASIC_DB does **not** explicitly model:
+- Which L2 protocols are punted (ARP/LLDP/LACP/DHCP) — that comes from CoPP / hostif-trap objects (`SAI_OBJECT_TYPE_HOSTIF_TRAP_GROUP`, `SAI_OBJECT_TYPE_HOSTIF_TRAP`) which orchagent installs once at boot; sonic-vpp translates them into the `l2-input-classify` sessions described in §3.3.
+- BVI vs. non-BVI semantics — that is a property of `SAI_ROUTER_INTERFACE_TYPE_VLAN` (BVI) vs. `SAI_ROUTER_INTERFACE_TYPE_PORT` / `_SUB_PORT` (no BVI).
+
 ---
 
 ## 3. Design Principles
@@ -177,6 +284,33 @@ Miss: continue L2 feature chain.
 VPP session match data for skip=1 tables includes 16 bytes of skip padding
 at the start: `match_len = (skip + match) × 16 = 48 bytes`.
 
+**Table: untag_ip6** — matches IPv6 next-header + ICMPv6 type (skip=2, match=1)
+
+This table catches IPv6 Neighbor Discovery (NS/NA/RS/RA/Redirect) frames
+among IPv6 packets (ethertype `0x86DD`). Without this, IPv6 SVI operation
+breaks once the BVI is removed from the BD flood group (see §3.7).
+
+| Byte Offset | Field | Mask |
+|-------------|-------|------|
+| 20 | IPv6 Next-Header | `0xFF` |
+| 54 | ICMPv6 Type | `0xFF` |
+
+Sessions (all `opaque_index=1`, clone + punt):
+
+| Protocol | Next-Hdr | ICMPv6 Type |
+|----------|----------|-------------|
+| RS  | 0x3A | 133 |
+| RA  | 0x3A | 134 |
+| NS  | 0x3A | 135 |
+| NA  | 0x3A | 136 |
+| Redirect | 0x3A | 137 |
+
+Miss: continue L2 feature chain.
+
+DHCPv6 (UDP 546/547) is **not** included in v1 — DHCPv6 relay/server on the
+SVI is out of scope; if enabled later, add UDP-dport sessions analogous to
+the DHCPv4 entry in `untag_ip4`.
+
 #### 3.3.2 Tagged Member Tables
 
 Tagged frames have the outer ethertype `0x8100` at byte 12, so VPP's
@@ -220,13 +354,48 @@ Sessions:
 
 Miss: continue L2 feature chain.
 
+**Table: tag_ip6** — matches IPv6 next-header + ICMPv6 type with a 4-byte
+802.1Q shift (skip=2, match=1)
+
+Same fields as `untag_ip6` but shifted by 4 bytes to account for the outer
+802.1Q header (the classifier runs before VTR, so the tag is still present).
+
+| Byte Offset | Field | Mask |
+|-------------|-------|------|
+| 24 | IPv6 Next-Header | `0xFF` |
+| 58 | ICMPv6 Type | `0xFF` |
+
+Sessions: same five ND types as `untag_ip6`, `opaque_index=1`.
+
 #### 3.3.3 Table Attachment
 
 When a BD member is added:
 - **Tagged member** (sub-interface, e.g., `bobm0.10`):
-  `classify_set_interface_l2_tables(bobm0.10, ip4=~0, ip6=~0, other=tag_other)`
+  `classify_set_interface_l2_tables(bobm0.10, ip4=~0, ip6=tag_ip6, other=tag_other)`
 - **Untagged member** (parent phy, e.g., `bobm0`):
-  `classify_set_interface_l2_tables(bobm0, ip4=untag_ip4, ip6=~0, other=untag_other)`
+  `classify_set_interface_l2_tables(bobm0, ip4=untag_ip4, ip6=untag_ip6, other=untag_other)`
+
+#### 3.3.4 Adding a New Punted L2-Multicast / Broadcast Protocol
+
+Because the BVI is excluded from the BD flood group (§3.7), **every** new
+control protocol whose frames are L2-multicast or broadcast must be punted
+by an explicit classifier session. There is no implicit fallback through
+the BVI. To add a protocol (e.g., IGMP, MLD, DHCPv6, VRRP):
+
+1. Pick the table slot based on ethertype:
+   - `0x0800` (IPv4) → `untag_ip4` / future `tag_ip4`
+   - `0x86DD` (IPv6) → `untag_ip6` / `tag_ip6`
+   - other / link-local → `untag_other` / `tag_other`
+2. If the table's existing mask covers your match fields, just add a session.
+   If not, create a new chained table (`next_table_index`) with the right
+   mask and link the prior table's miss to it.
+3. Choose `opaque_index`:
+   - `0` = consume (frame stops in classifier, only the punted copy survives)
+     — use only for link-local protocols that must not be L2-forwarded.
+   - `1` = clone-on-hit — use for everything else so BD members still see
+     the frame.
+4. Register the session in `l2_punt_classify_init()` so it is installed
+   before any BD member is attached.
 
 ### 3.4 Frames in the BD Are Always Untagged
 
@@ -253,6 +422,53 @@ corresponding Linux VLAN device (`Ethernet0.10`) on the host side. This
 eliminates the need for explicit `configure_lcp_interface()` calls for
 sub-interfaces.
 
+### 3.7 BVI Excluded from BD Flood Group
+
+By default, VPP adds every BD member — including the BVI — to the BD's
+flood group, so broadcast / unknown-unicast / L2-multicast (BUM) frames
+from any member are replicated to the BVI and then handed to `ip4-input` /
+`ip6-input`. For an SVI port this is wasted work:
+
+- ARP broadcasts (`who-has 10.0.0.1`) are already cloned to the kernel via
+  the `l2-input-classify` punt path described in §3.3. The kernel's ARP
+  stack on `Vlan10` answers; the BVI does not need to see the flood copy.
+- DHCP broadcasts are handled the same way (clone + punt).
+- Unknown-unicast and L2-multicast inside the BD have no business reaching
+  the L3 SVI — they are pure CPU cost and can confuse the IP input path
+  (martian source logs, unwanted multicast joins, etc.).
+
+To prevent this, the BVI is added to the BD with **flood and
+unknown-unicast flood disabled**:
+
+| BD-member flag | Normal member | BVI member |
+|----------------|---------------|------------|
+| `port_type`    | `NORMAL`      | `BVI`      |
+| `enable_flood` (broadcast + L2-mcast) | `true` | **`false`** |
+| `enable_uu_flood` (unknown unicast)   | `true` | **`false`** |
+| `enable_bvi`   | n/a           | `true`     |
+
+Known-unicast frames whose destination MAC matches the BVI's MAC are still
+delivered to the BVI via FDB lookup — those are L3-bound packets and must
+reach `ip4-input`. Only the flood and UU-flood replications are suppressed.
+
+This is configured via the `sw_interface_set_l2_bridge` binary API with the
+`enable_flood` and `enable_uu_flood` bits cleared for the BVI's `sw_if_index`.
+
+**Implication — every kernel-visible BUM protocol needs an explicit
+classifier session.** With the BVI no longer in the flood group, the BD has
+no catch-all path to the host stack. Any L2-broadcast or L2-multicast frame
+the kernel needs to see (ARP, DHCPv4, IPv6 ND, IGMP, MLD, DHCPv6, VRRP,
+etc.) must be punted by a session in one of the `l2-input-classify` tables
+(§3.3). Frames not matched by a session are flooded only to the other BD
+members and **never reach** `Vlan10` or any other SVI tap.
+
+v1 ships sessions for: ARP, DHCPv4, LLDP, LACP, and IPv6 ND
+(RS/RA/NS/NA/Redirect). Other protocols are out of scope for v1 and follow
+the recipe in §3.3.4 when they are enabled. Link-local L2 protocols (LLDP,
+LACP, STP) that travel without an 802.1Q header on tagged members continue
+to use the parent-phy LCP path and do not need classifier sessions on the
+sub-interface (see §3.2).
+
 ---
 
 ## 4. Implementation Changes
@@ -263,7 +479,9 @@ sub-interfaces.
 
 When a VLAN SVI is created (SAI `ROUTER_INTERFACE_TYPE_VLAN`):
 1. Create BVI: `create_bvi_interface(mac, vlan_id)`
-2. Add BVI to BD: `set_sw_interface_l2_bridge(bvi10, vlan_id, true, BVI)`
+2. Add BVI to BD **with flood disabled** (see §3.7):
+   `set_sw_interface_l2_bridge(bvi10, vlan_id, port_type=BVI,
+   enable=true, enable_flood=false, enable_uu_flood=false)`
 3. Create LCP pair: `configure_lcp_interface("bvi10", "tap_Vlan10", true)`
 4. Bring up the tap: `interface_set_state("tap_Vlan10", true)`
 5. TC redirect: `add_tc_filter_redirect("tap_Vlan10", "Vlan10")`
@@ -352,13 +570,27 @@ Wire (802.1Q tag=10, ARP who-has 10.0.0.1, dst ff:ff:ff:ff:ff:ff)
                   → kernel ARP daemon replies (if IP is local)
               ORIGINAL → continues L2 feature chain:
                 → l2-input-vtr: POP tag
-                  → l2-learn → l2-fwd → l2-flood → bvi10
-                    → bvi-input → arp-input → linux-cp (Vlan10)
+                  → l2-learn → l2-fwd → l2-flood
+                    (flood group excludes bvi10 — see §3.7 —
+                     so the BVI does NOT receive a copy)
+                    → replicated only to other BD members
 ```
 
-ARP reaches the kernel **twice**: once via the clone (on `Ethernet0` with
-VLAN tag, for per-port visibility) and once via the BVI path (on `Vlan10`,
-untagged).
+ARP reaches the kernel **once**, via the classifier clone on the per-port
+`Ethernet0` tap. The BVI is excluded from the BD flood group (§3.7), so the
+broadcast is not replicated to `bvi10` and does **not** appear on `Vlan10`.
+
+> **Note on ARP replies for the SVI IP (`10.0.0.1`).** Because the cloned
+> ARP request lands on `Ethernet0` rather than `Vlan10`, the kernel must
+> still be able to answer for `Vlan10`'s IP. With default sysctls
+> (`arp_ignore=0`), Linux will reply for any locally-owned IP regardless
+> of the receiving interface; the reply egresses `Ethernet0` and is then
+> bridged by VPP back into BD 10 via the LCP path. Implementations should
+> validate this path end-to-end and, if needed, either (a) keep the BVI in
+> the flood group for broadcast (set `enable_flood=true`, `enable_uu_flood=false`)
+> so the kernel sees the request directly on `Vlan10`, or (b) install
+> static BD `arp-entry` records and let VPP answer ARP for the SVI IP
+> from `bvi10`'s MAC without involving the kernel.
 
 ### 5.2 ARP Request from Untagged Member
 
@@ -375,9 +607,13 @@ Wire (no tag, ARP who-has 10.0.0.1, dst ff:ff:ff:ff:ff:ff)
               CLONE → linux-cp-punt → Ethernet4 tap (untagged)
                 → kernel receives ARP on Ethernet4
               ORIGINAL → continues L2 feature chain:
-                → l2-learn → l2-fwd → l2-flood → bvi10
-                  → bvi-input → arp-input → linux-cp (Vlan10)
+                → l2-learn → l2-fwd → l2-flood
+                  (flood group excludes bvi10 — see §3.7)
+                  → replicated only to other BD members
 ```
+
+As in §5.1, the kernel sees the ARP exactly once (via the classifier clone
+on `Ethernet4`). The BVI does not receive the flood copy.
 
 ### 5.3 LLDP/LACP from Tagged Member
 
