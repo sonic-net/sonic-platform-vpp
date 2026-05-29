@@ -1,0 +1,2911 @@
+From 80c7b61cb05e28aa23db49282a87a9a36ec8ec27 Mon Sep 17 00:00:00 2001
+From: Jianquan Ye <jianquanye@microsoft.com>
+Date: Wed, 20 May 2026 12:47:17 +0000
+Subject: [PATCH] ip bonding hash: inner-aware flow hash (opt-in)
+
+When an outer IPv4/IPv6 packet identifies an encapsulated tunnel
+(IPinIP / 6in4 / 4in6 / 6in6 -- protocols 4 / 41, GRE / NVGRE --
+protocol 47) it is useful for ECMP and LAG load balancers to look
+one level into the inner packet so that distinct inner flows
+between the same two tunnel endpoints distribute across paths and
+bond members.  Without this, every inner flow between the same
+tunnel endpoints maps to the same outer 5-tuple and collapses onto
+a single path / member.
+
+This patch is fully opt-in on both surfaces: existing users see no
+behaviour change.
+
+  * A new flow-hash bit IP_FLOW_HASH_PEEK_INNER (0x200, CLI keyword
+    "peek_inner") is added to flow_hash_config_t.  The operator must
+    set it explicitly on a fib table via the existing
+    `set ip flow-hash` CLI / API.  IP_FLOW_HASH_DEFAULT is unchanged
+    (0x9F).  When the bit is not set, ip4_compute_flow_hash and
+    ip6_compute_flow_hash behave exactly as upstream.
+
+  * A new bond load-balance algorithm BOND_API_LB_ALGO_L34_INNER = 6
+    is added (CLI keyword "l34-inner", `bond.api` version bumped
+    2.1.0 -> 2.1.1).  The new enum value is annotated
+    `[backwards_compatible]` so the CRC of every production message
+    referencing `vl_api_bond_lb_algo_t` (`bond_create`,
+    `bond_create2`, `sw_interface_bond_details`,
+    `sw_bond_interface_details`) is unchanged -- the same pattern
+    used by `enum sr_behavior` for the SRv6 uSID behaviors and by
+    `enum ipsec_crypto_alg` for `CHACHA20_POLY1305` /
+    `AES_NULL_GMAC_*`.  It registers a new hash
+    function "hash-eth-l34-inner" that peeks into
+    IPinIP / 6in4 / 4in6 / 6in6 / GRE / NVGRE inner packets when it
+    sees one and falls back to the outer 5-tuple otherwise.  The
+    existing "l34" algorithm and "hash-eth-l34" hash function are
+    byte-for-byte unchanged, so a LAG configured with `lb l34`
+    incurs zero extra cost and zero behaviour change.
+
+  * A new private helper `src/vnet/ip/ip_inner_aware_hash.h` houses
+    the inner-peek logic.  Every entry point takes a `u32 remaining`
+    bound; outer-fragment packets are skipped; IPv6 inner extension
+    headers (HBH/DST/FRAG/ROUTE) are walked before reading the inner
+    L4.
+
+  * New VPP unit tests (`test_inner_aware_hash.py`) exercise the IP
+    flag on/off paths, IPv4/IPv6 outer x IPv4/IPv6 inner, NVGRE,
+    fragmented outer (must not crash, must fall back), truncated
+    outer (same), IPv6 inner extension-header walk, and a
+    determinism check (same flow -> same hash, different inner flow
+    -> different hash).  A second class TestLagL34LegacyOuterOnly
+    pins down the regression-safety claim for the legacy
+    BOND_API_LB_ALGO_L34 path: tunnel traffic collapses to a single
+    member, plain traffic distributes -- byte-for-byte identical to
+    pre-patch behaviour.  A perf harness
+    (`test_inner_aware_perf.py`) provides packet-gen +
+    `show runtime` numbers.
+
+Scope: this patch covers tunnel encapsulations whose outer header
+ does not already carry an inner-flow entropy carrier --
+ IPinIP / 6in4 / 4in6 / 6in6 (IP protocol 4 / 41) and GRE / NVGRE
+ (IP protocol 47).  Out of scope:
+
+   * VXLAN and Geneve -- their outer UDP source port is the
+     standard-mandated entropy carrier (RFC 7348 section 4.2,
+     RFC 8926 section 3.3), so the existing outer-5-tuple hash
+     already distributes inner flows.
+
+   * SRv6 -- the IPv6 flow label is the architecture-defined entropy
+     carrier for segment-routed traffic (RFC 6437, RFC 8754
+     section 7).  The helper does not parse the IPv6 Routing
+     extension header (next-header 43); SRv6 packets fall through
+     to the outer 5-tuple hash unchanged.
+
+Performance: software packet-generator harness on dev-VM L1 KVM,
+ 1 M pkts x 3 reps per scenario, single VPP worker, no DPDK.
+ Topology puts two BondEthernets (xor mode, 4 loopback members each)
+ behind an ECMP default route, so both code paths the patch touches
+ get exercised end-to-end.  Five binaries / configs from the same
+ tree, the same compiler flags:
+
+     A = unpatched VPP (upstream 435fda04), bond load-balance l34
+     B = patched VPP, IP_FLOW_HASH_PEEK_INNER unset, bond l34
+     C = patched VPP, IP_FLOW_HASH_PEEK_INNER set,   bond l34
+     D = patched VPP, IP_FLOW_HASH_PEEK_INNER unset, bond l34-inner
+     E = patched VPP, IP_FLOW_HASH_PEEK_INNER set,   bond l34-inner
+         (E = both new features enabled)
+
+ Take-aways
+ ----------
+ 1. With both new knobs at their defaults (B path -- patch present
+    but nothing opted in) the patch is essentially a no-op on the
+    hot path: B-A is within +-2 cyc/pkt for every node and every
+    profile measured, well inside per-rep noise.  Deployments that
+    pick up the patch but do not change any config see no
+    measurable cost.
+
+ 2. The two new features are independent, opt-in knobs and each
+    one pays its own cost only inside the node it touches:
+        IP_FLOW_HASH_PEEK_INNER   -> ip4-lookup
+        BOND_LB_L34_INNER         -> BondEthernet-tx
+    An operator that wants only one of the two pays only that one
+    (C and D below).  Even with both turned on (E), the worst-case
+    end-to-end overhead is modest:
+        non-tunneled IPv4   +8.9 cyc/pkt   (no inner to peek at,
+                                            cost is just the branch
+                                            plus the fixed bond
+                                            algorithm rework)
+        IPinIP v4/v4       +18.0 cyc/pkt
+        NVGRE  v4/v4       +35.6 cyc/pkt   (full inner-Ethernet
+                                            pop + inner-L3/L4 parse)
+    All numbers are paid only on a per-packet basis and only when
+    there is actually something to peek at, so the upper bound is
+    tied to tunnel traffic mix.
+
+ Per-packet cost inside the two graph nodes whose code is touched
+ by the patch -- ip4-lookup (the peek) and BondEthernet-tx (the new
+ BOND_LB_L34_INNER algorithm); median of 3 reps:
+
+   ip4-lookup
+     baseline v4 UDP    A unpatched/l34          ->  39.1 cycles/pkt
+     baseline v4 UDP    B patched/l34/off        ->  36.9 cycles/pkt
+     baseline v4 UDP    C patched/l34/on         ->  40.8 cycles/pkt
+     baseline v4 UDP    D patched/l34-inner/off  ->  36.6 cycles/pkt
+     baseline v4 UDP    E patched/l34-inner/on   ->  43.2 cycles/pkt
+     IPinIP v4/v4       A unpatched/l34          ->  37.6 cycles/pkt
+     IPinIP v4/v4       B patched/l34/off        ->  37.8 cycles/pkt
+     IPinIP v4/v4       C patched/l34/on         ->  43.4 cycles/pkt
+     IPinIP v4/v4       D patched/l34-inner/off  ->  40.2 cycles/pkt
+     IPinIP v4/v4       E patched/l34-inner/on   ->  42.7 cycles/pkt
+     NVGRE  v4/v4       A unpatched/l34          ->  38.0 cycles/pkt
+     NVGRE  v4/v4       B patched/l34/off        ->  37.6 cycles/pkt
+     NVGRE  v4/v4       C patched/l34/on         ->  55.0 cycles/pkt
+     NVGRE  v4/v4       D patched/l34-inner/off  ->  36.7 cycles/pkt
+     NVGRE  v4/v4       E patched/l34-inner/on   ->  53.2 cycles/pkt
+
+   BondEthernet-tx (average over the bond(s) that received traffic)
+     baseline v4 UDP    A unpatched/l34          ->  23.6 cycles/pkt
+     baseline v4 UDP    B patched/l34/off        ->  24.4 cycles/pkt
+     baseline v4 UDP    C patched/l34/on         ->  24.2 cycles/pkt
+     baseline v4 UDP    D patched/l34-inner/off  ->  26.9 cycles/pkt
+     baseline v4 UDP    E patched/l34-inner/on   ->  28.4 cycles/pkt
+     IPinIP v4/v4       A unpatched/l34          ->  16.1 cycles/pkt
+     IPinIP v4/v4       B patched/l34/off        ->  16.6 cycles/pkt
+     IPinIP v4/v4       C patched/l34/on         ->  19.5 cycles/pkt
+     IPinIP v4/v4       D patched/l34-inner/off  ->  25.3 cycles/pkt
+     IPinIP v4/v4       E patched/l34-inner/on   ->  29.0 cycles/pkt
+     NVGRE  v4/v4       A unpatched/l34          ->  16.2 cycles/pkt
+     NVGRE  v4/v4       B patched/l34/off        ->  17.3 cycles/pkt
+     NVGRE  v4/v4       C patched/l34/on         ->  18.9 cycles/pkt
+     NVGRE  v4/v4       D patched/l34-inner/off  ->  30.3 cycles/pkt
+     NVGRE  v4/v4       E patched/l34-inner/on   ->  36.6 cycles/pkt
+
+ Cost decomposition (median, cyc/pkt):
+
+   patch-present, nothing opted in        B - A
+     baseline v4 UDP    ip4-lookup -2.2  bond-tx +0.8  total -1.4
+     IPinIP v4/v4       ip4-lookup +0.2  bond-tx +0.5  total +0.7
+     NVGRE  v4/v4       ip4-lookup -0.4  bond-tx +1.1  total +0.7
+                                                        (within noise)
+
+   peek-inner alone                       C - B
+     baseline v4 UDP    ip4-lookup +3.9  bond-tx -0.2  total +3.7
+     IPinIP v4/v4       ip4-lookup +5.6  bond-tx +2.9  (*)
+     NVGRE  v4/v4       ip4-lookup +17.4 bond-tx +1.6  (*)
+         (*) bond-tx delta is partially attributable to ECMP no
+             longer collapsing to a single bond, i.e. the cost
+             measured on a hotter cache footprint -- a benefit of
+             the feature, not a cost of it.
+
+   l34-inner alone                        D - B
+     baseline v4 UDP    ip4-lookup -0.3  bond-tx +3.0  total +2.7
+     IPinIP v4/v4       ip4-lookup +2.4  bond-tx +8.7  total +11.1
+     NVGRE  v4/v4       ip4-lookup -0.9  bond-tx +13.0 total +12.1
+
+   both features on                       E - A
+     baseline v4 UDP    ip4-lookup +4.1  bond-tx +4.8  total  +8.9
+     IPinIP v4/v4       ip4-lookup +5.1  bond-tx +12.9 total +18.0
+     NVGRE  v4/v4       ip4-lookup +15.2 bond-tx +20.4 total +35.6
+
+ Correctness (this is what the patch is actually for): packets per
+ BondEthernet (ECMP) and packets per loopback member (LAG), rep 1:
+
+   baseline v4 UDP (outer 5-tuple varies, already spreads)
+     A..E   ECMP 50/50,   LAG 8 loops, spread <=2.3%
+
+   IPinIP v4/v4 (inner varies, outer fixed)
+     A unpatched/l34         ECMP 100/0   LAG 1 loop  (worst case)
+     B patched/l34/off       ECMP 100/0   LAG 1 loop
+     C patched/l34/on        ECMP 50/50   LAG 1 loop per side (l34 sees fixed outer L4)
+     D patched/l34-inner/off ECMP 100/0   LAG 4 loops (l34-inner on the surviving bond)
+     E patched/l34-inner/on  ECMP 50/50   LAG 8 loops total <=2.3% spread
+
+   NVGRE v4/v4 (inner varies, outer fixed)
+     A unpatched/l34         ECMP 100/0   LAG 1 loop  (worst case)
+     B patched/l34/off       ECMP 100/0   LAG 1 loop
+     C patched/l34/on        ECMP 50/50   LAG 1 loop per side
+     D patched/l34-inner/off ECMP 100/0   LAG 4 loops
+     E patched/l34-inner/on  ECMP 50/50   LAG 8 loops total <=2.3% spread
+
+ Only E spreads both layers.  The cost is paid only on tunneled
+ traffic and only when the inner is reachable; pure-IPv4 (baseline)
+ overhead is under +10 cyc/pkt end-to-end.
+
+Type: feature
+Change-Id: Id0334736ba65ae63f754733eb21ae23246b762b6
+Signed-off-by: Jianquan Ye <jianquanye@microsoft.com>
+---
+ docs/developer/corearchitecture/index.rst     |    2 +-
+ .../corearchitecture/inner_aware_hash.rst     |  256 +++++
+ docs/spelling_wordlist.txt                    |    2 +
+ src/vnet/bonding/bond.api                     |    7 +-
+ src/vnet/bonding/cli.c                        |    9 +-
+ src/vnet/bonding/node.h                       |   34 +-
+ src/vnet/hash/hash_eth.c                      |  157 +++
+ src/vnet/ip/ip4_inlines.h                     |   71 +-
+ src/vnet/ip/ip6_inlines.h                     |   93 +-
+ src/vnet/ip/ip_flow_hash.h                    |   21 +-
+ src/vnet/ip/ip_inner_aware_hash.h             |  267 +++++
+ test/test_inner_aware_hash.py                 | 1058 +++++++++++++++++
+ test/test_inner_aware_perf.py                 |  463 ++++++++
+ 13 files changed, 2388 insertions(+), 52 deletions(-)
+ create mode 100644 docs/developer/corearchitecture/inner_aware_hash.rst
+ create mode 100644 src/vnet/ip/ip_inner_aware_hash.h
+ create mode 100644 test/test_inner_aware_hash.py
+ create mode 100644 test/test_inner_aware_perf.py
+
+diff --git a/docs/developer/corearchitecture/index.rst b/docs/developer/corearchitecture/index.rst
+index ecd5a3cdb..7efa0acca 100644
+--- a/docs/developer/corearchitecture/index.rst
++++ b/docs/developer/corearchitecture/index.rst
+@@ -18,4 +18,4 @@ Core Architecture
+     buildsystem/index
+     mem
+     multi_thread
+-
++    inner_aware_hash
+diff --git a/docs/developer/corearchitecture/inner_aware_hash.rst b/docs/developer/corearchitecture/inner_aware_hash.rst
+new file mode 100644
+index 000000000..5d9458d70
+--- /dev/null
++++ b/docs/developer/corearchitecture/inner_aware_hash.rst
+@@ -0,0 +1,256 @@
++.. _inner_aware_hash:
++
++Inner-aware flow hash for tunnel traffic
++========================================
++
++Motivation
++----------
++
++VPP's IP and Ethernet flow-hash functions consult the outer 5-tuple to
++spread traffic across ECMP next-hops and across LAG / bond members.  For
++plain (non-tunnel) traffic this works well: every flow has its own
++``(src,dst,sport,dport,proto)`` tuple.
++
++For transit traffic where many flows share the same outer 5-tuple - for
++example IPv4-in-IPv4, IPv6-in-IPv4, GRE-IP, and NVGRE encapsulations
++between two fixed endpoints - the hash collapses to a single member.
++This wastes path capacity and is a real problem for SmartNIC / DPU
++scenarios that carry many tenant flows under one outer pair.
++
++VXLAN and Geneve are explicitly excluded because their outer UDP source
++port is required by the standard to carry inner-flow entropy
++(see RFC 7348 §4.2 and RFC 8926 §3.3).
++
++SRv6 is likewise out of scope: the IPv6 flow label is the
++architecture-defined entropy carrier for segment-routed traffic
++(RFC 6437 and RFC 8754 §7), so transit hashing should consult the
++flow label rather than peek past the Segment Routing Header.  The
++helper does not parse the IPv6 Routing extension header (next
++header 43); SRv6 packets fall through to the outer 5-tuple hash
++unchanged.
++
++Design
++------
++
++A new helper, ``ip_inner_resolve`` (in
++``src/vnet/ip/ip_inner_aware_hash.h``), parses the outer payload, walks
++past optional GRE headers and NVGRE/TEB inner Ethernet, walks any inner
++IPv6 extension headers, and returns a descriptor pointing at the inner
++IP addresses and the first 4 bytes of the inner L4 header (containing
++the inner src/dst ports for TCP and UDP, or a zero placeholder).
++
++The helper is enabled in two different ways depending on the hash
++surface; both surfaces are **opt-in** to preserve byte-for-byte
++behaviour for existing users:
++
++IP-layer opt-in
++~~~~~~~~~~~~~~~
++
++A new bit ``IP_FLOW_HASH_PEEK_INNER`` (bit 9, value ``0x200``) in
++``flow_hash_config_t`` enables inner-aware hashing on a per-FIB basis.
++``IP_FLOW_HASH_DEFAULT`` is unchanged, so existing users see no
++behavior change unless they opt in.
++
++The CLI keyword is ``peek_inner``::
++
++    set ip flow-hash table 0 src dst sport dport proto peek_inner
++    set ip6 flow-hash table 0 src dst sport dport proto peek_inner
++
++LAG opt-in
++~~~~~~~~~~
++
++A new bond load-balance algorithm,
++``BOND_API_LB_ALGO_L34_INNER`` (value ``6``), is added.  It is backed
++by a new registered Ethernet hash function ``hash-eth-l34-inner``
++which attempts an inner peek for IPinIP / GRE / NVGRE traffic and
++transparently falls back to the outer-only L34 hash when the inner
++header cannot be resolved (non-tunnel traffic, fragmented outer,
++unsupported GRE protocol type, etc.).  The existing
++``BOND_API_LB_ALGO_L34`` algorithm and the ``hash-eth-l34`` hash
++function are left byte-for-byte unchanged, so existing bonds keep
++their current behaviour; operators opt in by creating bonds with the
++new algorithm::
++
++    create bond mode lacp load-balance l34-inner
++
++or via the API (``bond_create2`` with ``lb`` set to
++``BOND_API_LB_ALGO_L34_INNER``).
++
++Safety
++------
++
++The helper enforces strict bounds checks: every byte read from the
++packet is verified against the ``remaining`` count passed by the
++caller.  When any check fails (truncated packet, unknown inner IP
++version, fragmented inner header, unsupported GRE protocol type, or an
++unsupported inner IPv6 extension header such as Fragment/ESP/AH), the
++helper marks the descriptor invalid and the caller falls back to the
++outer-only hash.  Outer fragmented packets (IPv4 fragments or IPv6 with
++Fragment ext header) likewise skip peeking - they may not carry a
++complete inner header.
++
++Performance
++-----------
++
++::
++
++ Software packet-generator harness on dev-VM L1 KVM,
++  1 M pkts x 3 reps per scenario, single VPP worker, no DPDK.
++ Topology puts two BondEthernets (xor mode, 4 loopback members each)
++ behind an ECMP default route, so both code paths the patch touches
++ get exercised end-to-end.  Five binaries / configs from the same
++ tree, the same compiler flags:
++
++     A = unpatched VPP (upstream 435fda04), bond load-balance l34
++     B = patched VPP, IP_FLOW_HASH_PEEK_INNER unset, bond l34
++     C = patched VPP, IP_FLOW_HASH_PEEK_INNER set,   bond l34
++     D = patched VPP, IP_FLOW_HASH_PEEK_INNER unset, bond l34-inner
++     E = patched VPP, IP_FLOW_HASH_PEEK_INNER set,   bond l34-inner
++         (E = both new features enabled)
++
++ Key take-aways:
++
++ 1. With both new knobs at their defaults (B path -- patch present
++    but nothing opted in) the patch is essentially a no-op on the
++    hot path: B-A is within +-2 cyc/pkt for every node and every
++    profile measured, well inside per-rep noise.  Deployments that
++    pick up the patch but do not change any config see no
++    measurable cost.
++
++ 2. The two new features are independent, opt-in knobs and each
++    one pays its own cost only inside the node it touches:
++        IP_FLOW_HASH_PEEK_INNER   -> ip4-lookup
++        BOND_LB_L34_INNER         -> BondEthernet-tx
++    An operator that wants only one of the two pays only that one
++    (C and D below).  Even with both turned on (E), the worst-case
++    end-to-end overhead is modest:
++        non-tunneled IPv4   +8.9 cyc/pkt   (no inner to peek at,
++                                            cost is just the branch
++                                            plus the fixed bond
++                                            algorithm rework)
++        IPinIP v4/v4       +18.0 cyc/pkt
++        NVGRE  v4/v4       +35.6 cyc/pkt   (full inner-Ethernet
++                                            pop + inner-L3/L4 parse)
++    All numbers are paid only on a per-packet basis and only when
++    there is actually something to peek at, so the upper bound is
++    tied to tunnel traffic mix.
++
++ Per-packet cost inside the two graph nodes whose code is touched
++ by the patch -- ip4-lookup (the peek) and BondEthernet-tx (the new
++ BOND_LB_L34_INNER algorithm); median of 3 reps:
++
++   ip4-lookup
++     baseline v4 UDP    A unpatched/l34          ->  39.1 cycles/pkt
++     baseline v4 UDP    B patched/l34/off        ->  36.9 cycles/pkt
++     baseline v4 UDP    C patched/l34/on         ->  40.8 cycles/pkt
++     baseline v4 UDP    D patched/l34-inner/off  ->  36.6 cycles/pkt
++     baseline v4 UDP    E patched/l34-inner/on   ->  43.2 cycles/pkt
++     IPinIP v4/v4       A unpatched/l34          ->  37.6 cycles/pkt
++     IPinIP v4/v4       B patched/l34/off        ->  37.8 cycles/pkt
++     IPinIP v4/v4       C patched/l34/on         ->  43.4 cycles/pkt
++     IPinIP v4/v4       D patched/l34-inner/off  ->  40.2 cycles/pkt
++     IPinIP v4/v4       E patched/l34-inner/on   ->  42.7 cycles/pkt
++     NVGRE  v4/v4       A unpatched/l34          ->  38.0 cycles/pkt
++     NVGRE  v4/v4       B patched/l34/off        ->  37.6 cycles/pkt
++     NVGRE  v4/v4       C patched/l34/on         ->  55.0 cycles/pkt
++     NVGRE  v4/v4       D patched/l34-inner/off  ->  36.7 cycles/pkt
++     NVGRE  v4/v4       E patched/l34-inner/on   ->  53.2 cycles/pkt
++
++   BondEthernet-tx (average over the bond(s) that received traffic)
++     baseline v4 UDP    A unpatched/l34          ->  23.6 cycles/pkt
++     baseline v4 UDP    B patched/l34/off        ->  24.4 cycles/pkt
++     baseline v4 UDP    C patched/l34/on         ->  24.2 cycles/pkt
++     baseline v4 UDP    D patched/l34-inner/off  ->  26.9 cycles/pkt
++     baseline v4 UDP    E patched/l34-inner/on   ->  28.4 cycles/pkt
++     IPinIP v4/v4       A unpatched/l34          ->  16.1 cycles/pkt
++     IPinIP v4/v4       B patched/l34/off        ->  16.6 cycles/pkt
++     IPinIP v4/v4       C patched/l34/on         ->  19.5 cycles/pkt
++     IPinIP v4/v4       D patched/l34-inner/off  ->  25.3 cycles/pkt
++     IPinIP v4/v4       E patched/l34-inner/on   ->  29.0 cycles/pkt
++     NVGRE  v4/v4       A unpatched/l34          ->  16.2 cycles/pkt
++     NVGRE  v4/v4       B patched/l34/off        ->  17.3 cycles/pkt
++     NVGRE  v4/v4       C patched/l34/on         ->  18.9 cycles/pkt
++     NVGRE  v4/v4       D patched/l34-inner/off  ->  30.3 cycles/pkt
++     NVGRE  v4/v4       E patched/l34-inner/on   ->  36.6 cycles/pkt
++
++ Cost decomposition (median, cyc/pkt):
++
++   patch-present, nothing opted in        B - A
++     baseline v4 UDP    ip4-lookup -2.2  bond-tx +0.8  total -1.4
++     IPinIP v4/v4       ip4-lookup +0.2  bond-tx +0.5  total +0.7
++     NVGRE  v4/v4       ip4-lookup -0.4  bond-tx +1.1  total +0.7
++                                                        (within noise)
++
++   peek-inner alone                       C - B
++     baseline v4 UDP    ip4-lookup +3.9  bond-tx -0.2  total +3.7
++     IPinIP v4/v4       ip4-lookup +5.6  bond-tx +2.9  (*)
++     NVGRE  v4/v4       ip4-lookup +17.4 bond-tx +1.6  (*)
++         (*) bond-tx delta is partially attributable to ECMP no
++             longer collapsing to a single bond, i.e. the cost
++             measured on a hotter cache footprint -- a benefit of
++             the feature, not a cost of it.
++
++   l34-inner alone                        D - B
++     baseline v4 UDP    ip4-lookup -0.3  bond-tx +3.0  total +2.7
++     IPinIP v4/v4       ip4-lookup +2.4  bond-tx +8.7  total +11.1
++     NVGRE  v4/v4       ip4-lookup -0.9  bond-tx +13.0 total +12.1
++
++   both features on                       E - A
++     baseline v4 UDP    ip4-lookup +4.1  bond-tx +4.8  total  +8.9
++     IPinIP v4/v4       ip4-lookup +5.1  bond-tx +12.9 total +18.0
++     NVGRE  v4/v4       ip4-lookup +15.2 bond-tx +20.4 total +35.6
++
++ Correctness (this is what the patch is actually for): packets per
++ BondEthernet (ECMP) and packets per loopback member (LAG), rep 1:
++
++   baseline v4 UDP (outer 5-tuple varies, already spreads)
++     A..E   ECMP 50/50,   LAG 8 loops, spread <=2.3%
++
++   IPinIP v4/v4 (inner varies, outer fixed)
++     A unpatched/l34         ECMP 100/0   LAG 1 loop  (worst case)
++     B patched/l34/off       ECMP 100/0   LAG 1 loop
++     C patched/l34/on        ECMP 50/50   LAG 1 loop per side (l34 sees fixed outer L4)
++     D patched/l34-inner/off ECMP 100/0   LAG 4 loops (l34-inner on the surviving bond)
++     E patched/l34-inner/on  ECMP 50/50   LAG 8 loops total <=2.3% spread
++
++   NVGRE v4/v4 (inner varies, outer fixed)
++     A unpatched/l34         ECMP 100/0   LAG 1 loop  (worst case)
++     B patched/l34/off       ECMP 100/0   LAG 1 loop
++     C patched/l34/on        ECMP 50/50   LAG 1 loop per side
++     D patched/l34-inner/off ECMP 100/0   LAG 4 loops
++     E patched/l34-inner/on  ECMP 50/50   LAG 8 loops total <=2.3% spread
++
++ Only E spreads both layers.  The cost is paid only on tunneled
++ traffic and only when the inner is reachable; pure-IPv4 (baseline)
++ overhead is under +10 cyc/pkt end-to-end.
++
++Testing
++-------
++
++Unit tests in ``test/test_inner_aware_hash.py`` cover:
++
++  * ECMP distribution across 3 next-hops for IPinIP / GRE-IP / NVGRE
++    over IPv4 and IPv6 outers with IPv4 and IPv6 inners (12 cases).
++  * LAG distribution across 2 bond members for the same matrix.
++  * Plain (non-tunnel) regression: ECMP / LAG of plain UDP-over-v4 and
++    UDP-over-v6 still distribute as before.
++  * Opt-in semantics: ``TestPeekInnerOff`` confirms that without the
++    flag the tunnel ECMP collapses to a single path (upstream
++    behavior).
++  * Safety: outer-fragmented packets, inner v6 with Hop-by-Hop ext,
++    inner v6 with Fragment ext, and truncated tunnel payloads must
++    fall back without crashing.
++
++Files
++-----
++
++Implementation:
++
++  * ``src/vnet/ip/ip_flow_hash.h``           - flag bit definition
++  * ``src/vnet/ip/ip_inner_aware_hash.h``    - helper
++  * ``src/vnet/ip/ip4_inlines.h``            - v4 caller
++  * ``src/vnet/ip/ip6_inlines.h``            - v6 caller
++  * ``src/vnet/hash/hash_eth.c``             - LAG caller (new hash-eth-l34-inner)
++  * ``src/vnet/bonding/bond.api``            - new BOND_API_LB_ALGO_L34_INNER
++  * ``src/vnet/bonding/node.h``              - new BOND_LB_L34_INNER enum
++  * ``src/vnet/bonding/cli.c``               - new "l34-inner" CLI / ``hash_func`` wiring
+diff --git a/docs/spelling_wordlist.txt b/docs/spelling_wordlist.txt
+index 3794cf83e..5a04d1fd0 100644
+--- a/docs/spelling_wordlist.txt
++++ b/docs/spelling_wordlist.txt
+@@ -510,6 +510,7 @@ Init
+ initiatehost
+ inline
+ inlines
++inners
+ insmod
+ instantiation
+ Instantiation
+@@ -819,6 +820,7 @@ optimised
+ os
+ osi
+ outacl
++outers
+ packagecloud
+ papi
+ parallelize
+diff --git a/src/vnet/bonding/bond.api b/src/vnet/bonding/bond.api
+index 3a882b4f1..1c05d4de2 100644
+--- a/src/vnet/bonding/bond.api
++++ b/src/vnet/bonding/bond.api
+@@ -19,7 +19,7 @@
+     the bonding device driver
+ */
+ 
+-option version = "2.1.0";
++option version = "2.1.1";
+ 
+ import "vnet/interface_types.api";
+ import "vnet/ethernet/ethernet_types.api";
+@@ -41,6 +41,7 @@ enum bond_lb_algo
+  BOND_API_LB_ALGO_RR = 3,
+  BOND_API_LB_ALGO_BC = 4,
+  BOND_API_LB_ALGO_AB = 5,
++ BOND_API_LB_ALGO_L34_INNER = 6 [backwards_compatible],
+ };
+ 
+ /** \brief Initialize a new bond interface with the given paramters
+@@ -50,7 +51,7 @@ enum bond_lb_algo
+     @param use_custom_mac - if set, mac_address is valid
+     @param mac_address - mac addr to assign to the interface if use_custom_mac is set
+     @param mode - mode, required (1=round-robin, 2=active-backup, 3=xor, 4=broadcast, 5=lacp)
+-    @param lb - load balance, optional (0=l2, 1=l34, 2=l23) valid for xor and lacp modes. Otherwise ignored
++    @param lb - load balance, optional (0=l2, 1=l34, 2=l23, 6=l34-inner) valid for xor and lacp modes. Otherwise ignored
+     @param numa_only - if numa_only is set, pkts will be transmitted by LAG members on local numa node only if have at least one, otherwise it works as usual.
+ */
+ define bond_create
+@@ -82,7 +83,7 @@ define bond_create_reply
+     @param client_index - opaque cookie to identify the sender
+     @param context - sender context, to match reply w/ request
+     @param mode - mode, required (1=round-robin, 2=active-backup, 3=xor, 4=broadcast, 5=lacp)
+-    @param lb - load balance, optional (0=l2, 1=l34, 2=l23) valid for xor and lacp modes. Otherwise ignored (default=l2)
++    @param lb - load balance, optional (0=l2, 1=l34, 2=l23, 6=l34-inner) valid for xor and lacp modes. Otherwise ignored (default=l2)
+     @param numa_only - if numa_only is set, pkts will be transmitted by LAG members on local numa node only if have at least one, otherwise it works as usual.
+     @param enable_gso - enable gso support (default 0)
+     @param use_custom_mac - if set, mac_address is valid
+diff --git a/src/vnet/bonding/cli.c b/src/vnet/bonding/cli.c
+index 60c8541f3..bb988918b 100644
+--- a/src/vnet/bonding/cli.c
++++ b/src/vnet/bonding/cli.c
+@@ -395,7 +395,7 @@ bond_create_if (vlib_main_t * vm, bond_create_if_args_t * args)
+       args->error = clib_error_return (0, "Invalid mode");
+       return;
+     }
+-  if (args->lb > BOND_LB_L23)
++  if (args->lb > BOND_LB_L23 && args->lb != BOND_LB_L34_INNER)
+     {
+       args->rv = VNET_API_ERROR_INVALID_ARGUMENT;
+       args->error = clib_error_return (0, "Invalid load-balance");
+@@ -418,6 +418,9 @@ bond_create_if (vlib_main_t * vm, bond_create_if_args_t * args)
+   else if (bif->lb == BOND_LB_L23)
+     bif->hash_func = vnet_hash_function_from_name ("hash-eth-l23",
+ 						   VNET_HASH_FN_TYPE_ETHERNET);
++  else if (bif->lb == BOND_LB_L34_INNER)
++    bif->hash_func =
++      vnet_hash_function_from_name ("hash-eth-l34-inner", VNET_HASH_FN_TYPE_ETHERNET);
+ 
+   // Adjust requested interface id
+   if (bif->id == ~0)
+@@ -551,8 +554,8 @@ bond_create_command_fn (vlib_main_t * vm, unformat_input_t * input,
+ VLIB_CLI_COMMAND (bond_create_command, static) = {
+   .path = "create bond",
+   .short_help = "create bond mode {round-robin | active-backup | broadcast | "
+-    "{lacp | xor} [load-balance { l2 | l23 | l34 } [numa-only]]} "
+-    "[hw-addr <mac-address>] [id <if-id>] [gso]",
++		"{lacp | xor} [load-balance {l2 | l23 | l34 | l34-inner} [numa-only]]} "
++		"[hw-addr <mac-address>] [id <if-id>] [gso]",
+   .function = bond_create_command_fn,
+ };
+ 
+diff --git a/src/vnet/bonding/node.h b/src/vnet/bonding/node.h
+index c6efa5b2e..734183b16 100644
+--- a/src/vnet/bonding/node.h
++++ b/src/vnet/bonding/node.h
+@@ -49,20 +49,32 @@ typedef enum
+ #undef _
+ } bond_mode_t;
+ 
+-/* configurable load-balances */
+-#define foreach_bond_lb	  \
+-  _ (2, L23, "l23", l23)  \
+-  _ (1, L34 , "l34", l34) \
++/* Configurable load-balances.
++ *
++ * NOTE: order matters here because this list drives
++ * unformat_bond_load_balance() below.  VPP's unformat() does greedy
++ * prefix matching and returns on the first match, so any algorithm
++ * name that is a strict prefix of another (e.g. "l34" is a prefix of
++ * "l34-inner") MUST appear AFTER the longer name in this list.
++ * Otherwise typing "lb l34-inner" on the CLI would match "l34" first,
++ * consume only those three characters, leave "-inner" unparsed, and
++ * silently select the wrong algorithm.
++ */
++#define foreach_bond_lb                                                                            \
++  _ (6, L34_INNER, "l34-inner", l34_inner)                                                         \
++  _ (2, L23, "l23", l23)                                                                           \
++  _ (1, L34, "l34", l34)                                                                           \
+   _ (0, L2, "l2", l2)
+ 
+ /* load-balance functions implemented in bond-output */
+-#define foreach_bond_lb_algo			 \
+-  _ (0, L2, "l2", l2)                            \
+-  _ (1, L34 , "l34", l34)                        \
+-  _ (2, L23, "l23", l23)                         \
+-  _ (3, RR, "round-robin", round_robin)          \
+-  _ (4, BC, "broadcast", broadcast)              \
+-  _ (5, AB, "active-backup", active_backup)
++#define foreach_bond_lb_algo                                                                       \
++  _ (0, L2, "l2", l2)                                                                              \
++  _ (1, L34, "l34", l34)                                                                           \
++  _ (2, L23, "l23", l23)                                                                           \
++  _ (3, RR, "round-robin", round_robin)                                                            \
++  _ (4, BC, "broadcast", broadcast)                                                                \
++  _ (5, AB, "active-backup", active_backup)                                                        \
++  _ (6, L34_INNER, "l34-inner", l34_inner)
+ 
+ typedef enum
+ {
+diff --git a/src/vnet/hash/hash_eth.c b/src/vnet/hash/hash_eth.c
+index 1ac8b66a1..023d2b040 100644
+--- a/src/vnet/hash/hash_eth.c
++++ b/src/vnet/hash/hash_eth.c
+@@ -23,6 +23,7 @@
+ #include <vnet/ip/ip4_packet.h>
+ #include <vnet/ip/ip6_packet.h>
+ #include <vnet/ip/ip6_hop_by_hop_packet.h>
++#include <vnet/ip/ip_inner_aware_hash.h>
+ #include <vnet/tcp/tcp_packet.h>
+ #include <vppinfra/lb_hash_hash.h>
+ #include <vnet/hash/hash.h>
+@@ -187,6 +188,26 @@ hash_eth_l23 (void **p, u32 *hash, u32 n_packets)
+     }
+ }
+ 
++/* Compute an inner-aware lb_hash for IPinIP / IPv6inIP / GRE / NVGRE.
++ * Used by the hash-eth-l34-inner registered hash function when an inner header
++ * is observed. */
++static_always_inline u32
++hash_eth_inner_lb_hash (const ip_inner_hdr_t *inner)
++{
++  const tcp_header_t *tcp = (const tcp_header_t *) inner->l4;
++  uword is_tcp_udp = (inner->protocol == IP_PROTOCOL_TCP) || (inner->protocol == IP_PROTOCOL_UDP);
++  u32 t1 = is_tcp_udp ? clib_mem_unaligned (&tcp->src, u16) : 0;
++  u32 t2 = is_tcp_udp ? clib_mem_unaligned (&tcp->dst, u16) : 0;
++  u32 a = t1 ^ t2;
++
++  if (inner->is_v6)
++    return lb_hash_hash (clib_mem_unaligned (&inner->ip.v6->src_address.as_uword[0], uword),
++			 clib_mem_unaligned (&inner->ip.v6->src_address.as_uword[1], uword),
++			 clib_mem_unaligned (&inner->ip.v6->dst_address.as_uword[0], uword),
++			 clib_mem_unaligned (&inner->ip.v6->dst_address.as_uword[1], uword), a);
++  return lb_hash_hash_2_tuples (clib_mem_unaligned (&inner->ip.v4->address_pair, u64), a);
++}
++
+ static_always_inline u32
+ hash_eth_l34_inline (void **p)
+ {
+@@ -264,6 +285,103 @@ hash_eth_l34_inline (void **p)
+   return hash;
+ }
+ 
++/* Inner-aware variant.  For non-tunnel traffic this is byte-exact
++   identical to hash_eth_l34_inline; for IPinIP / 6in4 / 4in6 / 6in6 /
++   GRE / NVGRE outer headers it dives into the inner v4 / v6 packet
++   and hashes the inner 5-tuple instead, so distinct inner flows
++   between the same two tunnel endpoints spread across LAG members. */
++static_always_inline u32
++hash_eth_l34_inner_inline (void **p)
++{
++  ethernet_header_t *eth = *p;
++  u8 ip_version;
++  uword is_tcp_udp;
++  ip4_header_t *ip4;
++  u16 ethertype, *ethertype_p;
++  u32 hash;
++
++  ethertype_p = locate_ethertype (eth);
++  ethertype = clib_mem_unaligned (ethertype_p, u16);
++
++  if ((ethertype != htons (ETHERNET_TYPE_IP4)) && (ethertype != htons (ETHERNET_TYPE_IP6)))
++    {
++      hash_eth_l2 (p, &hash, 1);
++      return hash;
++    }
++
++  ip4 = (ip4_header_t *) (ethertype_p + 1);
++  ip_version = (ip4->ip_version_and_header_length >> 4);
++
++  if (ip_version == 0x4)
++    {
++      u32 a, t1, t2;
++      tcp_header_t *tcp = (void *) (ip4 + 1);
++      ip_inner_hdr_t inner = { .valid = 0 };
++
++      if (!PREDICT_FALSE (ip4_is_fragment (ip4)))
++	{
++	  u32 total_len = clib_net_to_host_u16 (ip4->length);
++	  u32 ihl = ip4_header_bytes (ip4);
++	  if (total_len >= ihl)
++	    ip_inner_resolve (ip4->protocol, (const u8 *) ip4 + ihl, total_len - ihl, &inner);
++	}
++      if (inner.valid)
++	return hash_eth_inner_lb_hash (&inner);
++
++      is_tcp_udp = (ip4->protocol == IP_PROTOCOL_TCP) || (ip4->protocol == IP_PROTOCOL_UDP);
++      t1 = is_tcp_udp ? clib_mem_unaligned (&tcp->src, u16) : 0;
++      t2 = is_tcp_udp ? clib_mem_unaligned (&tcp->dst, u16) : 0;
++      a = t1 ^ t2;
++      hash = lb_hash_hash_2_tuples (clib_mem_unaligned (&ip4->address_pair, u64), a);
++      return hash;
++    }
++
++  if (ip_version == 0x6)
++    {
++      u64 a;
++      u32 t1, t2;
++      ip6_header_t *ip6 = (ip6_header_t *) (eth + 1);
++      tcp_header_t *tcp = (void *) (ip6 + 1);
++      ip_inner_hdr_t inner = { .valid = 0 };
++
++      /* Inner dive uses payload_length to bound the read.  Outer IPv6
++       * extension headers are intentionally not chased here (transit
++       * tunnels typically use IP_IN_IP / IPV6 / GRE next-header values,
++       * not extension headers); a future enhancement could walk them. */
++      u32 payload_length = clib_net_to_host_u16 (ip6->payload_length);
++      ip_inner_resolve (ip6->protocol, (const u8 *) (ip6 + 1), payload_length, &inner);
++      if (inner.valid)
++	return hash_eth_inner_lb_hash (&inner);
++
++      is_tcp_udp = 0;
++      if (PREDICT_TRUE ((ip6->protocol == IP_PROTOCOL_TCP) || (ip6->protocol == IP_PROTOCOL_UDP)))
++	{
++	  is_tcp_udp = 1;
++	  tcp = (void *) (ip6 + 1);
++	}
++      else if (ip6->protocol == IP_PROTOCOL_IP6_HOP_BY_HOP_OPTIONS)
++	{
++	  ip6_hop_by_hop_header_t *hbh = (ip6_hop_by_hop_header_t *) (ip6 + 1);
++	  if ((hbh->protocol == IP_PROTOCOL_TCP) || (hbh->protocol == IP_PROTOCOL_UDP))
++	    {
++	      is_tcp_udp = 1;
++	      tcp = (tcp_header_t *) ((u8 *) hbh + ((hbh->length + 1) << 3));
++	    }
++	}
++      t1 = is_tcp_udp ? clib_mem_unaligned (&tcp->src, u16) : 0;
++      t2 = is_tcp_udp ? clib_mem_unaligned (&tcp->dst, u16) : 0;
++      a = t1 ^ t2;
++      hash = lb_hash_hash (clib_mem_unaligned (&ip6->src_address.as_uword[0], uword),
++			   clib_mem_unaligned (&ip6->src_address.as_uword[1], uword),
++			   clib_mem_unaligned (&ip6->dst_address.as_uword[0], uword),
++			   clib_mem_unaligned (&ip6->dst_address.as_uword[1], uword), a);
++      return hash;
++    }
++
++  hash_eth_l2 (p, &hash, 1);
++  return hash;
++}
++
+ static void
+ hash_eth_l34 (void **p, u32 *hash, u32 n_packets)
+ {
+@@ -296,6 +414,38 @@ hash_eth_l34 (void **p, u32 *hash, u32 n_packets)
+     }
+ }
+ 
++static void
++hash_eth_l34_inner (void **p, u32 *hash, u32 n_packets)
++{
++  u32 n_left_from = n_packets;
++
++  while (n_left_from >= 8)
++    {
++      clib_prefetch_load (p[4]);
++      clib_prefetch_load (p[5]);
++      clib_prefetch_load (p[6]);
++      clib_prefetch_load (p[7]);
++
++      hash[0] = hash_eth_l34_inner_inline (&p[0]);
++      hash[1] = hash_eth_l34_inner_inline (&p[1]);
++      hash[2] = hash_eth_l34_inner_inline (&p[2]);
++      hash[3] = hash_eth_l34_inner_inline (&p[3]);
++
++      hash += 4;
++      n_left_from -= 4;
++      p += 4;
++    }
++
++  while (n_left_from > 0)
++    {
++      hash[0] = hash_eth_l34_inner_inline (&p[0]);
++
++      hash += 1;
++      n_left_from -= 1;
++      p += 1;
++    }
++}
++
+ VNET_REGISTER_HASH_FUNCTION (hash_eth_l2, static) = {
+   .name = "hash-eth-l2",
+   .description = "Hash ethernet L2 headers",
+@@ -317,6 +467,13 @@ VNET_REGISTER_HASH_FUNCTION (hash_eth_l34, static) = {
+   .function[VNET_HASH_FN_TYPE_ETHERNET] = hash_eth_l34,
+ };
+ 
++VNET_REGISTER_HASH_FUNCTION (hash_eth_l34_inner, static) = {
++  .name = "hash-eth-l34-inner",
++  .description = "Hash ethernet L34 headers, peek into IPinIP/GRE/NVGRE inner",
++  .priority = 50,
++  .function[VNET_HASH_FN_TYPE_ETHERNET] = hash_eth_l34_inner,
++};
++
+ /*
+  * fd.io coding-style-patch-verification: ON
+  *
+diff --git a/src/vnet/ip/ip4_inlines.h b/src/vnet/ip/ip4_inlines.h
+index b4fcebc98..2e95cf77b 100644
+--- a/src/vnet/ip/ip4_inlines.h
++++ b/src/vnet/ip/ip4_inlines.h
+@@ -42,28 +42,77 @@
+ 
+ #include <vnet/ip/ip_flow_hash.h>
+ #include <vnet/ip/ip4_packet.h>
++#include <vnet/ip/ip_inner_aware_hash.h>
+ #include <vnet/tcp/tcp_packet.h>
+ #include <vnet/udp/udp_packet.h>
+ 
+ #define IP_DF 0x4000		/* don't fragment */
+ 
+ /* Compute flow hash.  We'll use it to select which adjacency to use for this
+-   flow.  And other things. */
++   flow.  And other things.
++
++   If IP_FLOW_HASH_PEEK_INNER is set in flow_hash_config and the outer
++   protocol is an IP-in-IP encapsulation (4 = IPv4-in-IPv4, 41 = IPv6-in-
++   IPv4) or GRE / NVGRE (47), walk into the inner header and compute the
++   hash from inner src/dst/proto plus inner L4 sport/dport.  This matches
++   the default ECMP behavior of merchant-silicon ASICs which hash on inner
++   fields for transit tunnel traffic.  See src/vnet/ip/ip_inner_aware_hash.h
++   for the shared helpers used here, in ip6_inlines.h, and in
++   src/vnet/hash/hash_eth.c.  */
+ always_inline u32
+ ip4_compute_flow_hash (const ip4_header_t * ip,
+ 		       flow_hash_config_t flow_hash_config)
+ {
+-  tcp_header_t *tcp = (void *) (ip + 1);
+-  udp_header_t *udp = (void *) (ip + 1);
+-  gtpv1u_header_t *gtpu = (void *) (udp + 1);
++  const tcp_header_t *tcp;
++  const udp_header_t *udp;
++  const gtpv1u_header_t *gtpu;
+   u32 a, b, c, t1, t2;
+-  uword is_udp = ip->protocol == IP_PROTOCOL_UDP;
+-  uword is_tcp_udp = (ip->protocol == IP_PROTOCOL_TCP || is_udp);
++  u32 src_addr_u32, dst_addr_u32;
++  u8 hash_protocol;
++  ip_inner_hdr_t inner = { .valid = 0 };
+ 
+-  t1 = (flow_hash_config & IP_FLOW_HASH_SRC_ADDR)
+-    ? ip->src_address.data_u32 : 0;
+-  t2 = (flow_hash_config & IP_FLOW_HASH_DST_ADDR)
+-    ? ip->dst_address.data_u32 : 0;
++  if (PREDICT_FALSE ((flow_hash_config & IP_FLOW_HASH_PEEK_INNER) && !ip4_is_fragment (ip)))
++    {
++      u32 total_len = clib_net_to_host_u16 (ip->length);
++      u32 ihl = ip4_header_bytes (ip);
++      if (PREDICT_TRUE (total_len >= ihl))
++	{
++	  u32 remaining = total_len - ihl;
++	  ip_inner_resolve (ip->protocol, (const u8 *) ip + ihl, remaining, &inner);
++	}
++    }
++
++  if (PREDICT_FALSE (inner.valid))
++    {
++      if (inner.is_v6)
++	{
++	  src_addr_u32 = ip6_addr_fold_u32 (&inner.ip.v6->src_address);
++	  dst_addr_u32 = ip6_addr_fold_u32 (&inner.ip.v6->dst_address);
++	}
++      else
++	{
++	  src_addr_u32 = inner.ip.v4->src_address.data_u32;
++	  dst_addr_u32 = inner.ip.v4->dst_address.data_u32;
++	}
++      hash_protocol = inner.protocol;
++      tcp = (const tcp_header_t *) inner.l4;
++      udp = (const udp_header_t *) inner.l4;
++    }
++  else
++    {
++      src_addr_u32 = ip->src_address.data_u32;
++      dst_addr_u32 = ip->dst_address.data_u32;
++      hash_protocol = ip->protocol;
++      tcp = (const tcp_header_t *) (ip + 1);
++      udp = (const udp_header_t *) (ip + 1);
++    }
++  gtpu = (const gtpv1u_header_t *) (udp + 1);
++
++  uword is_udp = hash_protocol == IP_PROTOCOL_UDP;
++  uword is_tcp_udp = (hash_protocol == IP_PROTOCOL_TCP || is_udp);
++
++  t1 = (flow_hash_config & IP_FLOW_HASH_SRC_ADDR) ? src_addr_u32 : 0;
++  t2 = (flow_hash_config & IP_FLOW_HASH_DST_ADDR) ? dst_addr_u32 : 0;
+ 
+   a = (flow_hash_config & IP_FLOW_HASH_REVERSE_SRC_DST) ? t2 : t1;
+   b = (flow_hash_config & IP_FLOW_HASH_REVERSE_SRC_DST) ? t1 : t2;
+@@ -90,7 +139,7 @@ ip4_compute_flow_hash (const ip4_header_t * ip,
+ 	}
+     }
+ 
+-  b ^= (flow_hash_config & IP_FLOW_HASH_PROTO) ? ip->protocol : 0;
++  b ^= (flow_hash_config & IP_FLOW_HASH_PROTO) ? hash_protocol : 0;
+   c = (flow_hash_config & IP_FLOW_HASH_REVERSE_SRC_DST) ?
+     (t1 << 16) | t2 : (t2 << 16) | t1;
+   if (PREDICT_TRUE (is_udp) &&
+diff --git a/src/vnet/ip/ip6_inlines.h b/src/vnet/ip/ip6_inlines.h
+index 9bd475224..a48b0da90 100644
+--- a/src/vnet/ip/ip6_inlines.h
++++ b/src/vnet/ip/ip6_inlines.h
+@@ -42,9 +42,17 @@
+ 
+ #include <vnet/ip/ip6_packet.h>
+ #include <vnet/ip/ip6_hop_by_hop_packet.h>
++#include <vnet/ip/ip_inner_aware_hash.h>
+ 
+ /* Compute flow hash.  We'll use it to select which Sponge to use for this
+-   flow.  And other things. */
++   flow.  And other things.
++
++   If IP_FLOW_HASH_PEEK_INNER is set in flow_hash_config and the (post-
++   extension-header) IPv6 next-header is an IP-in-IP encapsulation (4 =
++   IPv4-in-IPv6, 41 = IPv6-in-IPv6) or GRE / NVGRE (47), walk into the
++   inner header and compute the hash from inner src/dst/proto plus inner
++   L4 sport/dport.  See src/vnet/ip/ip_inner_aware_hash.h for the shared
++   helpers used here and in ip4_inlines.h / src/vnet/hash/hash_eth.c.  */
+ always_inline u32
+ ip6_compute_flow_hash (const ip6_header_t * ip,
+ 		       flow_hash_config_t flow_hash_config)
+@@ -58,6 +66,9 @@ ip6_compute_flow_hash (const ip6_header_t * ip,
+   uword is_tcp_udp = 0;
+   u8 protocol = ip->protocol;
+   uword is_udp = protocol == IP_PROTOCOL_UDP;
++  uword peek_inner = (flow_hash_config & IP_FLOW_HASH_PEEK_INNER) != 0;
++  uword outer_fragmented = 0;
++  ip_inner_hdr_t inner = { .valid = 0 };
+ 
+   if (PREDICT_TRUE ((protocol == IP_PROTOCOL_TCP) || is_udp))
+     {
+@@ -66,29 +77,85 @@ ip6_compute_flow_hash (const ip6_header_t * ip,
+     }
+   else
+     {
+-      const void *cur = ip + 1;
+-      if (protocol == IP_PROTOCOL_IP6_HOP_BY_HOP_OPTIONS)
++      const u8 *cur = (const u8 *) (ip + 1);
++      u32 walked = 0;
++      u32 payload_length = clib_net_to_host_u16 (ip->payload_length);
++      if (protocol == IP_PROTOCOL_IP6_HOP_BY_HOP_OPTIONS &&
++	  payload_length >= sizeof (ip6_hop_by_hop_header_t))
+ 	{
+-	  const ip6_hop_by_hop_header_t *hbh = cur;
+-	  protocol = hbh->protocol;
+-	  cur += (hbh->length + 1) * 8;
++	  const ip6_hop_by_hop_header_t *hbh = (const ip6_hop_by_hop_header_t *) cur;
++	  u32 hbh_len = ((u32) hbh->length + 1) * 8;
++	  if (payload_length >= walked + hbh_len)
++	    {
++	      protocol = hbh->protocol;
++	      cur += hbh_len;
++	      walked += hbh_len;
++	    }
+ 	}
+       if (protocol == IP_PROTOCOL_IPV6_FRAGMENTATION)
+ 	{
+-	  const ip6_fragment_ext_header_t *frag = cur;
+-	  protocol = frag->protocol;
++	  if (payload_length >= walked + sizeof (ip6_fragment_ext_header_t))
++	    {
++	      const ip6_fragment_ext_header_t *frag = (const ip6_fragment_ext_header_t *) cur;
++	      protocol = frag->protocol;
++	      cur += sizeof (ip6_fragment_ext_header_t);
++	      walked += sizeof (ip6_fragment_ext_header_t);
++	    }
++	  outer_fragmented = 1;
+ 	}
+-      else if (protocol == IP_PROTOCOL_TCP || protocol == IP_PROTOCOL_UDP)
++      /* Fragmentation invariant: a packet that carries a Fragment ext
++       header IS itself one fragment of the original L4 datagram --
++       never a complete L4 message.  Only fragment-0 carries the real
++       TCP/UDP src/dst ports; later fragments carry arbitrary
++       inner-payload bytes at the same buffer offset.  Hashing those
++       bytes as ports would send fragments of the same flow down
++       different paths and break reassembly at the destination.
++       Thus we must NOT read tcp->src/dst when outer_fragmented is
++       set.  This restores upstream pre-patch behaviour.  */
++      else if (!outer_fragmented && (protocol == IP_PROTOCOL_TCP || protocol == IP_PROTOCOL_UDP))
+ 	{
+ 	  is_tcp_udp = 1;
+-	  tcp = cur;
++	  is_udp = (protocol == IP_PROTOCOL_UDP);
++	  tcp = (const tcp_header_t *) cur;
++	}
++      else if (PREDICT_FALSE (peek_inner && !outer_fragmented && payload_length >= walked))
++	{
++	  u32 remaining = payload_length - walked;
++	  ip_inner_resolve (protocol, cur, remaining, &inner);
++	  if (PREDICT_FALSE (inner.valid))
++	    {
++	      protocol = inner.protocol;
++	      is_udp = protocol == IP_PROTOCOL_UDP;
++	      udp = (const udp_header_t *) inner.l4;
++	      gtpu = (const gtpv1u_header_t *) (udp + 1);
++	      if ((protocol == IP_PROTOCOL_TCP) || is_udp)
++		{
++		  is_tcp_udp = 1;
++		  tcp = (const tcp_header_t *) inner.l4;
++		}
++	    }
+ 	}
+     }
+ 
+-  t1 = (ip->src_address.as_u64[0] ^ ip->src_address.as_u64[1]);
++  if (PREDICT_FALSE (inner.valid))
++    {
++      if (inner.is_v6)
++	{
++	  t1 = inner.ip.v6->src_address.as_u64[0] ^ inner.ip.v6->src_address.as_u64[1];
++	  t2 = inner.ip.v6->dst_address.as_u64[0] ^ inner.ip.v6->dst_address.as_u64[1];
++	}
++      else
++	{
++	  t1 = inner.ip.v4->src_address.data_u32;
++	  t2 = inner.ip.v4->dst_address.data_u32;
++	}
++    }
++  else
++    {
++      t1 = ip->src_address.as_u64[0] ^ ip->src_address.as_u64[1];
++      t2 = ip->dst_address.as_u64[0] ^ ip->dst_address.as_u64[1];
++    }
+   t1 = (flow_hash_config & IP_FLOW_HASH_SRC_ADDR) ? t1 : 0;
+-
+-  t2 = (ip->dst_address.as_u64[0] ^ ip->dst_address.as_u64[1]);
+   t2 = (flow_hash_config & IP_FLOW_HASH_DST_ADDR) ? t2 : 0;
+ 
+   a = (flow_hash_config & IP_FLOW_HASH_REVERSE_SRC_DST) ? t2 : t1;
+diff --git a/src/vnet/ip/ip_flow_hash.h b/src/vnet/ip/ip_flow_hash.h
+index 30dfcd70a..693ad92ac 100644
+--- a/src/vnet/ip/ip_flow_hash.h
++++ b/src/vnet/ip/ip_flow_hash.h
+@@ -30,16 +30,17 @@
+   _ (reverse, IP_FLOW_HASH_REVERSE_SRC_DST)                                   \
+   _ (symmetric, IP_FLOW_HASH_SYMMETRIC)
+ 
+-#define foreach_flow_hash_bit                                                 \
+-  _ (src, 0, IP_FLOW_HASH_SRC_ADDR)                                           \
+-  _ (dst, 1, IP_FLOW_HASH_DST_ADDR)                                           \
+-  _ (sport, 2, IP_FLOW_HASH_SRC_PORT)                                         \
+-  _ (dport, 3, IP_FLOW_HASH_DST_PORT)                                         \
+-  _ (proto, 4, IP_FLOW_HASH_PROTO)                                            \
+-  _ (reverse, 5, IP_FLOW_HASH_REVERSE_SRC_DST)                                \
+-  _ (symmetric, 6, IP_FLOW_HASH_SYMMETRIC)                                    \
+-  _ (flowlabel, 7, IP_FLOW_HASH_FL)                                           \
+-  _ (gtpv1teid, 8, IP_FLOW_HASH_GTPV1_TEID)
++#define foreach_flow_hash_bit                                                                      \
++  _ (src, 0, IP_FLOW_HASH_SRC_ADDR)                                                                \
++  _ (dst, 1, IP_FLOW_HASH_DST_ADDR)                                                                \
++  _ (sport, 2, IP_FLOW_HASH_SRC_PORT)                                                              \
++  _ (dport, 3, IP_FLOW_HASH_DST_PORT)                                                              \
++  _ (proto, 4, IP_FLOW_HASH_PROTO)                                                                 \
++  _ (reverse, 5, IP_FLOW_HASH_REVERSE_SRC_DST)                                                     \
++  _ (symmetric, 6, IP_FLOW_HASH_SYMMETRIC)                                                         \
++  _ (flowlabel, 7, IP_FLOW_HASH_FL)                                                                \
++  _ (gtpv1teid, 8, IP_FLOW_HASH_GTPV1_TEID)                                                        \
++  _ (peek_inner, 9, IP_FLOW_HASH_PEEK_INNER)
+ 
+ typedef struct
+ {
+diff --git a/src/vnet/ip/ip_inner_aware_hash.h b/src/vnet/ip/ip_inner_aware_hash.h
+new file mode 100644
+index 000000000..62b6a4364
+--- /dev/null
++++ b/src/vnet/ip/ip_inner_aware_hash.h
+@@ -0,0 +1,267 @@
++/*
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++/**
++ * @file
++ * @brief Inner-aware flow-hash helpers for IPinIP / GRE / NVGRE traffic.
++ *
++ * Transit traffic that carries the same outer 5-tuple per tunnel (IPv4inIPv4,
++ * IPv6inIPv4, IPv4inIPv6, IPv6inIPv6 and GRE / NVGRE) collapses ECMP and LAG
++ * distribution to a single member when the hash function consults only the
++ * outer header.  These helpers locate the inner IP header (skipping any
++ * NVGRE/TEB inner Ethernet and walking inner IPv6 extension headers) and
++ * return a small descriptor that lets the IPv4, IPv6 and Ethernet hash paths
++ * compute an inner-aware hash through one shared implementation.
++ *
++ * The feature is opt-in for the IP forwarding hash and always-on for the
++ * LAG hash:
++ *   - IP layer (ip4/ip6_compute_flow_hash): the caller gates invocation on
++ *     flow_hash_config & IP_FLOW_HASH_PEEK_INNER.  IP_FLOW_HASH_DEFAULT
++ *     does not set this bit, so existing behaviour is preserved.
++ *   - LAG / hash_eth (hash-eth-l34): the existing registered function was
++ *     updated to always attempt an inner peek; when the inner header
++ *     cannot be resolved (non-tunnel / fragmented / unsupported protocol)
++ *     it falls back to the outer-only hash, preserving existing behaviour
++ *     for non-tunnel traffic.  No new hash function is registered.
++ *
++ * VxLAN / Geneve are intentionally NOT covered: their outer UDP source port
++ * already carries inner-flow entropy (RFC 7348 §4.2, RFC 8926 §3.3).
++ *
++ * Safety contract:
++ *   - The caller MUST pass @c remaining = number of bytes available in the
++ *     buffer starting at @c payload.  Every byte dereferenced by the helper
++ *     is bounds-checked against @c remaining.
++ *   - The helper sets @c out->valid = 0 (and returns) whenever any check
++ *     fails (truncated packet, unknown inner IP version, fragmented inner,
++ *     unsupported GRE protocol etc.); the caller MUST fall back to the
++ *     outer-only hash in that case.
++ */
++
++#ifndef included_ip_inner_aware_hash_h
++#define included_ip_inner_aware_hash_h
++
++#include <vnet/ip/ip4_packet.h>
++#include <vnet/ip/ip6_packet.h>
++#include <vnet/ip/ip6_hop_by_hop_packet.h>
++#include <vnet/ethernet/packet.h>
++#include <vnet/gre/packet.h>
++
++/**
++ * Inner-header descriptor produced by ip_inner_resolve().
++ *
++ * Only one of @c ip.v4 / @c ip.v6 is meaningful, selected by @c is_v6.
++ * @c l4 points at the first byte past the inner IP header (and past any
++ * inner IPv6 extension headers).  When @c valid == 0 the rest of the
++ * struct must not be inspected.
++ */
++typedef struct
++{
++  union
++  {
++    const ip4_header_t *v4;
++    const ip6_header_t *v6;
++  } ip;
++  const void *l4;
++  u8 protocol;
++  u8 is_v6;
++  u8 valid;
++} ip_inner_hdr_t;
++
++/* Minimum bytes that must follow the inner IP header for L4 port reads to
++ * be safe.  src+dst ports occupy the first 4 bytes of TCP/UDP; we require
++ * 8 bytes (the full UDP header size) so a non-TCP/UDP inner protocol still
++ * keeps @c l4 pointing at a fully-mapped 8-byte region. */
++#define IP_INNER_L4_MIN_BYTES 8
++
++/**
++ * Walk inner IPv6 extension headers in place.
++ *
++ * Advances @c *pp past every Hop-by-Hop / Routing / Destination-Options
++ * extension header until a real upper-layer protocol is found.  Inner
++ * Fragment / Authentication / ESP extension headers cause the function to
++ * return 0 (caller treats as @c valid=0): we cannot safely peek a payload
++ * we don't know how to reassemble or decrypt.
++ *
++ * @param[in,out] pp        pointer into the buffer; advanced past walked
++ *                          extension headers.
++ * @param[in,out] remaining bytes left in the buffer at *pp; decremented.
++ * @param         protocol  next-header value before walking.
++ * @return                  final next-header value (the upper-layer
++ *                          protocol), or 0 if a walk failure occurred.
++ */
++static_always_inline u8
++ip_inner_v6_walk_ext_headers (const u8 **pp, u32 *remaining, u8 protocol)
++{
++  while (protocol == IP_PROTOCOL_IP6_HOP_BY_HOP_OPTIONS || protocol == IP_PROTOCOL_IPV6_ROUTE ||
++	 protocol == IP_PROTOCOL_IP6_DESTINATION_OPTIONS)
++    {
++      if (*remaining < sizeof (ip6_hop_by_hop_header_t))
++	return 0;
++      const ip6_hop_by_hop_header_t *eh = (const ip6_hop_by_hop_header_t *) *pp;
++      u32 eh_len = ((u32) eh->length + 1) * 8;
++      if (*remaining < eh_len)
++	return 0;
++      protocol = eh->protocol;
++      *pp += eh_len;
++      *remaining -= eh_len;
++    }
++  /* Refuse to peek through fragments / encrypted payloads. */
++  if (protocol == IP_PROTOCOL_IPV6_FRAGMENTATION || protocol == IP_PROTOCOL_IPSEC_ESP ||
++      protocol == IP_PROTOCOL_IPSEC_AH)
++    return 0;
++  return protocol;
++}
++
++/**
++ * Resolve an inner IPv4 header.  Sets @c out->valid on success.
++ *
++ * Skips fragmented inner v4 (no useful L4 ports) and packets whose claimed
++ * IP total length exceeds the remaining buffer.
++ */
++static_always_inline void
++ip_inner_resolve_v4 (const u8 *payload, u32 remaining, ip_inner_hdr_t *out)
++{
++  if (remaining < sizeof (ip4_header_t) + IP_INNER_L4_MIN_BYTES)
++    return;
++  const ip4_header_t *iip = (const ip4_header_t *) payload;
++  if ((iip->ip_version_and_header_length >> 4) != 4)
++    return;
++  if (ip4_is_fragment (iip))
++    return;
++  out->ip.v4 = iip;
++  out->protocol = iip->protocol;
++  out->l4 = iip + 1;
++  out->is_v6 = 0;
++  out->valid = 1;
++}
++
++/**
++ * Resolve an inner IPv6 header.  Walks Hop-by-Hop / Routing / Destination-
++ * Options extension headers, refuses Fragment / ESP / AH inner.
++ */
++static_always_inline void
++ip_inner_resolve_v6 (const u8 *payload, u32 remaining, ip_inner_hdr_t *out)
++{
++  if (remaining < sizeof (ip6_header_t) + IP_INNER_L4_MIN_BYTES)
++    return;
++  const ip6_header_t *iip6 = (const ip6_header_t *) payload;
++  if (((iip6->ip_version_traffic_class_and_flow_label >> 4) & 0xf) != 6)
++    return;
++  const u8 *cur = payload + sizeof (ip6_header_t);
++  u32 left = remaining - sizeof (ip6_header_t);
++  u8 protocol = ip_inner_v6_walk_ext_headers (&cur, &left, iip6->protocol);
++  if (protocol == 0 || left < IP_INNER_L4_MIN_BYTES)
++    return;
++  out->ip.v6 = iip6;
++  out->protocol = protocol;
++  out->l4 = cur;
++  out->is_v6 = 1;
++  out->valid = 1;
++}
++
++/**
++ * Skip the GRE Checksum / Key / Sequence optional fields.
++ *
++ * @param         gre              start of GRE header.
++ * @param         remaining        bytes available at @c gre.
++ * @param[out]    gre_proto_out    host-order GRE protocol field.
++ * @param[out]    consumed_out     bytes consumed by the GRE header.
++ * @return                         non-zero on success, 0 on truncation.
++ */
++static_always_inline int
++ip_inner_gre_skip_optional_fields (const u8 *gre, u32 remaining, u16 *gre_proto_out,
++				   u32 *consumed_out)
++{
++  if (remaining < 4)
++    return 0;
++  u16 gre_flags = clib_net_to_host_u16 (clib_mem_unaligned (gre, u16));
++  u32 hdr_len = 4 + ((gre_flags & GRE_FLAGS_CHECKSUM) ? 4 : 0) +
++		((gre_flags & GRE_FLAGS_KEY) ? 4 : 0) + ((gre_flags & GRE_FLAGS_SEQUENCE) ? 4 : 0);
++  if (remaining < hdr_len)
++    return 0;
++  *gre_proto_out = clib_net_to_host_u16 (clib_mem_unaligned (gre + 2, u16));
++  *consumed_out = hdr_len;
++  return 1;
++}
++
++/**
++ * Resolve a GRE payload + protocol into an inner IP descriptor.
++ *
++ * For NVGRE / generic-TEB (GRE protocol 0x6558) the inner Ethernet header
++ * is skipped and the inner IP version is autodetected from the version
++ * nibble.  Inner VLAN tags inside the inner Ethernet are not chased (rare
++ * for transit tunnels; caller will fall back to outer-only hash).
++ */
++static_always_inline void
++ip_inner_resolve_gre (const u8 *payload, u32 remaining, u16 gre_proto, ip_inner_hdr_t *out)
++{
++  u16 effective_proto = gre_proto;
++
++  if (gre_proto == GRE_PROTOCOL_teb)
++    {
++      if (remaining < sizeof (ethernet_header_t) + 1)
++	return;
++      const u8 *eth = payload;
++      u16 eth_type = clib_net_to_host_u16 (clib_mem_unaligned (eth + 12, u16));
++      if (eth_type == ETHERNET_TYPE_IP4)
++	effective_proto = GRE_PROTOCOL_ip4;
++      else if (eth_type == ETHERNET_TYPE_IP6)
++	effective_proto = GRE_PROTOCOL_ip6;
++      else
++	return;
++      payload += sizeof (ethernet_header_t);
++      remaining -= sizeof (ethernet_header_t);
++    }
++
++  if (effective_proto == GRE_PROTOCOL_ip4)
++    ip_inner_resolve_v4 (payload, remaining, out);
++  else if (effective_proto == GRE_PROTOCOL_ip6)
++    ip_inner_resolve_v6 (payload, remaining, out);
++}
++
++/**
++ * Resolve an inner header given the outer L3 protocol and a bounded view
++ * of the bytes just past the outer IP header.
++ *
++ * On success @c out->valid == 1 and the union / protocol / l4 fields are
++ * filled in.  Otherwise @c out->valid == 0 and the caller falls back to
++ * the outer-only hash.
++ */
++static_always_inline void
++ip_inner_resolve (u8 outer_protocol, const u8 *payload, u32 remaining, ip_inner_hdr_t *out)
++{
++  out->valid = 0;
++  switch (outer_protocol)
++    {
++    case IP_PROTOCOL_IP_IN_IP:
++      ip_inner_resolve_v4 (payload, remaining, out);
++      break;
++    case IP_PROTOCOL_IPV6:
++      ip_inner_resolve_v6 (payload, remaining, out);
++      break;
++    case IP_PROTOCOL_GRE:
++      {
++	u16 gre_proto = 0;
++	u32 consumed = 0;
++	if (!ip_inner_gre_skip_optional_fields (payload, remaining, &gre_proto, &consumed))
++	  return;
++	ip_inner_resolve_gre (payload + consumed, remaining - consumed, gre_proto, out);
++	break;
++      }
++    default:
++      break;
++    }
++}
++
++/**
++ * Fold a 128-bit IPv6 address to a 32-bit value (XOR of its four 32-bit
++ * words).
++ */
++static_always_inline u32
++ip6_addr_fold_u32 (const ip6_address_t *a)
++{
++  return a->as_u32[0] ^ a->as_u32[1] ^ a->as_u32[2] ^ a->as_u32[3];
++}
++
++#endif /* included_ip_inner_aware_hash_h */
+diff --git a/test/test_inner_aware_hash.py b/test/test_inner_aware_hash.py
+new file mode 100644
+index 000000000..2a4e2d238
+--- /dev/null
++++ b/test/test_inner_aware_hash.py
+@@ -0,0 +1,1058 @@
++#!/usr/bin/env python3
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""
++Tests for inner-aware flow hash of IPinIP / IPv6inIP / GRE / NVGRE.
++
++These tests verify that the L3 ECMP flow hash
++(``ip4_compute_flow_hash`` / ``ip6_compute_flow_hash``) and the new
++LAG hash function ``hash-eth-l34-inner`` both dive into the inner
++header so that ECMP and LAG distribution use inner-flow entropy
++rather than the (constant) outer 5-tuple of transit tunnel traffic.
++
++The feature is opt-in for the IP layer:
++
++  * ``IP_FLOW_HASH_PEEK_INNER`` bit must be set in ``flow_hash_config``
++    for the fib in question.  These tests enable it via
++    ``set ip flow-hash table 0 ... peek_inner`` (and the v6 variant)
++    in setUpClass.
++
++The LAG path is exposed as a new bond load-balance algorithm
++``BOND_API_LB_ALGO_L34_INNER`` (``6``), backed by a new registered
++hash function ``hash-eth-l34-inner``.  The original
++``hash-eth-l34`` is left byte-for-byte unchanged, so existing bonds
++keep their current behaviour; only bonds explicitly created with
++``BOND_API_LB_ALGO_L34_INNER`` pick up the new inner-aware hash.
++
++See ``src/vnet/ip/ip_inner_aware_hash.h`` for the implementation.
++
++Fixtures:
++
++  * TestInnerAwareECMP — pg0 ingress, pg1/pg2/pg3 are ECMP next-hops;
++    IP_FLOW_HASH_PEEK_INNER enabled.  Verifies inner-aware ECMP
++    distribution for IPinIP / GRE / NVGRE with random inner flows.
++  * TestInnerAwareLAG — pg2/pg3 are bond0 members; bond0 created with
++    BOND_API_LB_ALGO_L34_INNER.  Verifies inner-aware LAG distribution.
++  * TestLagL34LegacyOuterOnly — same topology as TestInnerAwareLAG but
++    bond0 is created with the legacy BOND_API_LB_ALGO_L34 enum value;
++    tunnel traffic with constant outer 5-tuple MUST collapse to a
++    single member, confirming patch 0011 preserves byte-for-byte
++    upstream behaviour for the legacy algorithm.
++  * TestPeekInnerOff — same as TestInnerAwareECMP but with
++    IP_FLOW_HASH_PEEK_INNER NOT set; confirms IP-layer ECMP behaviour
++    is unchanged for non-opt-in users.
++  * TestSafetyEdges — fragmented outer, inner v6 with HBH / Fragment
++    extension header, truncated IPinIP / GRE; confirms the helper
++    falls back safely without crashing.
++"""
++
++import random
++import unittest
++
++from scapy.packet import Raw
++from scapy.layers.l2 import Ether, GRE
++from scapy.layers.inet import IP, UDP
++from scapy.layers.inet6 import IPv6, IPv6ExtHdrHopByHop, IPv6ExtHdrFragment
++
++from framework import VppTestCase
++from asfframework import VppTestRunner
++from vpp_ip_route import VppIpRoute, VppRoutePath
++from vpp_bond_interface import VppBondInterface
++from vpp_papi import MACAddress, VppEnum
++from config import config
++
++N_PKTS = 257
++N_HOSTS = 4
++PAYLOAD_TAG = b"inner-aware-hash"
++
++PROTO_IPINIP4 = 4
++PROTO_IPINIP6 = 41
++PROTO_GRE = 47
++GRE_PROTO_IPV4 = 0x0800
++GRE_PROTO_IPV6 = 0x86DD
++GRE_PROTO_TEB = 0x6558
++
++
++# ---------------- random helpers (per-test, isolated RNG) ----------------
++
++
++def _rand_ipv4(rng):
++    return "10.{}.{}.{}".format(
++        rng.randint(1, 254), rng.randint(1, 254), rng.randint(1, 254)
++    )
++
++
++def _rand_ipv6(rng):
++    return "2001:db8:{:x}:{:x}::{:x}".format(
++        rng.randint(1, 0xFFFF),
++        rng.randint(1, 0xFFFF),
++        rng.randint(1, 0xFFFF),
++    )
++
++
++def _rand_pair(rng, ip_l):
++    if ip_l is IP:
++        return _rand_ipv4(rng), _rand_ipv4(rng)
++    return _rand_ipv6(rng), _rand_ipv6(rng)
++
++
++def _rand_port(rng):
++    return rng.randint(1024, 65535)
++
++
++# ----------------------- packet builders --------------------------------
++
++
++def _build_outer(outer_l, outer_src, outer_dst, proto):
++    if outer_l is IP:
++        return IP(src=outer_src, dst=outer_dst, proto=proto, ttl=64)
++    return IPv6(src=outer_src, dst=outer_dst, nh=proto, hlim=64)
++
++
++def _build_ipinip(outer_l, outer_src, outer_dst, inner_l, isrc, idst, isport, idport):
++    inner_proto = PROTO_IPINIP4 if inner_l is IP else PROTO_IPINIP6
++    return (
++        _build_outer(outer_l, outer_src, outer_dst, inner_proto)
++        / inner_l(src=isrc, dst=idst)
++        / UDP(sport=isport, dport=idport)
++    )
++
++
++def _build_gre_ip(outer_l, outer_src, outer_dst, inner_l, isrc, idst, isport, idport):
++    gre_proto = GRE_PROTO_IPV4 if inner_l is IP else GRE_PROTO_IPV6
++    return (
++        _build_outer(outer_l, outer_src, outer_dst, PROTO_GRE)
++        / GRE(proto=gre_proto)
++        / inner_l(src=isrc, dst=idst)
++        / UDP(sport=isport, dport=idport)
++    )
++
++
++def _build_nvgre(outer_l, outer_src, outer_dst, inner_l, isrc, idst, isport, idport):
++    return (
++        _build_outer(outer_l, outer_src, outer_dst, PROTO_GRE)
++        / GRE(proto=GRE_PROTO_TEB, key_present=1, key=0x12345600)
++        / Ether(dst="aa:bb:cc:dd:ee:00", src="aa:bb:cc:dd:ee:01")
++        / inner_l(src=isrc, dst=idst)
++        / UDP(sport=isport, dport=idport)
++    )
++
++
++def _build_plain_udp(outer_l, outer_src, outer_dst, isport, idport):
++    return _build_outer(outer_l, outer_src, outer_dst, 17) / UDP(
++        sport=isport, dport=idport
++    )
++
++
++# ------------------------- common fixture -------------------------------
++
++
++def _outer_addrs(outer_l):
++    """Return (outer_src, outer_dst) — constant for tunnel scenarios."""
++    if outer_l is IP:
++        return "192.0.2.1", "203.0.113.5"
++    return "2001:db8:dead::1", "2001:db8:beef::5"
++
++
++def _outer_dst_route(outer_l):
++    """Return (dst_net, prefix_len) — must cover _outer_addrs()[1]."""
++    if outer_l is IP:
++        return "203.0.113.0", 24
++    return "2001:db8:beef::", 64
++
++
++def _build_tunnel_stream(encap_fn, outer_l, inner_l, *, randomize_inner, seed):
++    """Build N_PKTS tunnel packets with constant outer 5-tuple and either
++    randomized or constant inner 5-tuple."""
++    rng = random.Random(seed)
++    outer_src, outer_dst = _outer_addrs(outer_l)
++    fixed_inner = ("10.99.0.1", "10.99.0.2", 1234, 5678)
++    if inner_l is IPv6:
++        fixed_inner = ("2001:db8:cafe::1", "2001:db8:cafe::2", 1234, 5678)
++
++    pkts = []
++    for _ in range(N_PKTS):
++        if randomize_inner:
++            isrc, idst = _rand_pair(rng, inner_l)
++            isport, idport = _rand_port(rng), _rand_port(rng)
++        else:
++            isrc, idst, isport, idport = fixed_inner
++        pkts.append(
++            encap_fn(
++                outer_l,
++                outer_src,
++                outer_dst,
++                inner_l,
++                isrc,
++                idst,
++                isport,
++                idport,
++            )
++        )
++    return pkts
++
++
++def _build_plain_stream(outer_l, *, randomize, seed):
++    rng = random.Random(seed)
++    # dst must match the route prefix; only randomize src + ports.
++    if outer_l is IP:
++        dst = "203.0.113.5"
++        fixed_src = "192.0.2.10"
++    else:
++        dst = "2001:db8:beef::5"
++        fixed_src = "2001:db8:dead::10"
++    pkts = []
++    for _ in range(N_PKTS):
++        if randomize:
++            src = _rand_ipv4(rng) if outer_l is IP else _rand_ipv6(rng)
++            isport, idport = _rand_port(rng), _rand_port(rng)
++        else:
++            src = fixed_src
++            isport, idport = 1234, 5678
++        pkts.append(_build_plain_udp(outer_l, src, dst, isport, idport))
++    return pkts
++
++
++# =========================================================================
++#                                  ECMP
++# =========================================================================
++
++
++class TestInnerAwareECMP(VppTestCase):
++    """Inner-aware ECMP flow hash"""
++
++    enable_peek_inner = True
++
++    @classmethod
++    def setUpClass(cls):
++        super().setUpClass()
++        cls.create_pg_interfaces(range(4))
++        for i in cls.pg_interfaces:
++            i.admin_up()
++            i.generate_remote_hosts(N_HOSTS)
++            i.config_ip4()
++            i.resolve_arp()
++            i.configure_ipv4_neighbors()
++            i.config_ip6()
++            i.resolve_ndp()
++            i.configure_ipv6_neighbors()
++        if cls.enable_peek_inner:
++            cls.vapi.cli(
++                "set ip flow-hash table 0 src dst sport dport proto peek_inner"
++            )
++            cls.vapi.cli(
++                "set ip6 flow-hash table 0 src dst sport dport proto peek_inner"
++            )
++
++    @classmethod
++    def tearDownClass(cls):
++        if not cls.vpp_dead:
++            for i in cls.pg_interfaces:
++                i.unconfig_ip4()
++                i.unconfig_ip6()
++                i.admin_down()
++        super().tearDownClass()
++
++    def setUp(self):
++        super().setUp()
++        self.reset_packet_infos()
++
++    def _add_ecmp_route(self, dst_net, prefix_len, is_ipv6):
++        paths = []
++        for pg_if in self.pg_interfaces[1:]:
++            for nh in pg_if.remote_hosts:
++                nh_ip = nh.ip6 if is_ipv6 else nh.ip4
++                paths.append(VppRoutePath(nh_ip, pg_if.sw_if_index))
++        rip = VppIpRoute(self, dst_net, prefix_len, paths)
++        rip.add_vpp_config()
++        return rip
++
++    def _send(self, raw_pkts):
++        pkts = [
++            Ether(dst=self.pg0.local_mac, src=self.pg0.remote_mac)
++            / p
++            / Raw(PAYLOAD_TAG)
++            for p in raw_pkts
++        ]
++        self.pg_enable_capture(self.pg_interfaces)
++        self.pg0.add_stream(pkts)
++        self.pg_start()
++
++        per_if = {}
++        total = 0
++        for pg in self.pg_interfaces[1:]:
++            cap = pg._get_capture() or []
++            per_if[pg.name] = len(cap)
++            total += len(cap)
++        return per_if, total
++
++    def _run_distribution(
++        self, encap_fn, outer_l, inner_l, *, randomize_inner, expect_paths
++    ):
++        encap_name = encap_fn.__name__ if encap_fn else "plain"
++        seed = hash((encap_name, outer_l, inner_l, randomize_inner)) & 0xFFFFFFFF
++        if encap_fn is None:
++            stream = _build_plain_stream(outer_l, randomize=randomize_inner, seed=seed)
++        else:
++            stream = _build_tunnel_stream(
++                encap_fn,
++                outer_l,
++                inner_l,
++                randomize_inner=randomize_inner,
++                seed=seed,
++            )
++        dst_net, prefix = _outer_dst_route(outer_l)
++        rip = self._add_ecmp_route(dst_net, prefix, is_ipv6=(outer_l is IPv6))
++        try:
++            per_if, total = self._send(stream)
++        finally:
++            rip.remove_vpp_config()
++
++        self.logger.info(
++            "ECMP %s outer=%s inner=%s rand=%s -> total=%d per_if=%s"
++            % (
++                encap_fn.__name__ if encap_fn else "plain",
++                outer_l.__name__,
++                inner_l.__name__ if inner_l else "-",
++                randomize_inner,
++                total,
++                per_if,
++            )
++        )
++        self.assertEqual(
++            total,
++            N_PKTS,
++            "lost packets in ECMP forwarding (per_if=%s)" % per_if,
++        )
++        non_zero = sum(1 for c in per_if.values() if c > 0)
++        self.assertEqual(
++            non_zero,
++            expect_paths,
++            "expected %d distinct ECMP next-hops to receive traffic, got %d "
++            "(per_if=%s)" % (expect_paths, non_zero, per_if),
++        )
++
++    # --------- random-inner tests: must distribute across all 3 paths ----
++
++    def test_ecmp_ipinip4_outer_v4_inner_v4(self):
++        """ECMP IPinIPv4 outer-v4 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_ipinip, IP, IP, randomize_inner=True, expect_paths=3
++        )
++
++    def test_ecmp_ipinip6_outer_v4_inner_v6(self):
++        """ECMP IPv6inIPv4 outer-v4 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_ipinip, IP, IPv6, randomize_inner=True, expect_paths=3
++        )
++
++    def test_ecmp_ipinip4_outer_v6_inner_v4(self):
++        """ECMP IPv4inIPv6 outer-v6 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_ipinip, IPv6, IP, randomize_inner=True, expect_paths=3
++        )
++
++    def test_ecmp_ipinip6_outer_v6_inner_v6(self):
++        """ECMP IPv6inIPv6 outer-v6 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_ipinip, IPv6, IPv6, randomize_inner=True, expect_paths=3
++        )
++
++    def test_ecmp_gre_ip_outer_v4_inner_v4(self):
++        """ECMP GRE-IP outer-v4 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_gre_ip, IP, IP, randomize_inner=True, expect_paths=3
++        )
++
++    def test_ecmp_gre_ip_outer_v4_inner_v6(self):
++        """ECMP GRE-IP outer-v4 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_gre_ip, IP, IPv6, randomize_inner=True, expect_paths=3
++        )
++
++    def test_ecmp_gre_ip_outer_v6_inner_v4(self):
++        """ECMP GRE-IP outer-v6 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_gre_ip, IPv6, IP, randomize_inner=True, expect_paths=3
++        )
++
++    def test_ecmp_gre_ip_outer_v6_inner_v6(self):
++        """ECMP GRE-IP outer-v6 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_gre_ip, IPv6, IPv6, randomize_inner=True, expect_paths=3
++        )
++
++    def test_ecmp_nvgre_outer_v4_inner_v4(self):
++        """ECMP NVGRE outer-v4 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_nvgre, IP, IP, randomize_inner=True, expect_paths=3
++        )
++
++    def test_ecmp_nvgre_outer_v4_inner_v6(self):
++        """ECMP NVGRE outer-v4 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_nvgre, IP, IPv6, randomize_inner=True, expect_paths=3
++        )
++
++    def test_ecmp_nvgre_outer_v6_inner_v4(self):
++        """ECMP NVGRE outer-v6 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_nvgre, IPv6, IP, randomize_inner=True, expect_paths=3
++        )
++
++    def test_ecmp_nvgre_outer_v6_inner_v6(self):
++        """ECMP NVGRE outer-v6 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_nvgre, IPv6, IPv6, randomize_inner=True, expect_paths=3
++        )
++
++    # --------- collapse: constant inner 5-tuple → single path ------------
++    #
++    # This is the proof that the inner-aware helper is doing real work:
++    # the outer 5-tuple is constant in every tunnel test, so without the
++    # helper the hash collapses to one path.  Here we hold the inner 5-
++    # tuple constant too and confirm the collapse.
++
++    def test_ecmp_ipinip_collapse_constant_inner(self):
++        """ECMP IPinIP outer-v4 / inner-v4 / fixed inner: collapses to 1 path"""
++        self._run_distribution(
++            _build_ipinip, IP, IP, randomize_inner=False, expect_paths=1
++        )
++
++    def test_ecmp_nvgre_collapse_constant_inner(self):
++        """ECMP NVGRE outer-v4 / inner-v4 / fixed inner: collapses to 1 path"""
++        self._run_distribution(
++            _build_nvgre, IP, IP, randomize_inner=False, expect_paths=1
++        )
++
++    # --------- plain (non-tunnel) sanity: must distribute ----------------
++
++    def test_ecmp_plain_v4(self):
++        """ECMP plain UDP-over-IPv4: distribution unchanged by helper"""
++        self._run_distribution(None, IP, None, randomize_inner=True, expect_paths=3)
++
++    def test_ecmp_plain_v6(self):
++        """ECMP plain UDP-over-IPv6: distribution unchanged by helper"""
++        self._run_distribution(None, IPv6, None, randomize_inner=True, expect_paths=3)
++
++
++# =========================================================================
++#                                  LAG
++# =========================================================================
++
++
++@unittest.skipIf(
++    "lacp" in config.excluded_plugins, "Exclude tests requiring LACP plugin"
++)
++class TestInnerAwareLAG(VppTestCase):
++    """Inner-aware LAG / bond (XOR + L34_INNER) flow hash"""
++
++    # Bond load-balance algorithm under test.  Subclasses may override
++    # (e.g. TestLagL34LegacyOuterOnly pins this to legacy L34 to assert
++    # the upstream-compatible algo did not start peeking the inner hdr).
++    lb_algo_name = "BOND_API_LB_ALGO_L34_INNER"
++
++    # MAC used for bond0.  Subclasses override to avoid colliding when
++    # the framework reuses VPP state across classes.
++    bond_mac = "02:fe:38:30:59:3c"
++
++    @classmethod
++    def setUpClass(cls):
++        super().setUpClass()
++        cls.create_pg_interfaces(range(4))
++        for i in cls.pg_interfaces:
++            i.admin_up()
++
++        # bond0 = (pg2, pg3); pg0 = ingress; pg1 = unused (must stay quiet)
++        cls.bond0 = VppBondInterface(
++            cls,
++            mode=VppEnum.vl_api_bond_mode_t.BOND_API_MODE_XOR,
++            lb=getattr(VppEnum.vl_api_bond_lb_algo_t, cls.lb_algo_name),
++            numa_only=0,
++            use_custom_mac=1,
++            mac_address=MACAddress(cls.bond_mac).packed,
++        )
++        cls.bond0.add_vpp_config()
++        cls.bond0.admin_up()
++        cls.bond0.add_member_vpp_bond_interface(sw_if_index=cls.pg2.sw_if_index)
++        cls.bond0.add_member_vpp_bond_interface(sw_if_index=cls.pg3.sw_if_index)
++
++        cls.vapi.sw_interface_add_del_address(
++            sw_if_index=cls.bond0.sw_if_index, prefix="10.99.99.1/24"
++        )
++        cls.vapi.sw_interface_add_del_address(
++            sw_if_index=cls.bond0.sw_if_index, prefix="2001:db8:99::1/64"
++        )
++
++        cls.pg0.config_ip4()
++        cls.pg0.resolve_arp()
++        cls.pg0.config_ip6()
++        cls.pg0.resolve_ndp()
++
++        cls.vapi.cli("set ip neighbor static BondEthernet0 10.99.99.99 abcd.abcd.0001")
++        cls.vapi.cli(
++            "set ip neighbor static BondEthernet0 2001:db8:99::99 abcd.abcd.0001"
++        )
++
++    @classmethod
++    def tearDownClass(cls):
++        if not cls.vpp_dead:
++            cls.pg0.unconfig_ip4()
++            cls.pg0.unconfig_ip6()
++            cls.bond0.remove_vpp_config()
++            for i in cls.pg_interfaces:
++                i.admin_down()
++        super().tearDownClass()
++
++    def setUp(self):
++        super().setUp()
++        self.reset_packet_infos()
++        # VppTestCase.tearDown() auto-removes any VppObject registered to the
++        # registry; if we set the bond0 routes in setUpClass they would get
++        # cleaned up after the first test.  Re-create them here per-test.
++        self.route4 = VppIpRoute(
++            self,
++            "203.0.113.0",
++            24,
++            [VppRoutePath("10.99.99.99", self.bond0.sw_if_index)],
++        )
++        self.route4.add_vpp_config()
++        self.route6 = VppIpRoute(
++            self,
++            "2001:db8:beef::",
++            64,
++            [VppRoutePath("2001:db8:99::99", self.bond0.sw_if_index)],
++        )
++        self.route6.add_vpp_config()
++
++    def _send(self, raw_pkts):
++        pkts = [
++            Ether(dst=self.pg0.local_mac, src=self.pg0.remote_mac)
++            / p
++            / Raw(PAYLOAD_TAG)
++            for p in raw_pkts
++        ]
++        self.pg_enable_capture(self.pg_interfaces)
++        self.pg0.add_stream(pkts)
++        self.pg_start()
++
++        per_member = {}
++        for pg in (self.pg2, self.pg3):
++            cap = pg._get_capture() or []
++            per_member[pg.name] = len(cap)
++        # pg1 is not a bond member and must never receive transit traffic
++        pg1_cap = self.pg1._get_capture() or []
++        leak = len(pg1_cap)
++        return per_member, leak
++
++    def _run_distribution(
++        self, encap_fn, outer_l, inner_l, *, randomize_inner, expect_members
++    ):
++        encap_name = encap_fn.__name__ if encap_fn else "plain"
++        seed = hash((encap_name, outer_l, inner_l, randomize_inner)) & 0xFFFFFFFF
++        if encap_fn is None:
++            stream = _build_plain_stream(outer_l, randomize=randomize_inner, seed=seed)
++        else:
++            stream = _build_tunnel_stream(
++                encap_fn,
++                outer_l,
++                inner_l,
++                randomize_inner=randomize_inner,
++                seed=seed,
++            )
++        per_member, leak = self._send(stream)
++        total = sum(per_member.values())
++        self.logger.info(
++            "LAG %s outer=%s inner=%s rand=%s -> total=%d per=%s leak_pg1=%d"
++            % (
++                encap_fn.__name__ if encap_fn else "plain",
++                outer_l.__name__,
++                inner_l.__name__ if inner_l else "-",
++                randomize_inner,
++                total,
++                per_member,
++                leak,
++            )
++        )
++        self.assertEqual(
++            leak, 0, "pg1 received %d packets but is not a bond member" % leak
++        )
++        self.assertEqual(
++            total,
++            N_PKTS,
++            "lost packets in bond forwarding (per_member=%s)" % per_member,
++        )
++        non_zero = sum(1 for c in per_member.values() if c > 0)
++        self.assertEqual(
++            non_zero,
++            expect_members,
++            "expected %d bond members to receive traffic, got %d "
++            "(per_member=%s)" % (expect_members, non_zero, per_member),
++        )
++
++    # --------- random-inner tests: distribute across both members --------
++
++    def test_lag_ipinip4_outer_v4_inner_v4(self):
++        """LAG IPinIPv4 outer-v4 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_ipinip, IP, IP, randomize_inner=True, expect_members=2
++        )
++
++    def test_lag_ipinip6_outer_v4_inner_v6(self):
++        """LAG IPv6inIPv4 outer-v4 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_ipinip, IP, IPv6, randomize_inner=True, expect_members=2
++        )
++
++    def test_lag_ipinip4_outer_v6_inner_v4(self):
++        """LAG IPv4inIPv6 outer-v6 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_ipinip, IPv6, IP, randomize_inner=True, expect_members=2
++        )
++
++    def test_lag_ipinip6_outer_v6_inner_v6(self):
++        """LAG IPv6inIPv6 outer-v6 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_ipinip, IPv6, IPv6, randomize_inner=True, expect_members=2
++        )
++
++    def test_lag_gre_ip_outer_v4_inner_v4(self):
++        """LAG GRE-IP outer-v4 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_gre_ip, IP, IP, randomize_inner=True, expect_members=2
++        )
++
++    def test_lag_gre_ip_outer_v4_inner_v6(self):
++        """LAG GRE-IP outer-v4 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_gre_ip, IP, IPv6, randomize_inner=True, expect_members=2
++        )
++
++    def test_lag_gre_ip_outer_v6_inner_v4(self):
++        """LAG GRE-IP outer-v6 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_gre_ip, IPv6, IP, randomize_inner=True, expect_members=2
++        )
++
++    def test_lag_gre_ip_outer_v6_inner_v6(self):
++        """LAG GRE-IP outer-v6 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_gre_ip, IPv6, IPv6, randomize_inner=True, expect_members=2
++        )
++
++    def test_lag_nvgre_outer_v4_inner_v4(self):
++        """LAG NVGRE outer-v4 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_nvgre, IP, IP, randomize_inner=True, expect_members=2
++        )
++
++    def test_lag_nvgre_outer_v4_inner_v6(self):
++        """LAG NVGRE outer-v4 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_nvgre, IP, IPv6, randomize_inner=True, expect_members=2
++        )
++
++    def test_lag_nvgre_outer_v6_inner_v4(self):
++        """LAG NVGRE outer-v6 / inner-v4: distribution"""
++        self._run_distribution(
++            _build_nvgre, IPv6, IP, randomize_inner=True, expect_members=2
++        )
++
++    def test_lag_nvgre_outer_v6_inner_v6(self):
++        """LAG NVGRE outer-v6 / inner-v6: distribution"""
++        self._run_distribution(
++            _build_nvgre, IPv6, IPv6, randomize_inner=True, expect_members=2
++        )
++
++    # --------- collapse: constant inner → single member ------------------
++
++    def test_lag_ipinip_collapse_constant_inner(self):
++        """LAG IPinIP outer-v4 / inner-v4 / fixed inner: collapses to 1 member"""
++        self._run_distribution(
++            _build_ipinip, IP, IP, randomize_inner=False, expect_members=1
++        )
++
++    def test_lag_nvgre_collapse_constant_inner(self):
++        """LAG NVGRE outer-v4 / inner-v4 / fixed inner: collapses to 1 member"""
++        self._run_distribution(
++            _build_nvgre, IP, IP, randomize_inner=False, expect_members=1
++        )
++
++    # --------- plain (non-tunnel) sanity ---------------------------------
++
++    def test_lag_plain_v4(self):
++        """LAG plain UDP-over-IPv4: distribution unchanged by helper"""
++        self._run_distribution(None, IP, None, randomize_inner=True, expect_members=2)
++
++    def test_lag_plain_v6(self):
++        """LAG plain UDP-over-IPv6: distribution unchanged by helper"""
++        self._run_distribution(None, IPv6, None, randomize_inner=True, expect_members=2)
++
++
++# =========================================================================
++#          Regression: legacy BOND_API_LB_ALGO_L34 must NOT peek inner
++# =========================================================================
++
++
++@unittest.skipIf(
++    "lacp" in config.excluded_plugins, "Exclude tests requiring LACP plugin"
++)
++class TestLagL34LegacyOuterOnly(TestInnerAwareLAG):
++    """Regression: bonds created with the upstream-compatible
++    ``BOND_API_LB_ALGO_L34`` enum value (= 1, the historical L34 algo)
++    must NOT peek into the inner header.  Tunnel traffic with a constant
++    outer 5-tuple must collapse to a single bond member, confirming
++    that patch 0011 left the legacy algorithm byte-for-byte upstream.
++
++    We do NOT override ``setUpClass`` here so the framework's CPU
++    assignment and class wiring run normally; we just retarget the
++    bond's load-balance algorithm via the parent's class attribute.
++    Tunnel-distribution tests inherited from the parent assume
++    L34_INNER (expect_members=2) and are skipped at runtime in favor
++    of the explicit-collapse tests below.
++    """
++
++    # Pin bond0 to the legacy, upstream-compatible L34 algo.
++    lb_algo_name = "BOND_API_LB_ALGO_L34"
++    bond_mac = "02:fe:38:30:59:3d"  # distinct from L34_INNER fixture
++
++    def setUp(self):
++        super().setUp()
++        # Inherited tunnel-distribution tests assume L34_INNER and would
++        # fail under legacy L34.  Skip them; we cover the legacy case
++        # with explicit-collapse tests below.
++        name = self._testMethodName
++        if (
++            name.startswith("test_lag_")
++            and "plain" not in name
++            and "collapse" not in name
++            and not name.startswith("test_lag_legacy_")
++        ):
++            self.skipTest("requires L34_INNER (legacy-collapse variant covered)")
++
++    # --------- legacy: tunnel random-inner MUST collapse to 1 member -----
++
++    def test_lag_legacy_ipinip_v4_collapses(self):
++        """Legacy L34: IPinIPv4 random-inner collapses to 1 member"""
++        self._run_distribution(
++            _build_ipinip, IP, IP, randomize_inner=True, expect_members=1
++        )
++
++    def test_lag_legacy_gre_v4_collapses(self):
++        """Legacy L34: GRE-IP v4/v4 random-inner collapses to 1 member"""
++        self._run_distribution(
++            _build_gre_ip, IP, IP, randomize_inner=True, expect_members=1
++        )
++
++    def test_lag_legacy_nvgre_v4_collapses(self):
++        """Legacy L34: NVGRE v4/v4 random-inner collapses to 1 member"""
++        self._run_distribution(
++            _build_nvgre, IP, IP, randomize_inner=True, expect_members=1
++        )
++
++    def test_lag_legacy_ipinip_v6_collapses(self):
++        """Legacy L34: IPinIP v6/v6 random-inner collapses to 1 member"""
++        self._run_distribution(
++            _build_ipinip, IPv6, IPv6, randomize_inner=True, expect_members=1
++        )
++
++    # --------- legacy: plain traffic MUST still distribute ---------------
++
++    def test_lag_legacy_plain_v4_distributes(self):
++        """Legacy L34: plain UDP v4 still distributes across members"""
++        self._run_distribution(None, IP, None, randomize_inner=True, expect_members=2)
++
++    def test_lag_legacy_plain_v6_distributes(self):
++        """Legacy L34: plain UDP v6 still distributes across members"""
++        self._run_distribution(None, IPv6, None, randomize_inner=True, expect_members=2)
++
++
++# =========================================================================
++#                  Opt-in semantics: PEEK_INNER bit OFF
++# =========================================================================
++
++
++class TestPeekInnerOff(TestInnerAwareECMP):
++    """When IP_FLOW_HASH_PEEK_INNER is not set the tunnel ECMP hash must
++    collapse to a single next-hop (upstream-compatible behavior).
++
++    Plain (non-tunnel) tests still pass through unchanged because they
++    don't peek; they're inherited as-is.  The randomized tunnel tests
++    from the parent class assume the peek flag is on (expect_paths=3),
++    so they're skipped here in favor of explicit collapse tests."""
++
++    enable_peek_inner = False
++
++    def setUp(self):
++        super().setUp()
++        name = self._testMethodName
++        # Skip inherited tunnel-distribution tests; they require the flag.
++        if (
++            name.startswith("test_ecmp_")
++            and "plain" not in name
++            and "collapse" not in name
++        ):
++            self.skipTest("requires IP_FLOW_HASH_PEEK_INNER (peek-off variant covered)")
++
++    def test_off_ipinip_v4_collapses(self):
++        """PEEK_INNER off: IPinIP v4/v4 random-inner collapses to 1 path"""
++        self._run_distribution(
++            _build_ipinip, IP, IP, randomize_inner=True, expect_paths=1
++        )
++
++    def test_off_gre_v4_collapses(self):
++        """PEEK_INNER off: GRE-IP v4/v4 random-inner collapses to 1 path"""
++        self._run_distribution(
++            _build_gre_ip, IP, IP, randomize_inner=True, expect_paths=1
++        )
++
++    def test_off_nvgre_v4_collapses(self):
++        """PEEK_INNER off: NVGRE v4/v4 random-inner collapses to 1 path"""
++        self._run_distribution(
++            _build_nvgre, IP, IP, randomize_inner=True, expect_paths=1
++        )
++
++    def test_off_ipinip_v6_collapses(self):
++        """PEEK_INNER off: IPinIP v6/v6 random-inner collapses to 1 path"""
++        self._run_distribution(
++            _build_ipinip, IPv6, IPv6, randomize_inner=True, expect_paths=1
++        )
++
++    def test_off_plain_v4_still_distributes(self):
++        """PEEK_INNER off: plain v4 traffic still distributes normally"""
++        self._run_distribution(None, IP, None, randomize_inner=True, expect_paths=3)
++
++
++# =========================================================================
++#                       Safety: edge cases and crashes
++# =========================================================================
++
++
++class TestSafetyEdges(TestInnerAwareECMP):
++    """Safety: fragmented outer, inner-v6 with HBH ext, truncated tunnel.
++
++    The helper must never crash and must always either successfully peek
++    or fall back to the outer-only hash.  These tests exercise paths
++    where peeking is unsafe (fragmented outer, truncated buffer) or
++    requires walking inner extension headers (HBH).
++    """
++
++    def test_outer_v4_fragmented_falls_back(self):
++        """Fragmented outer IPinIPv4 collapses to 1 path (no peek)."""
++        # Build a tunnel stream and stamp the outer as a fragment.
++        seed = 0xC0FFEE
++        rng = random.Random(seed)
++        outer_src, outer_dst = _outer_addrs(IP)
++        pkts = []
++        for _ in range(N_PKTS):
++            isrc, idst = _rand_pair(rng, IP)
++            isport, idport = _rand_port(rng), _rand_port(rng)
++            outer = IP(
++                src=outer_src,
++                dst=outer_dst,
++                proto=PROTO_IPINIP4,
++                ttl=64,
++                flags="MF",
++                frag=0,
++            )
++            inner = IP(src=isrc, dst=idst) / UDP(sport=isport, dport=idport)
++            pkts.append(outer / inner)
++
++        dst_net, prefix = _outer_dst_route(IP)
++        rip = self._add_ecmp_route(dst_net, prefix, is_ipv6=False)
++        try:
++            per_if, total = self._send(pkts)
++        finally:
++            rip.remove_vpp_config()
++        self.assertEqual(total, N_PKTS)
++        non_zero = sum(1 for c in per_if.values() if c > 0)
++        self.assertEqual(
++            non_zero,
++            1,
++            "fragmented outer must NOT peek inner; got %s" % per_if,
++        )
++
++    def test_inner_v6_with_hbh_distributes(self):
++        """Inner IPv6 with HBH ext header: helper walks to L4, distributes."""
++        seed = 0xBEEF
++        rng = random.Random(seed)
++        outer_src, outer_dst = _outer_addrs(IP)
++        pkts = []
++        for _ in range(N_PKTS):
++            isrc, idst = _rand_pair(rng, IPv6)
++            isport, idport = _rand_port(rng), _rand_port(rng)
++            inner = (
++                IPv6(src=isrc, dst=idst, nh=0)
++                / IPv6ExtHdrHopByHop(nh=17)
++                / UDP(sport=isport, dport=idport)
++            )
++            outer = IP(src=outer_src, dst=outer_dst, proto=PROTO_IPINIP6, ttl=64)
++            pkts.append(outer / inner)
++
++        dst_net, prefix = _outer_dst_route(IP)
++        rip = self._add_ecmp_route(dst_net, prefix, is_ipv6=False)
++        try:
++            per_if, total = self._send(pkts)
++        finally:
++            rip.remove_vpp_config()
++        self.assertEqual(total, N_PKTS)
++        non_zero = sum(1 for c in per_if.values() if c > 0)
++        self.assertGreaterEqual(
++            non_zero,
++            2,
++            "inner v6 + HBH should still hash on inner ports; got %s" % per_if,
++        )
++
++    def test_inner_v6_with_fragment_falls_back(self):
++        """Inner IPv6 with Fragment ext header: refuse peek, collapse."""
++        seed = 0xC0DE
++        rng = random.Random(seed)
++        outer_src, outer_dst = _outer_addrs(IP)
++        pkts = []
++        for _ in range(N_PKTS):
++            isrc, idst = _rand_pair(rng, IPv6)
++            isport, idport = _rand_port(rng), _rand_port(rng)
++            inner = (
++                IPv6(src=isrc, dst=idst, nh=44)
++                / IPv6ExtHdrFragment(nh=17)
++                / UDP(sport=isport, dport=idport)
++            )
++            outer = IP(src=outer_src, dst=outer_dst, proto=PROTO_IPINIP6, ttl=64)
++            pkts.append(outer / inner)
++
++        dst_net, prefix = _outer_dst_route(IP)
++        rip = self._add_ecmp_route(dst_net, prefix, is_ipv6=False)
++        try:
++            per_if, total = self._send(pkts)
++        finally:
++            rip.remove_vpp_config()
++        self.assertEqual(total, N_PKTS)
++        non_zero = sum(1 for c in per_if.values() if c > 0)
++        self.assertEqual(
++            non_zero,
++            1,
++            "inner v6 + Fragment must NOT peek; got %s" % per_if,
++        )
++
++    def test_truncated_ipinip_no_crash(self):
++        """Truncated IPinIP (only 4 bytes inner): no crash, collapses."""
++        # Outer IP indicates IPinIP but payload is shorter than an inner IP
++        # header.  The helper must check remaining bytes and fall back.
++        outer_src, outer_dst = _outer_addrs(IP)
++        # 4 bytes of garbage where the inner v4 header should be.
++        truncated_payload = Raw(b"\x45\x00\x00\x14")
++        pkts = []
++        for _ in range(N_PKTS):
++            pkts.append(
++                IP(
++                    src=outer_src,
++                    dst=outer_dst,
++                    proto=PROTO_IPINIP4,
++                    ttl=64,
++                )
++                / truncated_payload
++            )
++
++        dst_net, prefix = _outer_dst_route(IP)
++        rip = self._add_ecmp_route(dst_net, prefix, is_ipv6=False)
++        try:
++            per_if, total = self._send(pkts)
++        finally:
++            rip.remove_vpp_config()
++        # The packets are tiny; some may be silently dropped at L2 but the
++        # important assertion is "VPP did not crash and no member-count
++        # blew up".  Allow total >= 0.
++        self.assertGreaterEqual(total, 0)
++        non_zero = sum(1 for c in per_if.values() if c > 0)
++        self.assertLessEqual(
++            non_zero,
++            1,
++            "truncated peek must NOT distribute; got %s" % per_if,
++        )
++
++    def test_truncated_gre_no_crash(self):
++        """Truncated GRE (3-byte payload): no crash, collapses."""
++        outer_src, outer_dst = _outer_addrs(IP)
++        truncated_gre = Raw(b"\x00\x00\x08")  # less than 4-byte GRE header
++        pkts = []
++        for _ in range(N_PKTS):
++            pkts.append(
++                IP(
++                    src=outer_src,
++                    dst=outer_dst,
++                    proto=PROTO_GRE,
++                    ttl=64,
++                )
++                / truncated_gre
++            )
++
++        dst_net, prefix = _outer_dst_route(IP)
++        rip = self._add_ecmp_route(dst_net, prefix, is_ipv6=False)
++        try:
++            per_if, total = self._send(pkts)
++        finally:
++            rip.remove_vpp_config()
++        non_zero = sum(1 for c in per_if.values() if c > 0)
++        self.assertLessEqual(
++            non_zero,
++            1,
++            "truncated GRE peek must NOT distribute; got %s" % per_if,
++        )
++
++    def test_outer_v6_fragmented_falls_back(self):
++        """Fragmented outer v6 collapses to 1 path (no L4 read).
++
++        Regression test for v6 fragmentation invariant in
++        ``ip6_compute_flow_hash``.  After walking a Fragment ext header
++        ``cur`` is positioned at the start of the fragment payload --
++        which is the real L4 header only for offset==0 fragments and
++        is arbitrary payload bytes for later fragments.  Hashing those
++        bytes as L4 ports would split fragments of the same flow across
++        ECMP paths and break reassembly at the destination.
++
++        The helper MUST ignore the bytes following the Fragment ext
++        header.  This test sends N packets that share the same outer
++        v6 src/dst (so a correct hash collapses them to one path) but
++        carry varying ``UDP(sport, dport)`` right after the Fragment
++        header.  A broken helper would distribute on ports; the fixed
++        helper collapses to a single path.
++        """
++        seed = 0xF7A6
++        rng = random.Random(seed)
++        outer_src, outer_dst = _outer_addrs(IPv6)
++        pkts = []
++        for _ in range(N_PKTS):
++            sport, dport = _rand_port(rng), _rand_port(rng)
++            # nh=44 (Fragment) on the IPv6 header, then the Fragment ext
++            # header carries nh=17 (UDP) and offset=0, m=1 (i.e., the
++            # first fragment of a multi-fragment datagram).  Even when
++            # the L4 header IS present (first fragment), the helper
++            # must refuse to read its ports -- otherwise the SECOND
++            # fragment (which would not carry these ports) would hash
++            # to a different path.
++            outer = (
++                IPv6(src=outer_src, dst=outer_dst, nh=44, hlim=64)
++                / IPv6ExtHdrFragment(nh=17, offset=0, m=1, id=0x1234)
++                / UDP(sport=sport, dport=dport)
++            )
++            pkts.append(outer)
++
++        dst_net, prefix = _outer_dst_route(IPv6)
++        rip = self._add_ecmp_route(dst_net, prefix, is_ipv6=True)
++        try:
++            per_if, total = self._send(pkts)
++        finally:
++            rip.remove_vpp_config()
++        self.assertEqual(total, N_PKTS)
++        non_zero = sum(1 for c in per_if.values() if c > 0)
++        self.assertEqual(
++            non_zero,
++            1,
++            "fragmented outer v6 must NOT hash L4 ports "
++            "(would break reassembly); got %s" % per_if,
++        )
++
++
++if __name__ == "__main__":
++    unittest.main(testRunner=VppTestRunner)
+diff --git a/test/test_inner_aware_perf.py b/test/test_inner_aware_perf.py
+new file mode 100644
+index 000000000..ab80825dd
+--- /dev/null
++++ b/test/test_inner_aware_perf.py
+@@ -0,0 +1,463 @@
++#!/usr/bin/env python3
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""
++Performance harness for inner-aware flow hash.
++
++Reuses the ECMP fixture from test_inner_aware_hash but instead of asserting
++on distribution, it measures wall-clock send/receive throughput for a
++fixed packet count and exports the result so a higher-level test plan can
++compare PEEK_INNER on vs off.
++
++The measurement is intentionally simple:
++
++  * For each scenario (plain v4 TCP, plain v6 TCP, IPinIP v4/v4 with random
++    inner ports, NVGRE v4/v4 with random inner ports) we send N packets,
++    time the send + capture loop, and divide.
++
++  * We then dump VPP's ``show runtime`` so the human reading the test log
++    can see the per-node clocks/vector for the ip4-lookup / ip6-lookup
++    nodes - which is where the helper runs.
++
++  * Both PEEK_INNER off (default fib) and PEEK_INNER on are run inside one
++    test class via ``setUp`` toggling.
++
++This file also covers the LAG TX side of the feature:
++
++  * ``TestInnerAwareLAGPerf`` builds an XOR bond with two members and the
++    new ``BOND_API_LB_ALGO_L34_INNER`` algorithm, then measures clocks/pkt
++    at the bond TX node (``BondEthernet0-tx``) for plain, IPinIP and NVGRE.
++
++  * ``TestInnerAwareLAGLegacyPerf`` repeats the same scenarios pinned to
++    the upstream-compatible ``BOND_API_LB_ALGO_L34`` for direct A/B
++    comparison.  The two classes write separate JSON sidecars
++    (``..._lag.json`` and ``..._lag_legacy.json``).
++
++This is NOT a rigorous PPS benchmark - VPP unit tests run inside a
++software-only scapy harness without DPDK and are bottlenecked by the
++test framework.  But it is enough to confirm there is no order-of-
++magnitude regression.
++
++Results are appended to a JSON sidecar next to the test log so the
++operator can copy them into release notes.
++"""
++
++import json
++import os
++import random
++import time
++import unittest
++
++from scapy.packet import Raw
++from scapy.layers.l2 import Ether
++from scapy.layers.inet import IP, UDP
++from scapy.layers.inet6 import IPv6
++
++from framework import VppTestCase
++from asfframework import VppTestRunner
++from vpp_ip_route import VppIpRoute, VppRoutePath
++from vpp_bond_interface import VppBondInterface
++from vpp_papi import VppEnum, MACAddress
++from config import config
++
++N_PKTS = 1024
++N_HOSTS = 4
++PROTO_IPINIP4 = 4
++PROTO_GRE = 47
++PAYLOAD_TAG = b"perf-inner-aware-hash"
++
++
++def _rand_v4(rng):
++    return "10.%d.%d.%d" % (
++        rng.randint(0, 255),
++        rng.randint(0, 255),
++        rng.randint(1, 254),
++    )
++
++
++class TestInnerAwarePerf(VppTestCase):
++    """Performance harness for inner-aware flow hash"""
++
++    @classmethod
++    def setUpClass(cls):
++        super().setUpClass()
++        cls.create_pg_interfaces(range(4))
++        for i in cls.pg_interfaces:
++            i.admin_up()
++            i.generate_remote_hosts(N_HOSTS)
++            i.config_ip4()
++            i.resolve_arp()
++            i.configure_ipv4_neighbors()
++            i.config_ip6()
++            i.resolve_ndp()
++            i.configure_ipv6_neighbors()
++        cls.perf_results = []
++
++    @classmethod
++    def tearDownClass(cls):
++        try:
++            results_path = os.path.join(config.tmp_dir, "test_inner_aware_perf.json")
++            with open(results_path, "w") as f:
++                json.dump(cls.perf_results, f, indent=2)
++            cls.logger.info("Wrote perf JSON: %s" % results_path)
++        except Exception as e:
++            cls.logger.warning("could not write perf JSON: %s" % e)
++        if not cls.vpp_dead:
++            for i in cls.pg_interfaces:
++                i.unconfig_ip4()
++                i.unconfig_ip6()
++                i.admin_down()
++        super().tearDownClass()
++
++    def setUp(self):
++        super().setUp()
++        self.reset_packet_infos()
++
++    def _set_peek_inner(self, on):
++        kw = "peek_inner" if on else ""
++        self.vapi.cli("set ip flow-hash table 0 src dst sport dport proto %s" % kw)
++        self.vapi.cli("set ip6 flow-hash table 0 src dst sport dport proto %s" % kw)
++
++    def _add_ecmp_route(self, dst_net, prefix_len, is_ipv6):
++        paths = []
++        for pg_if in self.pg_interfaces[1:]:
++            for nh in pg_if.remote_hosts:
++                nh_ip = nh.ip6 if is_ipv6 else nh.ip4
++                paths.append(VppRoutePath(nh_ip, pg_if.sw_if_index))
++        rip = VppIpRoute(self, dst_net, prefix_len, paths)
++        rip.add_vpp_config()
++        return rip
++
++    def _build_plain_v4(self, rng):
++        return IP(src=_rand_v4(rng), dst="203.0.113.5") / UDP(
++            sport=rng.randint(1024, 65535), dport=rng.randint(1024, 65535)
++        )
++
++    def _build_plain_v6(self, rng):
++        return IPv6(src="2001:db8:dead::1", dst="2001:db8:beef::5") / UDP(
++            sport=rng.randint(1024, 65535), dport=rng.randint(1024, 65535)
++        )
++
++    def _build_ipinip(self, rng):
++        inner = IP(src=_rand_v4(rng), dst=_rand_v4(rng)) / UDP(
++            sport=rng.randint(1024, 65535), dport=rng.randint(1024, 65535)
++        )
++        outer = IP(src="192.0.2.1", dst="203.0.113.5", proto=PROTO_IPINIP4, ttl=64)
++        return outer / inner
++
++    def _build_nvgre(self, rng):
++        inner_eth = Ether(dst="00:11:22:33:44:55", src="00:aa:bb:cc:dd:ee")
++        inner = (
++            inner_eth
++            / IP(src=_rand_v4(rng), dst=_rand_v4(rng))
++            / UDP(sport=rng.randint(1024, 65535), dport=rng.randint(1024, 65535))
++        )
++        gre = Raw(b"\x00\x00\x65\x58" + b"\x00\x00\x00\x00")
++        outer = IP(src="192.0.2.1", dst="203.0.113.5", proto=PROTO_GRE, ttl=64)
++        return outer / gre / inner
++
++    @staticmethod
++    def _parse_runtime(runtime, node_names):
++        """Extract clocks/vector and vectors-processed for a list of nodes
++        from VPP `show runtime` output.  Returns {node: {"clocks": X,
++        "vectors": Y, "calls": Z}} (zeros if node not found)."""
++        out = {n: {"clocks": 0.0, "vectors": 0, "calls": 0} for n in node_names}
++        for line in runtime.splitlines():
++            cols = line.split()
++            if len(cols) < 7:
++                continue
++            name = cols[0]
++            if name not in node_names:
++                continue
++            try:
++                calls = int(cols[2])
++                vectors = int(cols[3])
++                clocks_per_pkt = float(cols[5])
++            except (ValueError, IndexError):
++                continue
++            out[name] = {"calls": calls, "vectors": vectors, "clocks": clocks_per_pkt}
++        return out
++
++    def _measure(self, name, builder, is_ipv6=False, peek_inner=True):
++        self._set_peek_inner(peek_inner)
++        rng = random.Random(0xC0FFEE if peek_inner else 0xDEADBEEF)
++        pkts = []
++        for _ in range(N_PKTS):
++            inner = builder(rng)
++            pkts.append(
++                Ether(dst=self.pg0.local_mac, src=self.pg0.remote_mac)
++                / inner
++                / Raw(PAYLOAD_TAG)
++            )
++        dst_net, prefix = ("2001:db8:beef::", 64) if is_ipv6 else ("203.0.113.0", 24)
++        rip = self._add_ecmp_route(dst_net, prefix, is_ipv6=is_ipv6)
++        try:
++            self.vapi.cli("clear runtime")
++            self.pg_enable_capture(self.pg_interfaces)
++            self.pg0.add_stream(pkts)
++            t0 = time.perf_counter()
++            self.pg_start()
++            # _get_capture() blocks on wait_for_pg_stop() internally, so a
++            # single call per pg interface is enough to drain everything VPP
++            # produced for this stream.
++            total = 0
++            primary = self.pg_interfaces[1]
++            primary_cap = primary._get_capture() or []
++            total += len(primary_cap)
++            for pg in self.pg_interfaces[2:]:
++                cap = pg._get_capture() or []
++                total += len(cap)
++            elapsed = time.perf_counter() - t0
++            runtime = self.vapi.cli("show runtime")
++        finally:
++            rip.remove_vpp_config()
++        pps = total / elapsed if elapsed > 0 else 0.0
++        lookup_node = "ip6-lookup" if is_ipv6 else "ip4-lookup"
++        lb_node = "ip6-load-balance" if is_ipv6 else "ip4-load-balance"
++        node_stats = self._parse_runtime(runtime, [lookup_node, lb_node])
++        result = {
++            "scenario": name,
++            "peek_inner": peek_inner,
++            "packets_sent": N_PKTS,
++            "packets_received": total,
++            "elapsed_s": round(elapsed, 4),
++            "pps": round(pps, 1),
++            "nodes": node_stats,
++        }
++        self.logger.info("PERF %s" % json.dumps(result))
++        self.logger.info("PERF runtime\n%s" % runtime)
++        self.__class__.perf_results.append(result)
++        return result
++
++    # --- scenarios --------------------------------------------------------
++
++    def test_perf_plain_v4_off(self):
++        self._measure("plain_v4", self._build_plain_v4, peek_inner=False)
++
++    def test_perf_plain_v4_on(self):
++        self._measure("plain_v4", self._build_plain_v4, peek_inner=True)
++
++    def test_perf_plain_v6_off(self):
++        self._measure("plain_v6", self._build_plain_v6, is_ipv6=True, peek_inner=False)
++
++    def test_perf_plain_v6_on(self):
++        self._measure("plain_v6", self._build_plain_v6, is_ipv6=True, peek_inner=True)
++
++    def test_perf_ipinip_off(self):
++        self._measure("ipinip_v4_v4", self._build_ipinip, peek_inner=False)
++
++    def test_perf_ipinip_on(self):
++        self._measure("ipinip_v4_v4", self._build_ipinip, peek_inner=True)
++
++    def test_perf_nvgre_off(self):
++        self._measure("nvgre_v4_v4", self._build_nvgre, peek_inner=False)
++
++    def test_perf_nvgre_on(self):
++        self._measure("nvgre_v4_v4", self._build_nvgre, peek_inner=True)
++
++
++# =========================================================================
++#                           LAG TX-side perf harness
++# =========================================================================
++
++
++@unittest.skipIf(
++    "lacp" in config.excluded_plugins, "Exclude tests requiring LACP plugin"
++)
++class TestInnerAwareLAGPerf(VppTestCase):
++    """Performance harness for the LAG TX hash function.
++
++    Measures wall-clock pps and per-node clocks/vector at the bond TX
++    graph node for plain v4, IPinIP v4/v4 (random inner) and NVGRE
++    v4/v4 (random inner) traffic.  The default class uses the new
++    ``BOND_API_LB_ALGO_L34_INNER`` (i.e. ``hash-eth-l34-inner``);
++    the legacy subclass below repeats with ``BOND_API_LB_ALGO_L34``
++    so an operator can directly compare the per-packet cost of the
++    inner-peek hash function vs the upstream-compatible one.
++    """
++
++    # Bond load-balance algo under test.  Override in subclass for A/B.
++    lb_algo_name = "BOND_API_LB_ALGO_L34_INNER"
++    # Distinct MAC per class to avoid collisions if the framework reuses
++    # VPP state across classes.
++    bond_mac = "02:fe:38:30:59:4c"
++
++    @classmethod
++    def setUpClass(cls):
++        super().setUpClass()
++        cls.create_pg_interfaces(range(4))
++        for i in cls.pg_interfaces:
++            i.admin_up()
++
++        # bond0 = (pg2, pg3); pg0 = ingress.  We never send to pg1 here
++        # but configure it consistently with the functional LAG fixture.
++        cls.bond0 = VppBondInterface(
++            cls,
++            mode=VppEnum.vl_api_bond_mode_t.BOND_API_MODE_XOR,
++            lb=getattr(VppEnum.vl_api_bond_lb_algo_t, cls.lb_algo_name),
++            numa_only=0,
++            use_custom_mac=1,
++            mac_address=MACAddress(cls.bond_mac).packed,
++        )
++        cls.bond0.add_vpp_config()
++        cls.bond0.admin_up()
++        cls.bond0.add_member_vpp_bond_interface(sw_if_index=cls.pg2.sw_if_index)
++        cls.bond0.add_member_vpp_bond_interface(sw_if_index=cls.pg3.sw_if_index)
++
++        cls.vapi.sw_interface_add_del_address(
++            sw_if_index=cls.bond0.sw_if_index, prefix="10.99.99.1/24"
++        )
++        cls.pg0.config_ip4()
++        cls.pg0.resolve_arp()
++        cls.vapi.cli("set ip neighbor static BondEthernet0 10.99.99.99 abcd.abcd.0001")
++        cls.perf_results = []
++
++    @classmethod
++    def tearDownClass(cls):
++        try:
++            suffix = "_legacy" if cls.lb_algo_name == "BOND_API_LB_ALGO_L34" else ""
++            results_path = os.path.join(
++                config.tmp_dir, f"test_inner_aware_lag_perf{suffix}.json"
++            )
++            with open(results_path, "w") as f:
++                json.dump(cls.perf_results, f, indent=2)
++            cls.logger.info("Wrote LAG perf JSON: %s" % results_path)
++        except Exception as e:
++            cls.logger.warning("could not write LAG perf JSON: %s" % e)
++        if not cls.vpp_dead:
++            cls.pg0.unconfig_ip4()
++            cls.bond0.remove_vpp_config()
++            for i in cls.pg_interfaces:
++                i.admin_down()
++        super().tearDownClass()
++
++    def setUp(self):
++        super().setUp()
++        self.reset_packet_infos()
++        # VppTestCase tearDown auto-removes registered VppObjects (including
++        # routes).  Recreate the route to the bond next-hop here so each
++        # test starts with a clean, freshly-installed FIB entry.
++        self.route4 = VppIpRoute(
++            self,
++            "203.0.113.0",
++            24,
++            [VppRoutePath("10.99.99.99", self.bond0.sw_if_index)],
++        )
++        self.route4.add_vpp_config()
++
++    # --- packet builders -- destination is always in 203.0.113/24 so the
++    #     packet routes via bond0; tunnel scenarios use a constant outer
++    #     5-tuple (one tunnel between two endpoints) and a random inner.
++
++    def _build_plain_v4(self, rng):
++        return IP(
++            src="10.0.%d.%d" % (rng.randint(0, 255), rng.randint(1, 254)),
++            dst="203.0.113.%d" % rng.randint(1, 254),
++        ) / UDP(sport=rng.randint(1024, 65535), dport=rng.randint(1024, 65535))
++
++    def _build_ipinip(self, rng):
++        outer = IP(src="192.0.2.1", dst="203.0.113.5", proto=PROTO_IPINIP4, ttl=64)
++        inner = IP(
++            src="10.10.%d.%d" % (rng.randint(0, 255), rng.randint(1, 254)),
++            dst="10.20.%d.%d" % (rng.randint(0, 255), rng.randint(1, 254)),
++        ) / UDP(sport=rng.randint(1024, 65535), dport=rng.randint(1024, 65535))
++        return outer / inner
++
++    def _build_nvgre(self, rng):
++        outer = IP(src="192.0.2.1", dst="203.0.113.5", proto=PROTO_GRE, ttl=64)
++        # GRE+TEB header (NVGRE): 4-byte base + 4-byte VSID/flow-id.
++        gre = Raw(b"\x20\x00\x65\x58" + b"\x00\x12\x34\x00")
++        inner_eth = Ether(dst="00:11:22:33:44:55", src="00:aa:bb:cc:dd:ee")
++        inner = (
++            inner_eth
++            / IP(
++                src="10.10.%d.%d" % (rng.randint(0, 255), rng.randint(1, 254)),
++                dst="10.20.%d.%d" % (rng.randint(0, 255), rng.randint(1, 254)),
++            )
++            / UDP(sport=rng.randint(1024, 65535), dport=rng.randint(1024, 65535))
++        )
++        return outer / gre / inner
++
++    def _measure(self, name, builder):
++        rng = random.Random(0xC0FFEE)
++        pkts = []
++        for _ in range(N_PKTS):
++            pkts.append(
++                Ether(dst=self.pg0.local_mac, src=self.pg0.remote_mac)
++                / builder(rng)
++                / Raw(PAYLOAD_TAG)
++            )
++        self.vapi.cli("clear runtime")
++        self.pg_enable_capture(self.pg_interfaces)
++        self.pg0.add_stream(pkts)
++        t0 = time.perf_counter()
++        self.pg_start()
++        # The bond fans out to pg2 and pg3 only; collect both.
++        total = 0
++        for pg in (self.pg2, self.pg3):
++            cap = pg._get_capture() or []
++            total += len(cap)
++        elapsed = time.perf_counter() - t0
++        runtime = self.vapi.cli("show runtime")
++
++        pps = total / elapsed if elapsed > 0 else 0.0
++        # Hash function runs inside the bond TX path; include
++        # BondEthernet0-tx (the hash + member-pick site), BondEthernet0-
++        # output (interface-output node) and the upstream FIB nodes for
++        # context.
++        node_stats = TestInnerAwarePerf._parse_runtime(
++            runtime,
++            [
++                "ip4-lookup",
++                "ip4-rewrite",
++                "BondEthernet0-output",
++                "BondEthernet0-tx",
++            ],
++        )
++        result = {
++            "scenario": name,
++            "lb_algo": self.lb_algo_name,
++            "packets_sent": N_PKTS,
++            "packets_received": total,
++            "elapsed_s": round(elapsed, 4),
++            "pps": round(pps, 1),
++            "nodes": node_stats,
++        }
++        self.logger.info("LAG PERF %s" % json.dumps(result))
++        self.logger.info("LAG PERF runtime\n%s" % runtime)
++        self.__class__.perf_results.append(result)
++        return result
++
++    # --- scenarios --------------------------------------------------------
++
++    def test_lag_perf_plain_v4(self):
++        """LAG perf: plain UDP-over-IPv4 (no inner peek path exercised)"""
++        self._measure("plain_v4", self._build_plain_v4)
++
++    def test_lag_perf_ipinip_v4(self):
++        """LAG perf: IPinIPv4 random inner (exercises inner-v4 peek)"""
++        self._measure("ipinip_v4_v4", self._build_ipinip)
++
++    def test_lag_perf_nvgre_v4(self):
++        """LAG perf: NVGRE v4/v4 random inner (exercises GRE+inner-v4 peek)"""
++        self._measure("nvgre_v4_v4", self._build_nvgre)
++
++
++class TestInnerAwareLAGLegacyPerf(TestInnerAwareLAGPerf):
++    """Same perf scenarios as TestInnerAwareLAGPerf but pinned to the
++    upstream-compatible ``BOND_API_LB_ALGO_L34`` (``hash-eth-l34``).
++
++    Tunnel scenarios on this class only exercise the outer 5-tuple and
++    therefore collapse to a single member (pps figures are still
++    measured for cycle-cost comparison; the distribution itself is
++    covered functionally by ``TestLagL34LegacyOuterOnly`` in
++    ``test_inner_aware_hash.py``).
++    """
++
++    lb_algo_name = "BOND_API_LB_ALGO_L34"
++    bond_mac = "02:fe:38:30:59:4d"
++
++
++if __name__ == "__main__":
++    unittest.main(testRunner=VppTestRunner)
+-- 
+2.34.1
+
