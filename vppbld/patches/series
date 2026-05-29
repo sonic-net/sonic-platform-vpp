@@ -17,9 +17,11 @@
 0008-bond-drop-stats-track-original-member-interface.patch
 # 9. Add ipip mp2p tunnel
 0009-ipip-add-mp2p-ipip-tunnel.patch
-# 10. Inner-aware flow hash (opt-in): IP_FLOW_HASH_PEEK_INNER bit on ip4/ip6
+# 10. ip: add no-class-e-drop startup config option to suppress class E drop route
+0010-ip-add-no-class-e-drop-startup-config-option-to-supp.patch
+# 11. Inner-aware flow hash (opt-in): IP_FLOW_HASH_PEEK_INNER bit on ip4/ip6
 #     fib + BOND_API_LB_ALGO_L34_INNER for LAG.  Covers IPinIP / 6in4 / 4in6 /
 #     6in6 / GRE / NVGRE.  VXLAN, Geneve and SRv6 are intentionally out of
 #     scope.  Existing hash-eth-l34 and IP_FLOW_HASH_DEFAULT are byte-for-byte
 #     unchanged.
-0010-sonic-inner-aware-flow-hash.patch
+0011-sonic-inner-aware-flow-hash.patch
