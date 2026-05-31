@@ -30,10 +30,8 @@ COPY ["critical_processes", "/etc/supervisor/"]
 
 COPY scripts/vpp_hostif.sh /usr/local/bin/
 COPY scripts/vpp_init.sh /usr/local/bin/
-COPY scripts/vpp_promisc.sh /usr/local/bin/
 
 COPY conf/vpp_init.conf /etc/supervisor/conf.d/
-COPY conf/vpp_promisc.conf /etc/supervisor/conf.d/
 COPY conf/startup.conf.tmpl  /etc/vpp/
 
 ## Clean up
