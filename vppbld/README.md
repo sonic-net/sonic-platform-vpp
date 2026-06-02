@@ -9,6 +9,8 @@ If we need to create a new vpp debian packages, either we have a new patch or we
 
 Use this flow when you need to refresh the packaged VPP build.
 
+The release schedule is currently once a month. Changes merged in the previous month are included in the new release, and those changes do not take effect until that release.
+
 1. Pick the upstream VPP reference.
 
 	Check https://github.com/fdio/vpp/tags and choose the latest stable release tag. Do not use `-rc` tags. Update `vppbld/vpp_version` to the commit SHA for that stable release, or choose latest if newer changes are needed.
@@ -51,3 +53,7 @@ Use this flow when you need to refresh the packaged VPP build.
 	Upload the collected Debian packages to the Buildkite package registry:
 
 	https://buildkite.com/organizations/sonic-vpp/packages/registries/vpp
+
+6. Raise a `sonic-platform-vpp` PR with the updated `vppbld/vpp_version` and `rules/vpp.mk`.
+
+7. Create a draft PR in `sonic-buildimage` to trigger the `sonic-vpp` `sonic-mgmt` sanity test. Ensure the `platform/vpp` submodule is updated to point to the `sonic-platform-vpp` PR branch. Once passing, the sonic-platform-vpp PR can be merged.
