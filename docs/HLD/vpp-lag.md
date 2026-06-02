@@ -144,7 +144,7 @@ A LAG subinterface has three coupled names that must stay consistent: `PortChann
 
 ### Plumbing
 
-For a non-LAG sub-port (`Ethernet0.10`) the LCP host can simply be the SONiC L3 netdev itself, because it sits on top of the VPP-created tap `tap4096`. That does not work for a LAG sub-port: `PortChannel<id>.<vlan>` is a teamd VLAN child, not a VPP tap, and VPP linux-cp can only punt to a kernel netdev backed by a VPP tap.
+For a non-LAG sub-port (`Ethernet0.10`) the LCP host can simply be the SONiC L3 netdev itself, because it sits on top of a VPP-created tap (`tap<N>`). That does not work for a LAG sub-port: `PortChannel<id>.<vlan>` is a teamd VLAN child, not a VPP tap, and VPP linux-cp can only punt to a kernel netdev backed by a VPP tap.
 
 The design pairs the VPP sub-interface with `be<id>.<vlan>` (a VLAN child of the dummy tap `be<id>` that already exists for the parent LAG), and then bridges that LCP host to the SONiC L3 netdev `PortChannel<id>.<vlan>` with a bidirectional `tc mirred` redirect. The ingress redirect (`be<id>.<vlan>` → `PortChannel<id>.<vlan>`) carries VPP-punted ARP/ICMP frames to the netdev that holds the IP, so the kernel handles them normally. The egress redirect (`PortChannel<id>.<vlan>` → `be<id>.<vlan>`) carries kernel-originated frames into VPP via the LCP tap, where the linux-cp cross-connect forwards them to `BondEthernet<id>.<vlan>`. Both directions are mandatory: a one-direction-only bridge silently breaks LAG sub-port ping, and failure of either direction rolls back the LCP pair and VPP sub-interface so the SAI RIF create fails cleanly.
 
@@ -152,13 +152,9 @@ The design pairs the VPP sub-interface with `be<id>.<vlan>` (a VLAN child of the
 
 ### RIF IP and ARP
 
-The RIF IP is programmed by the same `vpp_add_del_intf_ip_addr_norif` flow used for PortChannel L3 ([Configuring IP](#item-7)), extended to recognise `BondEthernet<id>.<vlan>` names so the IP lands on the sub-interface rather than on the parent bond. VPP returns `ADDRESS_IN_USE (-105)` when orchagent re-issues the same IP add on `config reload` or on transient connected-route remove/add cycles; the handler treats `-105` as success on add, and the transient remove path no longer clears VPP's RIF IP, so a single `config reload` does not permanently lose sub-interface IP state.
+Sub-port connected route programming can arrive through both `ROUTER_INTERFACE` and `PORT` next-hop route events. The `ROUTER_INTERFACE` / `SUB_PORT` branch uses `vpp_add_del_intf_ip_addr()` to resolve the RIF directly from the SAI RIF OID, while the `PORT` next-hop branch keeps using `vpp_add_del_intf_ip_addr_norif()` and resolves the netdev by prefix from the host kernel. Both paths resolve LAG sub-ports to `BondEthernet<id>.<vlan>` so the IP lands on the sub-interface rather than on the parent bond. VPP returns `ADDRESS_IN_USE (-105)` when orchagent re-issues the same IP add on `config reload` or on transient connected-route remove/add cycles; the handler treats `-105` as success on add, and the transient remove path no longer clears VPP's RIF IP, so a single `config reload` does not permanently lose sub-interface IP state.
 
 The kernel ignores unsolicited ARP replies on a sub-port netdev by default (`arp_accept = 0`), which would otherwise break the VPP → kernel population path on the LCP host. `vslib/vpp` sets `net.ipv4.conf.<sub-port-netdev>.arp_accept = 1` on RIF create, and pre-warms the VPP neighbor table on RIF IP add so the first packet does not have to wait for resolution.
-
-### Known limitations
-
-DUT-originated ARP on a LAG sub-port can still fail to install a neighbor into the VPP sub-interface RIF in a small number of PTF cases that depend on DUT-initiated traffic (i.e. where no prior ingress packet seeds the kernel ARP table). Non-LAG (`port`) sub-port equivalents do not exhibit the same failure pattern, which suggests the issue lies in the LAG-specific plumbing — most likely somewhere along the bidirectional `tc mirred` bridge or the kernel → VPP propagation that sits on top of it. A diagnostic pass and targeted fix will be tracked in a follow-up PR.
 
 <br/>
 <br/>
@@ -176,7 +172,7 @@ Ping between PortChannels | Coded solution using `tc` utility to redirect traffi
 Testing | Bring-up, ping of PortChannel with 2 members, add/remove members, v4/v6/multiple-members, multiple-portchannels, L2 traffic |
 Sonic-mgmt t1-28-lag testing | Brought-up t1-28-lag TOPO. Ran LAG tests | <li> Debug and fix failing LAG TCs </li>
 Hashing algo selection | Coded using XOR & L3L4 | (Optional, TBD) Ability to switchover between L2L3 and L3L4 depending on presence of IP (or other scheme)
-(T0-lag) PortChannel Subinterfaces | <li>Hwif naming `BondEthernet<id>.<vlan>`</li><li>Explicit LCP pair `BondEthernet<id>.<vlan>` ↔ `be<id>.<vlan>` plus bidirectional `tc mirred` bridge `be<id>.<vlan>` ↔ `PortChannel<id>.<vlan>` (with `lcp-auto-subint=disabled` so sairedis is the sole producer of the pair)</li><li>RIF IP programming on VPP sub-interface, idempotent on `-105`, preserved across transient remove cycles</li><li>`arp_accept=1` and VPP neighbor pre-warm on sub-port RIF create</li><li>PTF `t1-lag-vpp`: basic `[port_in_lag]` sub-port routing PASS</li> | <li>DUT-originated ARP on LAG sub-port can still fail to install reply in sub-interface RIF — affects a few cross-port / balancing PTF cases; follow-up to diagnose where in the tc bridge / kernel → VPP propagation the ARP is lost</li><li>SVI variants (sonic-buildimage #26936) and IPinIP tunneling (sairedis #1860) — separate features</li>
+(T0-lag) PortChannel Subinterfaces | <li>Hwif naming `BondEthernet<id>.<vlan>`</li><li>Explicit LCP pair `BondEthernet<id>.<vlan>` ↔ `be<id>.<vlan>` plus bidirectional `tc mirred` bridge `be<id>.<vlan>` ↔ `PortChannel<id>.<vlan>` (with `lcp-auto-subint=disabled` so sairedis is the sole producer of the pair)</li><li>RIF IP programming on VPP sub-interface, idempotent on `-105`, preserved across transient remove cycles</li><li>`arp_accept=1` and VPP neighbor pre-warm on sub-port RIF create</li><li>Representative `t1-lag-vpp` sub-port smoke tests PASS</li> | <li>SVI variants (sonic-buildimage #26936) and IPinIP tunneling (sairedis #1860) — separate features</li>
 
 
 
@@ -184,4 +180,3 @@ Hashing algo selection | Coded using XOR & L3L4 | (Optional, TBD) Ability to swi
 
 [SONiC system architecture](https://github.com/sonic-net/SONiC/wiki/Architecture)\
 [What is VPP](https://s3-docs.fd.io/vpp/23.06/)
-
