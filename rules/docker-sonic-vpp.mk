@@ -22,13 +22,11 @@ $(DOCKER_SONIC_VPP)_DEPENDS += $(SYNCD_VPP) \
                               $(LIBTEAMDCTL) \
                               $(LIBTEAM_UTILS) \
                               $(SONIC_DEVICE_DATA) \
-                              $(LIBYANG) \
-                              $(LIBYANG_CPP) \
-                              $(LIBYANG_PY3) \
+                              $(LIBYANG3) \
+                              $(LIBYANG3_PY3) \
                               $(SONIC_UTILITIES_DATA) \
                               $(SONIC_HOST_SERVICES_DATA) \
-			      $(FRR) $(FRR_SNMP) \
-			      $(LIBYANG2)
+			      $(FRR) $(FRR_SNMP)
 
 $(DOCKER_SONIC_VPP)_PYTHON_WHEELS += $(SWSSSDK_PY3) \
                                     $(SONIC_PY_COMMON_PY3) \
