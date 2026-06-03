@@ -69,6 +69,10 @@ l3fib {
 	ip4-mtrie-pool-size 256K
 }
 
+ip {
+	no-class-e-drop
+}
+
 ip6 {
 	heap-size 128M
 }
@@ -240,6 +244,7 @@ plugins {
 	## Disable all plugins by default and then selectively enable specific plugins
 	plugin default { disable }
 	plugin af_packet_plugin.so { enable }
+	plugin tap_plugin.so { enable }
 	plugin dpdk_plugin.so { enable }
 	plugin linux_cp_plugin.so { enable }
 	plugin linux_nl_plugin.so { enable }

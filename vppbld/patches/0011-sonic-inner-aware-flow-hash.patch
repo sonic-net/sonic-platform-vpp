@@ -231,12 +231,13 @@ diff --git a/docs/developer/corearchitecture/index.rst b/docs/developer/corearch
 index ecd5a3cdb..7efa0acca 100644
 --- a/docs/developer/corearchitecture/index.rst
 +++ b/docs/developer/corearchitecture/index.rst
-@@ -18,4 +18,4 @@ Core Architecture
+@@ -16,5 +16,6 @@ Core Architecture
+     multiarch/index
+     bihash
      buildsystem/index
-     mem
      multi_thread
--
 +    inner_aware_hash
+ 
 diff --git a/docs/developer/corearchitecture/inner_aware_hash.rst b/docs/developer/corearchitecture/inner_aware_hash.rst
 new file mode 100644
 index 000000000..5d9458d70
@@ -822,20 +823,19 @@ index 1ac8b66a1..023d2b040 100644
  VNET_REGISTER_HASH_FUNCTION (hash_eth_l2, static) = {
    .name = "hash-eth-l2",
    .description = "Hash ethernet L2 headers",
-@@ -317,6 +467,13 @@ VNET_REGISTER_HASH_FUNCTION (hash_eth_l34, static) = {
+@@ -300,6 +450,12 @@ VNET_REGISTER_HASH_FUNCTION (hash_eth_l34, static) = {
+ VNET_REGISTER_HASH_FUNCTION (hash_eth_l34, static) = {
+   .name = "hash-eth-l34",
+   .description = "Hash ethernet L34 headers",
+   .priority = 50,
    .function[VNET_HASH_FN_TYPE_ETHERNET] = hash_eth_l34,
  };
- 
 +VNET_REGISTER_HASH_FUNCTION (hash_eth_l34_inner, static) = {
 +  .name = "hash-eth-l34-inner",
 +  .description = "Hash ethernet L34 headers, peek into IPinIP/GRE/NVGRE inner",
 +  .priority = 50,
 +  .function[VNET_HASH_FN_TYPE_ETHERNET] = hash_eth_l34_inner,
 +};
-+
- /*
-  * fd.io coding-style-patch-verification: ON
-  *
 diff --git a/src/vnet/ip/ip4_inlines.h b/src/vnet/ip/ip4_inlines.h
 index b4fcebc98..2e95cf77b 100644
 --- a/src/vnet/ip/ip4_inlines.h
