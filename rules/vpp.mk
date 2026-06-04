@@ -1,7 +1,13 @@
 # libvpp package
 
-VPP_VERSION_BASE = 2510
-VPP_VERSION = $(VPP_VERSION_BASE)-0.3
+VPP_VERSION_BASE = 2606
+# Bump the minor suffix whenever vppbld/patches/series or any patch file
+# under vppbld/patches/*.patch changes content. The VPP_VERSION_SONIC string
+# is the cache key used by vppbld/Makefile to fetch pre-built debs from
+# https://packages.buildkite.com/sonic-vpp/vpp; if the suffix isn't bumped,
+# downstream sonic-buildimage builds will silently pull stale debs that
+# pre-date the new patch series and end up with VPP/SAI CRC drift.
+VPP_VERSION = $(VPP_VERSION_BASE)-0.2
 VPP_VERSION_SONIC = $(VPP_VERSION)+b1sonic1
 VPP_SRC_PATH = platform/vpp/vppbld
 
@@ -11,7 +17,9 @@ export VPP_SRC_PATH
 VPPINFRA = libvppinfra_$(VPP_VERSION_SONIC)_$(CONFIGURED_ARCH).deb
 $(VPPINFRA)_SRC_PATH = $(VPP_SRC_PATH)
 $(VPPINFRA)_DEPENDS += $(LIBNL3) $(LIBNL3_DEV) $(LIBNL_ROUTE3) $(LIBNL_ROUTE3_DEV)
+ifeq ($(BLDENV),trixie)
 SONIC_MAKE_DEBS += $(VPPINFRA)
+endif
 
 VPP_MAIN = vpp_$(VPP_VERSION_SONIC)_$(CONFIGURED_ARCH).deb
 $(VPP_MAIN)_DEPENDS += $(VPPINFRA)
@@ -50,9 +58,11 @@ VPPDBG = vpp-dbg_$(VPP_VERSION_SONIC)_$(CONFIGURED_ARCH).deb
 $(eval $(call add_derived_package,$(VPPINFRA),$(VPPDBG)))
 
 # Add VPP build/runtime dependencies to sairedis packages
+ifeq ($(BLDENV),trixie)
 $(LIBSAIREDIS)_DEPENDS += $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK) \
 	$(VPP_PLUGIN_DEV) $(VPP_DEV) $(VPPINFRA_DEV) $(VPPDBG)
 $(LIBSAIVS)_RDEPENDS += $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK)
+endif
 
 VPP_VERSION_FILE = vpp_$(VPP_VERSION_SONIC)_commit
 
