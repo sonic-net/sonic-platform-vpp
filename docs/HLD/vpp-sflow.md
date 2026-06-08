@@ -176,7 +176,7 @@ VPP ships `src/plugins/sflow/` (already present in
 
 | SONiC requirement | VPP today | Gap | Resolution |
 |---|---|---|---|
-| Per-port sample rate | Global rate, per-port enable | Yes | GCD + per-port sub-sampling in slow path |
+| Per-port sample rate | Global rate, per-port enable | Yes | Native per-port skip counter in VPP plugin (preferred); GCD + sub-sampling as fallback |
 | Per-port enable | Yes | None | Direct mapping |
 | Per-port sampling direction (ingress / egress / both) | Global only (`smp->samplingD`) | Yes | Per-port direction state in `sflow_per_interface_data_t`; in `sflow_enable_disable_interface()` decide independently per port whether to attach the `device-input` (ingress) and `interface-output` (egress) feature arcs based on the port's own direction. Add new VPP API `sflow_interface_direction_set { hw_if_index, direction }`. Programmed by vpplib from the SAI samplepacket object's `SAI_SAMPLEPACKET_ATTR_TYPE` plus the port-attribute distinction between `INGRESS_SAMPLEPACKET_ENABLE` and `EGRESS_SAMPLEPACKET_ENABLE`. |
 | Sample rate runtime change | Yes | None | Direct mapping |
@@ -405,19 +405,113 @@ CLI: `sflow report-linux-ifindex { on | off }` and matching API.
 
 ### 4.4 Per-port sample rate
 
-VPP's stock plugin uses a single global `samplingN`. To honor per-port rates
-we add **GCD + per-port sub-sampling** (GCD = greatest common divisor; the
-upstream plugin TODO calls this "HCF + sub-sampling" — same idea):
+#### 4.4.1 Preferred solution — native per-port rate in VPP plugin
 
-1. Each port that has `INGRESS_SAMPLEPACKET_ENABLE = <samplepacket_oid>` records
-   `sfif->desired_rate` from the bound samplepacket object.
-2. **Quantize** `desired_rate` to a small set of allowed values before using
-   it in the GCD (see §4.4.1 below) so the GCD does not collapse to 1.
+VPP's stock plugin uses a single global `samplingN` and a **per-thread**
+random-skip counter (`sflow_per_thread_data_t.skip`). However, the
+architecture already supports true per-port rates with a small patch because
+the `device-input` and `interface-output` feature arcs deliver frame-vectors
+that are **inherently per-interface** — all packets in a given frame belong
+to the same port. This means the existing fast-path optimization
+(`skip > pkts` → skip the whole frame in ~1 cycle) is preserved even with
+per-port counters.
+
+**Design: move the skip counter from per-thread to per-interface.**
+
+1. Extend `sflow_per_interface_data_t` with sampling state:
+
+```c
+typedef struct
+{
+  u32 sw_if_index;
+  u32 hw_if_index;
+  u32 linux_if_index;
+  u32 polled;
+  int sflow_enabled;
+  /* --- per-port sampling state (new) --- */
+  u32 samplingN;        /* configured 1-in-N rate for this port */
+  u32 skip;             /* random-skip countdown */
+  u32 pool;             /* sample_pool counter */
+  u32 seed;             /* PRNG state */
+} sflow_per_interface_data_t;
+```
+
+2. In `sflow_node_ingress_egress()`, replace the per-thread lookup with a
+   per-interface lookup (the first buffer's `sw_if_index` identifies the
+   port for the entire frame):
+
+```c
+/* All packets in this frame belong to the same interface (feature arc guarantee). */
+u32 sw_if = vnet_buffer(vlib_get_buffer(vm, from[0]))->sw_if_index[VLIB_RX];
+vnet_hw_interface_t *hw = vnet_get_sup_hw_interface(smp->vnet_main, sw_if);
+sflow_per_interface_data_t *sfif = vec_elt_at_index(smp->per_interface_data, hw->hw_if_index);
+
+u32 pkts = n_left_from;
+if (PREDICT_TRUE(sfif->skip > pkts)) {
+    sfif->skip -= pkts;      /* fast path: skip entire frame */
+    sfif->pool += pkts;
+} else {
+    while (pkts >= sfif->skip) {
+        /* sample packet at offset sfif->skip - 1 */
+        ...
+        pkts -= sfif->skip;
+        sfif->pool += sfif->skip;
+        sfif->skip = sflow_next_random_skip_if(sfif);
+    }
+    sfif->skip -= pkts;
+    sfif->pool += pkts;
+}
+```
+
+3. `sflow_next_random_skip_if()` uses the per-interface `samplingN`:
+
+```c
+static inline u32
+sflow_next_random_skip_if(sflow_per_interface_data_t *sfif) {
+    if (sfif->samplingN <= 1) return 1;
+    u32 lim = (2 * sfif->samplingN) - 1;
+    return (random_u32(&sfif->seed) % lim) + 1;
+}
+```
+
+4. New VPP API: `sflow_interface_sampling_rate_set { hw_if_index, rate }`.
+   When `rate == 0`, the port inherits the global `smp->samplingN`.
+   The API updates `sfif->samplingN` and re-seeds `sfif->skip`.
+
+5. Reported `PSAMPLE_ATTR_SAMPLE_RATE` uses the port's own `sfif->samplingN`
+   so the collector applies the correct estimator per port.
+
+**Multi-worker RSS consideration:** if VPP uses multiple worker threads
+with RSS, packets for the same interface can land on different threads. In
+that case a shared per-interface `skip` counter would require atomics.
+For typical sonic-vpp deployments (1–2 workers, <64 ports), a simple
+per-interface counter is sufficient (RSS is not used). If multi-worker
+support is needed in the future, a 2D `per_thread × per_interface` structure
+(~trivial memory) eliminates contention entirely.
+
+**Advantages over GCD + sub-sampling:**
+
+| Aspect | Native per-port | GCD + sub-sampling |
+|---|---|---|
+| Exact configured rate | Yes, each port samples at exactly its configured rate | No, rates are quantized to a fixed ladder |
+| Fast-path performance | Identical (skip whole frame) | Identical |
+| Slow-path overhead | None (no sub-sampling decision) | Per-sample modulo check |
+| Implementation complexity | ~50-line VPP plugin patch | Quantization logic + GCD recomputation + sub-counter |
+| Rate independence | Changing port A's rate has zero effect on port B | Changing any port's rate triggers global GCD recalculation |
+| Operator surprise | None — what you configure is what you get | Rate quantization may snap to different value |
+
+#### 4.4.2 Fallback alternative — GCD + per-port sub-sampling
+
+If for any reason the native per-port rate patch cannot be upstreamed or
+maintained, a pure control-plane alternative exists that requires no VPP
+plugin modification:
+
+1. Each port records `sfif->desired_rate` from the bound samplepacket object.
+2. **Quantize** `desired_rate` to a fixed allowed set (see below) so the GCD
+   does not collapse to 1.
 3. Compute `smp->samplingN = GCD(all enabled sfif->quantized_rate)` whenever
-   the set changes; refresh worker threads via existing
-   `sflow_set_worker_sampling_state()`.
-4. In `send_packet_sample()` (slow path, after a candidate is drawn), apply
-   per-port sub-sampling:
+   the set changes; refresh workers via `sflow_set_worker_sampling_state()`.
+4. In `send_packet_sample()` (slow path), apply per-port sub-sampling:
 
 ```c
 u32 sub = sfif->quantized_rate / smp->samplingN;
@@ -427,84 +521,22 @@ if (sub > 1) {
 SFLOWPS_set_attr_int(pst, SFLOWPS_PSAMPLE_ATTR_SAMPLE_RATE, sfif->quantized_rate);
 ```
 
-5. Reported `SAMPLE_RATE` in the PSAMPLE message uses the **port-quantized**
-   rate so the collector applies the correct estimator (which is what the
-   operator effectively configured — see §4.4.1).
+5. Reported `SAMPLE_RATE` uses the port-quantized rate.
 
-This keeps the fastpath unchanged (one global rate, per-worker random skip).
-
-#### 4.4.1 Avoiding a degenerate GCD
-
-The naive scheme breaks when two configured rates are coprime. For example,
-if port A is set to 4999 and port B to 5000:
-
-$$
-\gcd(4999, 5000) = 1
-$$
-
-A global rate of 1 would force the fastpath to treat every packet as a
-sample candidate, then sub-sample by 4999× / 5000× in the slow path —
-essentially negating the whole point of upstream 1-in-N filtering and
-causing a CPU cliff.
-
-We defend against this with **rate quantization** before the GCD is taken.
-Each configured `desired_rate` is mapped to the nearest value in a fixed
-allowed set, then the GCD is taken over the quantized values.
-
-**Allowed set (default):** rates of the form `{1, 2, 5} × 10ᵏ` for `k = 0..6`,
-plus exact powers of two:
+**Quantization ladder** (conventional sFlow rate values):
 
 ```
-  10, 20, 50,
-  100, 200, 500,
-  1000, 2000, 5000,
-  10000, 20000, 50000,
-  100000, 200000, 500000,
-  1000000
+  10, 20, 50, 100, 200, 500, 1000, 2000, 5000,
+  10000, 20000, 50000, 100000, 200000, 500000, 1000000
 ```
 
-This is the conventional sFlow rate ladder used by most collectors, and it
-guarantees a useful GCD because every member shares factors of 10 (or 2 and
-5) with every other member. Concrete consequences:
+This guarantees the GCD remains useful because all members share factors of
+10 (or 2 and 5).
 
-| Configured | Quantized | Notes |
-|---|---|---|
-| 4999 | 5000 | Snapped up to the nearest allowed value. |
-| 5000 | 5000 | No change. |
-| 1234 | 1000 | Snapped down. |
-| 1500 | 2000 (or 1000) | Tie-breaker: round to nearest; on exact midpoint round to coarser. |
-| 7 | 10 | Below practical minimum; clamped. |
-
-With quantization, `gcd(4999_q, 5000_q) = gcd(5000, 5000) = 5000`, the
-fastpath samples 1-in-5000, both ports end up with `sub = 1`, no slow-path
-over-sampling, and the collector sees `SAMPLE_RATE = 5000` for both — which
-is the operator's intent at any reasonable granularity.
-
-**Rounding policy** is configurable per platform:
-
-- `nearest` (default): minimal effective rate change;
-- `down`: never under-sample (effective rate ≤ configured);
-- `up`: never over-sample (effective rate ≥ configured).
-
-**Operator visibility:** the per-port quantized rate is reported in
-`show sflow interface` so the operator can confirm what is actually being
-applied. If the configured rate snaps to a different value, vpplib logs a
-NOTICE-level message ("port Ethernet0 sample-rate 4999 quantized to 5000")
-at configuration time.
-
-**Sanity bound:** the plugin enforces
-`smp->samplingN >= SFLOW_MIN_GLOBAL_RATE` (default 100). If the GCD
-computation ever yields a smaller value (which the quantization should
-prevent), the plugin clamps the global rate up and adjusts per-port `sub`
-factors accordingly, logging a WARN.
-
-**Alternative considered — dynamic LCM-based bucketing:** instead of quantizing,
-compute `samplingN = gcd(rates)` and accept any value, but cap the slow-path
-sub-sample multiplier so that effective rate degradation is bounded
-(e.g. `max sub <= 64`). Rejected because (a) it makes the effective rate
-depend on the *combination* of ports configured (changing port C's rate
-shifts port A's effective rate), which violates least-surprise, and
-(b) the quantized scheme is what every commercial sFlow stack uses.
+**Drawbacks:** (a) rates are rounded — operator may not get the exact
+configured value; (b) any rate change triggers a global GCD recalculation
+that affects all ports' effective behavior; (c) additional complexity
+(quantization, rounding policy, sub-counter logic).
 
 ### 4.5 Per-port sampling direction
 
@@ -695,11 +727,15 @@ configured on different SONiC ports.
 
 Deliverables:
 
-- VPP plugin patch (sample rate):
-  - `sflow_per_interface_data_t` adds `desired_rate`, `sub_counter`.
-  - GCD computation on per-port enable/rate change.
-  - Per-port sub-sampling check in `send_packet_sample()`.
-  - Reported `PSAMPLE_ATTR_SAMPLE_RATE` reflects per-port `desired_rate`.
+- VPP plugin patch (native per-port sample rate — preferred, §4.4.1):
+  - `sflow_per_interface_data_t` adds `samplingN`, `skip`, `pool`, `seed`.
+  - In `sflow_node_ingress_egress()`, replace per-thread skip counter with
+    per-interface skip counter (first buffer's `sw_if_index` identifies the
+    port for the entire frame — feature arc guarantee).
+  - `sflow_next_random_skip_if()` uses per-interface `samplingN`.
+  - Per-interface rate is set/cleared independently; `rate == 0` means
+    inherit global `smp->samplingN`.
+  - Reported `PSAMPLE_ATTR_SAMPLE_RATE` reflects the port's own rate.
 - VPP plugin patch (direction):
   - `sflow_per_interface_data_t` adds `direction` (ingress / egress / both /
     none); when unset, falls back to the global `smp->samplingD`.
@@ -707,10 +743,11 @@ Deliverables:
     `device-input` (ingress) and/or `interface-output` (egress) feature arcs
     independently per port, based on the port's own direction.
 - New VPP APIs:
-  - `sflow_interface_subsample_set { hw_if_index, desired_rate }`.
+  - `sflow_interface_sampling_rate_set { hw_if_index, rate }`.
   - `sflow_interface_direction_set { hw_if_index, direction }`.
 - vpplib `SaiSamplepacket` honors per-port `SAI_SAMPLEPACKET_ATTR_SAMPLE_RATE`
-  by computing & pushing GCD + per-port factor.
+  by calling `sflow_interface_sampling_rate_set` with the exact configured
+  rate — no quantization or GCD needed.
 - vpplib distinguishes `SAI_PORT_ATTR_INGRESS_SAMPLEPACKET_ENABLE` vs
   `SAI_PORT_ATTR_EGRESS_SAMPLEPACKET_ENABLE` and translates each to the
   corresponding direction bit on the port via
@@ -730,7 +767,7 @@ Exit criteria:
   collector shows ingress flow samples on the first and ingress + egress
   flow samples on the second; the global `sflow direction` setting does not
   override either.
-- Sub-sampling counter visible in `show sflow` per-port.
+- Per-port `samplingN` and `skip` visible in `show sflow` per-port output.
 
 ### Phase 4 — sonic-mgmt regression
 
@@ -874,22 +911,7 @@ docker exec -d sflow sflowtool -p 6343 -f 198.51.100.20/6343
 
 ## 7. Test Plan
 
-### 7.1 vpplib unit tests (gtest, runs without VPP)
-
-Cover the SAI vpplib translation layer for sFlow objects:
-
-- Samplepacket object lifecycle (create / set rate / remove) and the
-  resulting calls into the VPP binary-API mock.
-- Port `INGRESS_SAMPLEPACKET_ENABLE` / `EGRESS_SAMPLEPACKET_ENABLE`
-  attribute bind / unbind, including per-port direction transitions.
-- Hostif trap of type `SAMPLEPACKET` with `TRAP_GROUP` + `POLICER`, and
-  the translation of policer rate into the drop-monitor rate limit.
-- Hostif of type `GENETLINK("psample", "packets")` and
-  `GENETLINK("NET_DM", "events")` accepted as no-op success.
-- GCD helper and rate-quantization (`{1, 2, 5} × 10^k` ladder, rounding
-  policies, coprime-rate case from §4.4.1).
-
-### 7.2 VPP plugin patch tests
+### 7.1 VPP plugin patch tests
 
 Cover the per-port sub-sampling, per-port direction, drop rate limit, and
 (if Option B in §4.3 is taken) the Linux ifIndex substitution:
@@ -903,7 +925,7 @@ Cover the per-port sub-sampling, per-port direction, drop rate limit, and
 - (Option B only) PSAMPLE / NET_DM messages carry the LCP-resolved Linux
   netdev ifIndex when `report-linux-ifindex` is on.
 
-### 7.3 sonic-mgmt regression (Phase 4)
+### 7.2 sonic-mgmt regression (Phase 4)
 
 Run the existing `sonic-mgmt/tests/sflow/test_sflow.py` suite against a
 sonic-vpp DUT. The suite covers the following behaviors and all of them
@@ -941,7 +963,7 @@ will track separately:
   Linux ifIndex; this is verified by manual loopback-collector inspection
   (§6.4) until an explicit assertion is added.
 
-### 7.4 Negative / robustness tests
+### 7.3 Negative / robustness tests
 
 - Remove a samplepacket OID while a port is still bound — graceful unbind,
   no VPP crash.
