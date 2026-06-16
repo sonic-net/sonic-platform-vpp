@@ -18,6 +18,7 @@ include $(PLATFORM_RULES)/sonic-version.mk
 include $(PLATFORM_RULES)/platform-modules-vpp.mk
 include $(PLATFORM_RULES)/docker-syncd-vpp.mk
 include $(PLATFORM_RULES)/docker-gbsyncd-vpp.mk
+include $(PLATFORM_RULES)/docker-sonic-vpp.mk
 include $(PLATFORM_RULES)/docker-ptf.mk
 include $(PLATFORM_RULES)/docker-ptf-sai.mk
 include $(PLATFORM_RULES)/libsaithrift-dev.mk
