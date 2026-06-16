@@ -5,12 +5,14 @@
 
 pr:
 - master
+- 202???
 
 trigger:
   batch: true
   branches:
     include:
     - master
+    - 202???
 
 pool:
   vmImage: ubuntu-latest
