@@ -11,9 +11,15 @@
 0005-version-support-custom-version-override.patch
 # 6. Fix curl conflicting -o and -O output options
 0006-fix-curl-conflicting-output-options.patch
-# 7. Add SRv6 LocalSID v2 API with uSID/custom length support and tests
-0007-srv6-localsid-v2-custom-usid-lengths.patch
-# 8. Track drop stats against original bond member interface
+# 7. Track drop stats against original bond member interface
 0008-bond-drop-stats-track-original-member-interface.patch
 # 9. Add ipip mp2p tunnel
 0009-ipip-add-mp2p-ipip-tunnel.patch
+# 10. ip: add no-class-e-drop startup config option to suppress class E drop route
+0010-ip-add-no-class-e-drop-startup-config-option-to-supp.patch
+# 11. Inner-aware flow hash (opt-in): IP_FLOW_HASH_PEEK_INNER bit on ip4/ip6
+#     fib + BOND_API_LB_ALGO_L34_INNER for LAG.  Covers IPinIP / 6in4 / 4in6 /
+#     6in6 / GRE / NVGRE.  VXLAN, Geneve and SRv6 are intentionally out of
+#     scope.  Existing hash-eth-l34 and IP_FLOW_HASH_DEFAULT are byte-for-byte
+#     unchanged.
+0011-sonic-inner-aware-flow-hash.patch

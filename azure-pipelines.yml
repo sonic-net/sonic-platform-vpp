@@ -5,12 +5,14 @@
 
 pr:
 - master
+- 202???
 
 trigger:
   batch: true
   branches:
     include:
     - master
+    - 202???
 
 pool:
   vmImage: ubuntu-latest
@@ -26,7 +28,7 @@ schedules:
 parameters:
   - name: debian_version
     type: string
-    default: bookworm
+    default: trixie
   - name: arch
     type: string
     default: amd64
@@ -37,49 +39,16 @@ variables:
       value: $(System.PullRequest.TargetBranch)
     ${{ else }}:
       value: $(Build.SourceBranchName)
+
 stages:
 - stage: BuildVpp
 
   jobs:
-  - job:
-    displayName: amd64
-    timeoutInMinutes: 300
-    container:
-      image: sonicdev-microsoft.azurecr.io:443/sonic-slave-${{ parameters.debian_version }}:latest
-      options:  "--privileged"
-    steps:
-    - checkout: self
-      clean: true
-    - task: DownloadPipelineArtifact@2
-      inputs:
-        source: specific
-        project: build
-        pipeline: Azure.sonic-buildimage.common_libs
-        runVersion: 'latestFromBranch'
-        runBranch: 'refs/heads/$(BUILD_BRANCH)'
-        path: $(Build.ArtifactStagingDirectory)/download
-        artifact: common-lib
-        patterns: |
-            target/debs/${{ parameters.debian_version }}/libnl-3*.deb
-            target/debs/${{ parameters.debian_version }}/libnl-genl*.deb
-            target/debs/${{ parameters.debian_version }}/libnl-route*.deb
-            target/debs/${{ parameters.debian_version }}/libnl-nf*.deb
-      displayName: "Download common libs"
-    - script: |
-        set -ex
-        echo "BUILD_BRANCH: $(BUILD_BRANCH)"
-        # install libyang before install libswsscommon
-        sudo dpkg -i $(find ./download -name *.deb)
-        rm -rf download || true
-        cat /etc/apt/sources.list
-        dpkg --list |grep libnl
-      workingDirectory: $(Build.ArtifactStagingDirectory)
-      displayName: "Install libnl3"
-    - script: |
-        set -ex
-        cd $(System.DefaultWorkingDirectory)/vppbld
-        make ci-build CONFIGURED_ARCH=${{ parameters.arch }} CI_DEST=$(System.DefaultWorkingDirectory)/vppbld/artifacts
-      displayName: "Build VPP packages from source"
-    - publish: $(System.DefaultWorkingDirectory)/vppbld/artifacts
-      artifact: vpp
-      displayName: "Archive vpp debian packages"
+  - template: .azure-pipelines/build-template.yml
+    parameters:
+      arch: amd64
+      debian_version: ${{ parameters.debian_version }}
+  - template: .azure-pipelines/build-template.yml
+    parameters:
+      arch: amd64
+      debian_version: bookworm
