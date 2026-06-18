@@ -1,0 +1,8 @@
+name: sonic_ext
+maintainer: SONiC-VPP contributors
+features:
+  - punt-via-member: redirect BVI-RX punted unicast/ARP to the original member tap
+  - host-xc: bypass ethernet-input for packets injected from the linux-cp host tap
+description: "SONiC VPP extensions for BVI/L2 punt and host-side cross-connect"
+state: experimental
+properties: [API, CLI]
