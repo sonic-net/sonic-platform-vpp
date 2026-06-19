@@ -290,5 +290,10 @@ plugins {
 
 # Why not support sub interfaces
 linux-cp {
-   lcp-auto-subint
+   # lcp-auto-subint disabled so sairedis owns sub-port LCP pair creation
+   # explicitly (vpp_create_router_interface, SUB_PORT path: create_subif +
+   # configure_lcp_interface). With it enabled VPP would also auto-create the
+   # pair, colliding with the explicit one.
+   # lcp-auto-subint
+   lcp-sync
 }
