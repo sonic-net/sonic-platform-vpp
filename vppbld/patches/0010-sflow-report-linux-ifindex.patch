@@ -1,0 +1,209 @@
+From aec247cbd306f4e8b694629c89f7c050b3d47cc6 Mon Sep 17 00:00:00 2001
+From: Ritvik Uppal <rituppal@cisco.com>
+Date: Fri, 26 Jun 2026 07:49:48 -0700
+Subject: [PATCH] sflow: report Linux ifindex in PSAMPLE and NET_DM samples
+
+Add a report_linux_ifindex switch (default off) and a new
+sflow_report_linux_ifindex_set API + CLI. When enabled and linux-cp
+is present, translate the VPP hw_if_index to the corresponding Linux
+netdev ifindex (via lcp_itf_pair_get_vif_index_by_phy) before emitting
+PSAMPLE IIFINDEX/OIFINDEX and NET_DM IN_PORT, so flow samples and drop
+alerts align with the counter samples already reported on OSINDEX.
+
+Signed-off-by: Ritvik Uppal <rituppal@cisco.com>
+---
+ src/plugins/sflow/sflow.api | 12 +++++
+ src/plugins/sflow/sflow.c   | 93 +++++++++++++++++++++++++++++++++++--
+ src/plugins/sflow/sflow.h   |  1 +
+ 3 files changed, 103 insertions(+), 3 deletions(-)
+
+diff --git a/src/plugins/sflow/sflow.api b/src/plugins/sflow/sflow.api
+index 57a478b62..0031079a1 100644
+--- a/src/plugins/sflow/sflow.api
++++ b/src/plugins/sflow/sflow.api
+@@ -282,3 +282,15 @@ define sflow_interface_details
+   u32 context;
+   vl_api_interface_index_t hw_if_index;
+ };
++
++/** @brief API to enable linux ifindex reporting
++    @param client_index - opaque cookie to identify the sender
++    @param context - sender context, to match reply w/ request
++    @param enable - enable reporting
++*/
++
++autoreply define sflow_report_linux_ifindex_set {
++    u32 client_index;
++    u32 context;
++    bool enable;
++};
+\ No newline at end of file
+diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
+index 3568114d1..f7be7767b 100644
+--- a/src/plugins/sflow/sflow.c
++++ b/src/plugins/sflow/sflow.c
+@@ -315,6 +315,38 @@ compose_trap_str (char *buf, int buf_len, char *str, int str_len)
+   return prefix_len + cont_len;
+ }
+ 
++static u32 
++sflow_translate_ifindex(sflow_main_t *smp, u32 hw_if_index)
++{
++
++  if (!smp->report_linux_ifindex)
++  {
++    return hw_if_index;
++  }
++
++  if (!smp->lcp_itf_pair_get_vif_index_by_phy)
++  {
++    return hw_if_index;
++  }
++
++  vnet_hw_interface_t *hw = vnet_get_hw_interface(smp->vnet_main, hw_if_index);
++
++  if(!hw)
++  {
++    return hw_if_index;
++  }
++
++  u32 linux_if_index = (*smp->lcp_itf_pair_get_vif_index_by_phy) (hw->sw_if_index);
++
++  if (linux_if_index != INDEX_INVALID)
++  {
++    return linux_if_index;
++  }
++
++  return hw_if_index;
++
++}
++
+ static int
+ send_packet_sample (vlib_main_t *vm, sflow_main_t *smp, sflow_sample_t *sample)
+ {
+@@ -344,9 +376,11 @@ send_packet_sample (vlib_main_t *vm, sflow_main_t *smp, sflow_sample_t *sample)
+   u16 header_protocol = 1; /* ethernet */
+   SFLOWPS_set_attr_int (pst, SFLOWPS_PSAMPLE_ATTR_SAMPLE_GROUP, ps_group);
+   SFLOWPS_set_attr_int (pst, SFLOWPS_PSAMPLE_ATTR_IIFINDEX,
+-			sample->input_if_index);
++			sflow_translate_ifindex(smp, sample->input_if_index));
+   SFLOWPS_set_attr_int (pst, SFLOWPS_PSAMPLE_ATTR_OIFINDEX,
+-			sample->output_if_index);
++                      sample->output_if_index
++                        ? sflow_translate_ifindex (smp, sample->output_if_index)
++                        : 0);
+   SFLOWPS_set_attr_int (pst, SFLOWPS_PSAMPLE_ATTR_ORIGSIZE,
+ 			sample->sampled_packet_size);
+   SFLOWPS_set_attr_int (pst, SFLOWPS_PSAMPLE_ATTR_GROUP_SEQ, seqNo);
+@@ -410,7 +444,7 @@ send_discard_sample (vlib_main_t *vm, sflow_main_t *smp,
+   // TODO: read from header? (really just needs to be non-zero for hsflowd)
+   u16 proto = 0x0800;
+   SFLOWDM_set_attr_int (dmt, NET_DM_ATTR_PROTO, proto);
+-  SFLOWDM_set_attr_int (dmt, NET_DM_ATTR_IN_PORT, sample->input_if_index);
++  SFLOWDM_set_attr_int (dmt, NET_DM_ATTR_IN_PORT, sflow_translate_ifindex(smp, sample->input_if_index));
+   SFLOWDM_set_attr (dmt, NET_DM_ATTR_PAYLOAD, sample->header,
+ 		    sample->header_bytes);
+   if (SFLOWDM_send (dmt) < 0)
+@@ -873,6 +907,13 @@ sflow_enable_disable (sflow_main_t *smp, u32 sw_if_index, bool enable_disable)
+   return 0;
+ }
+ 
++int 
++sflow_report_linux_ifindex(sflow_main_t *smp, bool enable)
++{
++  smp->report_linux_ifindex = enable;
++  return 0;
++}
++
+ static clib_error_t *
+ sflow_sampling_rate_command_fn (vlib_main_t *vm, unformat_input_t *input,
+ 				vlib_cli_command_t *cmd)
+@@ -1086,6 +1127,32 @@ sflow_enable_disable_command_fn (vlib_main_t *vm, unformat_input_t *input,
+   return 0;
+ }
+ 
++static clib_error_t *
++sflow_report_linux_ifindex_command_fn (vlib_main_t *vm, unformat_input_t *input,
++				 vlib_cli_command_t *cmd)
++{
++  sflow_main_t *smp = &sflow_main;
++  bool enable = true;
++  int rv;
++  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
++    {
++      if (unformat (input, "disable")) enable = false;
++      else if (unformat (input, "enable")) enable = true;
++      else break;
++    }
++  rv = sflow_report_linux_ifindex (smp, enable);
++
++  switch (rv)
++    {
++    case 0:
++      break;
++    default:
++      return clib_error_return (0, "sflow_report_linux_ifindex %d", rv);
++    }
++  return 0;
++
++}
++
+ static const char *
+ sflow_direction_str (sflow_direction_t direction)
+ {
+@@ -1178,6 +1245,12 @@ VLIB_CLI_COMMAND (sflow_drop_monitoring_command, static) = {
+   .function = sflow_drop_monitoring_command_fn,
+ };
+ 
++VLIB_CLI_COMMAND (sflow_report_linux_ifindex_command, static) = {
++  .path = "sflow report-linux-ifindex",
++  .short_help = "sflow report-linux-ifindex <enable|disable>",
++  .function = sflow_report_linux_ifindex_command_fn,
++};
++
+ VLIB_CLI_COMMAND (show_sflow_command, static) = {
+   .path = "show sflow",
+   .short_help = "show sflow",
+@@ -1353,6 +1426,18 @@ vl_api_sflow_interface_dump_t_handler (vl_api_sflow_interface_dump_t *mp)
+     }
+ }
+ 
++static void
++vl_api_sflow_report_linux_ifindex_set_t_handler (
++  vl_api_sflow_report_linux_ifindex_set_t *mp)
++{
++  vl_api_sflow_report_linux_ifindex_set_reply_t *rmp;
++  sflow_main_t *smp = &sflow_main;
++  int rv;
++  rv = sflow_report_linux_ifindex (smp, mp->enable);
++  REPLY_MACRO (VL_API_SFLOW_REPORT_LINUX_IFINDEX_SET_REPLY);
++}
++
++
+ /* API definitions */
+ #include <sflow/sflow.api.c>
+ 
+@@ -1374,6 +1459,8 @@ sflow_init (vlib_main_t *vm)
+   smp->headerB = SFLOW_DEFAULT_HEADER_BYTES;
+   smp->samplingD = SFLOW_DIRN_INGRESS;
+   smp->dropM = false;
++  smp->report_linux_ifindex = false;
++
+ 
+   /* Add our API messages to the global name_crc hash table */
+   smp->msg_id_base = setup_message_id_table ();
+diff --git a/src/plugins/sflow/sflow.h b/src/plugins/sflow/sflow.h
+index ca087e58e..4c69f631e 100644
+--- a/src/plugins/sflow/sflow.h
++++ b/src/plugins/sflow/sflow.h
+@@ -207,6 +207,7 @@ typedef struct
+   u32 headerB;
+   sflow_direction_t samplingD;
+   bool dropM;
++  bool report_linux_ifindex;
+   u32 total_threads;
+   sflow_per_interface_data_t *per_interface_data;
+   sflow_per_thread_data_t *per_thread_data;
+-- 
+2.34.1
+
