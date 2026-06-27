@@ -97,7 +97,7 @@ show_sonic_ext_command_fn (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (vm, "  captures        : %llu", sem->captures);
   vlib_cli_output (vm, "  aggr-tap redir  : %llu", sem->aggr_tap_redirects);
   vlib_cli_output (vm, "  host-xc direct  : %llu", sem->host_xc_direct);
-  vlib_cli_output (vm, "  bcast punts     : %llu", sem->bcast_punts);
+  vlib_cli_output (vm, "  l2 trap fixups  : %llu", sem->l2_trap_fixups);
   return 0;
 }
 

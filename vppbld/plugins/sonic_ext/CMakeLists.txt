@@ -17,7 +17,7 @@ add_vpp_plugin(sonic_ext
   capture_node.c
   aggr_tap_redirect_node.c
   host_xc_node.c
-  bcast_redirect_node.c
+  l2_trap_fixup_node.c
   cli.c
 
   LINK_LIBRARIES

@@ -58,20 +58,11 @@ sonic_ext_aggr_tap_redirect_enable_disable (u32 sw_if_index, int enable)
 			       enable, 0, 0);
 }
 
-void
-sonic_ext_bcast_redirect_enable_disable (u32 sw_if_index, int enable)
-{
-  vnet_feature_enable_disable ("ip4-unicast",
-			       "sonic-ext-bcast-redirect", sw_if_index,
-			       enable, 0, 0);
-}
-
 /*
- * Is `phy_sw_if_index` a BVI (bridge-virtual interface)?  Used both
- * by the aggregate-detection helper and by the bcast-redirect
- * enable path.  Distinct from is_aggregate so that future bond
- * support can be added to is_aggregate without dragging
- * bvi-specific features along for the ride.
+ * Is `phy_sw_if_index` a BVI (bridge-virtual interface)?  Used by
+ * the aggregate-detection helper.  Distinct from is_aggregate so
+ * that future bond support can be added to is_aggregate without
+ * dragging bvi-specific helpers along for the ride.
  */
 int
 sonic_ext_phy_is_bvi (u32 phy_sw_if_index)
@@ -225,13 +216,11 @@ VNET_SW_INTERFACE_ADD_DEL_FUNCTION (sonic_ext_sw_interface_add_del);
  *   - sonic-ext-host-xc on the host  -- only if host-xc is enabled.
  *   - sonic-ext-aggr-tap-redirect on the host  -- only if phy is an
  *     aggregate (BVI today, bond tomorrow) and punt-via-member is on.
- *   - sonic-ext-bcast-redirect on the phy  -- only if phy is a
- *     BVI and punt-via-member is on; catches limited-broadcast
- *     IPv4 frames that flooded into the BVI from a bridge member
- *     and feeds them to linux-cp-punt -> bvi-host-tap
- *     interface-output -> aggr-tap-redirect -> member-host-tap (so
- *     the kernel observes the broadcast on the original member's
- *     netdev).
+ *
+ * DHCPv4 client broadcast is trapped at l2-input-classify by the
+ * per-member classifier session installed in SwitchVppFdb.cpp; it
+ * does not need any per-LCP-pair feature on the BVI.  See
+ * l2_trap_fixup_node.c.
  *
  * This is the only place we know both (a) the host tap sw_if_index
  * and (b) which phy it shadows.
@@ -249,9 +238,6 @@ sonic_ext_lcp_pair_add_cb (lcp_itf_pair_t *lip)
     sonic_ext_host_xc_enable_disable (lip->lip_host_sw_if_index, 1);
   if (sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 1);
-  if (sem->capture_enabled
-      && sonic_ext_phy_is_bvi (lip->lip_phy_sw_if_index))
-    sonic_ext_bcast_redirect_enable_disable (lip->lip_phy_sw_if_index, 1);
 }
 
 static void
@@ -267,9 +253,6 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
     sonic_ext_host_xc_enable_disable (lip->lip_host_sw_if_index, 0);
   if (sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 0);
-  if (sem->capture_enabled
-      && sonic_ext_phy_is_bvi (lip->lip_phy_sw_if_index))
-    sonic_ext_bcast_redirect_enable_disable (lip->lip_phy_sw_if_index, 0);
 }
 
 static clib_error_t *

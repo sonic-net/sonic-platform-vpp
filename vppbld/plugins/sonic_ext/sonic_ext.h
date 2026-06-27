@@ -113,7 +113,7 @@ typedef struct
   u64 captures;
   u64 aggr_tap_redirects;
   u64 host_xc_direct;
-  u64 bcast_punts;
+  u64 l2_trap_fixups;
 } sonic_ext_main_t;
 
 extern sonic_ext_main_t sonic_ext_main;
@@ -121,7 +121,7 @@ extern sonic_ext_main_t sonic_ext_main;
 extern vlib_node_registration_t sonic_ext_capture_node;
 extern vlib_node_registration_t sonic_ext_aggr_tap_redirect_node;
 extern vlib_node_registration_t sonic_ext_host_xc_node;
-extern vlib_node_registration_t sonic_ext_bcast_redirect_node;
+extern vlib_node_registration_t sonic_ext_l2_trap_fixup_node;
 
 /* Enable / disable sonic-ext-capture on a given interface.  No-op if
  * the capture sidecar is not yet initialized. */
@@ -134,12 +134,6 @@ void sonic_ext_host_xc_enable_disable (u32 sw_if_index, int enable);
  * (always the LCP host tap of an aggregate phy -- BVI today, bond
  * tomorrow).  Driven from the LCP pair add/del callback. */
 void sonic_ext_aggr_tap_redirect_enable_disable (u32 sw_if_index, int enable);
-
-/* Enable / disable sonic-ext-bcast-redirect on a given sw_if_index.
- * Today driven from the LCP pair add/del callback gated on
- * sonic_ext_phy_is_bvi(); the node itself is generic and could be
- * extended to non-BVI aggregates in the future. */
-void sonic_ext_bcast_redirect_enable_disable (u32 sw_if_index, int enable);
 
 /* Toggle accessors used by CLI and node fast paths. */
 void sonic_ext_set_punt_via_member (u8 is_enable);
