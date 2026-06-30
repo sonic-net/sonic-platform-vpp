@@ -10,9 +10,8 @@ $(SONIC_VPPCFGD)_SRC_PATH = $(SRC_PATH)/sonic-vppcfgd
 $(SONIC_VPPCFGD)_DEPENDS += $(SONIC_CONFIG_ENGINE_PY3) \
                             $(SONIC_YANG_MGMT_PY3) \
                             $(SONIC_YANG_MODELS_PY3)
-$(SONIC_VPPCFGD)_DEBS_DEPENDS += $(LIBYANG) \
-                                 $(LIBYANG_CPP) \
-                                 $(LIBYANG_PY3) \
+$(SONIC_VPPCFGD)_DEBS_DEPENDS += $(LIBYANG3) \
+                                 $(LIBYANG3_PY3) \
                                  $(PYTHON3_SWSSCOMMON)
 $(SONIC_VPPCFGD)_PYTHON_VERSION = 3
 $(SONIC_VPPCFGD)_TEST = n
