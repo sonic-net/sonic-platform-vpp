@@ -23,3 +23,5 @@
 #     scope.  Existing hash-eth-l34 and IP_FLOW_HASH_DEFAULT are byte-for-byte
 #     unchanged.
 0011-sonic-inner-aware-flow-hash.patch
+# 12. Report Linux ifindex in sflow PSAMPLE/NET_DM samples
+0012-sflow-report-linux-ifindex.patch
