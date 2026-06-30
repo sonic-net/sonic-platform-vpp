@@ -1,0 +1,202 @@
+From b26afa828c5f164e21dacf042713be11467d0b1c Mon Sep 17 00:00:00 2001
+From: Longxiang Lyu <lolv@microsoft.com>
+Date: Tue, 26 May 2026 08:55:48 +0000
+Subject: [PATCH] ip: add 'no-class-e-drop' startup config option to suppress
+ class E drop route
+
+VPP installs a 240.0.0.0/4 drop route (class E) as a FIB_SOURCE_SPECIAL
+entry in every IPv4 FIB at creation time. Because FIB_SOURCE_SPECIAL has
+the highest priority, control-plane routes in the 240.0.0.0/4 range
+cannot override it via the API.
+
+Add a new startup config flag under the 'ip' stanza:
+
+  ip {
+      no-class-e-drop
+  }
+
+When set, ip4_fib_hash_load_specials() skips installing the
+240.0.0.0/4 drop route for every FIB, including VRFs created at
+runtime. ip4_fib_hash_flush_specials() is updated symmetrically to
+skip removing an entry that was never added.
+
+The detection is factored into a static helper
+ip4_fib_special_is_class_e() to avoid duplicating the prefix check.
+
+Test: test/test_ip4.py::TestIPv4NoClassEDrop
+      test/test_ip4.py::TestIPv4ClassEDropDefault
+
+Type: feature
+Change-Id: I3526e33cd35880dd59169d41ca256a403edbca9d
+Signed-off-by: Longxiang Lyu <lolv@microsoft.com>
+---
+ src/vnet/fib/ip4_fib.c | 25 +++++++++++++++
+ src/vnet/fib/ip4_fib.h |  7 +++++
+ test/test_ip4.py       | 70 ++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 102 insertions(+)
+
+diff --git a/src/vnet/fib/ip4_fib.c b/src/vnet/fib/ip4_fib.c
+index 29d5d98f20..636d89b4e5 100644
+--- a/src/vnet/fib/ip4_fib.c
++++ b/src/vnet/fib/ip4_fib.c
+@@ -7,6 +7,14 @@
+ #include <vnet/fib/fib_entry.h>
+ #include <vnet/fib/ip4_fib.h>
+ 
++/**
++ * When set, the class E drop route (240.0.0.0/4) installed by
++ * ip4_fib_hash_load_specials() is immediately removed, allowing
++ * control-plane routes in that range to take effect.
++ * Enabled via the startup config: ip { no-class-e-drop }
++ */
++int ip4_fib_no_class_e_drop;
++
+ /*
+  * A table of prefixes to be added to tables and the sources for them
+  */
+@@ -89,6 +97,13 @@ static const ip4_fib_table_special_prefix_t ip4_specials[] = {
+     }
+ };
+ 
++static_always_inline int
++ip4_fib_special_is_class_e (const ip4_fib_table_special_prefix_t *s)
++{
++    return (s->ift_prefix.fp_addr.ip4.data_u32 == 0xf0000000 &&
++	    s->ift_prefix.fp_len == 4);
++}
++
+ void
+ ip4_fib_hash_load_specials (u32 fib_index)
+ {
+@@ -99,6 +114,10 @@ ip4_fib_hash_load_specials (u32 fib_index)
+ 
+     for (ii = 0; ii < ARRAY_LEN(ip4_specials); ii++)
+     {
++	/* skip class E drop route (240.0.0.0/4) if configured */
++	if (ip4_fib_no_class_e_drop && ip4_fib_special_is_class_e(&ip4_specials[ii]))
++	    continue;
++
+ 	fib_prefix_t prefix = ip4_specials[ii].ift_prefix;
+ 
+ 	prefix.fp_addr.ip4.data_u32 =
+@@ -122,6 +141,10 @@ ip4_fib_hash_flush_specials (u32 fib_index)
+      */
+     for (ii = ARRAY_LEN(ip4_specials) - 1; ii >= 0; ii--)
+     {
++	/* skip class E if it was never added */
++	if (ip4_fib_no_class_e_drop && ip4_fib_special_is_class_e(&ip4_specials[ii]))
++	    continue;
++
+ 	fib_prefix_t prefix = ip4_specials[ii].ift_prefix;
+ 
+ 	prefix.fp_addr.ip4.data_u32 =
+@@ -622,6 +645,8 @@ ip_config (vlib_main_t * vm, unformat_input_t * input)
+     {
+ 	if (unformat (input, "default-table-name %s", &default_name))
+ 	    ;
++	else if (unformat (input, "no-class-e-drop"))
++	    ip4_fib_no_class_e_drop = 1;
+ 	else
+ 	    return clib_error_return (0, "unknown input '%U'",
+ 				      format_unformat_error, input);
+diff --git a/src/vnet/fib/ip4_fib.h b/src/vnet/fib/ip4_fib.h
+index c05b826216..d23b7b5073 100644
+--- a/src/vnet/fib/ip4_fib.h
++++ b/src/vnet/fib/ip4_fib.h
+@@ -123,6 +123,13 @@ u32 ip4_fib_index_from_table_id (u32 table_id)
+ 
+ extern u32 ip4_fib_table_get_index_for_sw_if_index(u32 sw_if_index);
+ 
++/**
++ * @brief When non-zero, the 240.0.0.0/4 class E drop route is removed
++ *        from every FIB after the special routes are loaded.
++ *        Set via startup config: ip { no-class-e-drop }
++ */
++extern int ip4_fib_no_class_e_drop;
++
+ #ifdef VPP_IP_FIB_MTRIE_16
+ always_inline index_t
+ ip4_fib_forwarding_lookup (u32 fib_index,
+diff --git a/test/test_ip4.py b/test/test_ip4.py
+index f51a50595e..e3fb52bed3 100644
+--- a/test/test_ip4.py
++++ b/test/test_ip4.py
+@@ -3681,5 +3681,75 @@ class TestIP4InterfaceRx(VppTestCase):
+         self.send_and_expect(self.pg0, pkts_dst, self.pg2)
+ 
+ 
++class TestIPv4NoClassEDrop(VppTestCase):
++    """Verify that 'ip { no-class-e-drop }' removes the 240.0.0.0/4 drop route
++    while keeping all other special routes intact."""
++
++    extra_vpp_config = ["ip", "{", "no-class-e-drop", "}"]
++
++    @classmethod
++    def setUpClass(cls):
++        super(TestIPv4NoClassEDrop, cls).setUpClass()
++
++    @classmethod
++    def tearDownClass(cls):
++        super(TestIPv4NoClassEDrop, cls).tearDownClass()
++
++    def test_class_e_route_absent(self):
++        """240.0.0.0/4 drop route should NOT be present"""
++        self.assertFalse(
++            find_route(self, "240.0.0.0", 4),
++            "240.0.0.0/4 should not exist when no-class-e-drop is set",
++        )
++
++    def test_other_specials_present(self):
++        """Other special routes must still be installed"""
++        self.assertTrue(find_route(self, "0.0.0.0", 0), "0.0.0.0/0 should exist")
++        self.assertTrue(find_route(self, "0.0.0.0", 32), "0.0.0.0/32 should exist")
++        self.assertTrue(
++            find_route(self, "224.0.0.0", 4), "224.0.0.0/4 mcast drop should exist"
++        )
++        self.assertTrue(
++            find_route(self, "255.255.255.255", 32),
++            "255.255.255.255/32 should exist",
++        )
++
++    def test_class_e_absent_in_new_vrf(self):
++        """240.0.0.0/4 should also be absent in a newly created VRF"""
++        tbl = VppIpTable(self, 10)
++        tbl.add_vpp_config()
++        try:
++            self.assertFalse(
++                find_route(self, "240.0.0.0", 4, table_id=10),
++                "240.0.0.0/4 should not exist in VRF 10",
++            )
++            self.assertTrue(
++                find_route(self, "0.0.0.0", 0, table_id=10),
++                "0.0.0.0/0 should exist in VRF 10",
++            )
++        finally:
++            tbl.remove_vpp_config()
++
++
++class TestIPv4ClassEDropDefault(VppTestCase):
++    """Verify the default behavior: 240.0.0.0/4 IS present when
++    no-class-e-drop is NOT configured."""
++
++    @classmethod
++    def setUpClass(cls):
++        super(TestIPv4ClassEDropDefault, cls).setUpClass()
++
++    @classmethod
++    def tearDownClass(cls):
++        super(TestIPv4ClassEDropDefault, cls).tearDownClass()
++
++    def test_class_e_route_present(self):
++        """240.0.0.0/4 drop route should be present by default"""
++        self.assertTrue(
++            find_route(self, "240.0.0.0", 4),
++            "240.0.0.0/4 should exist by default",
++        )
++
++
+ if __name__ == "__main__":
+     unittest.main(testRunner=VppTestRunner)
+-- 
+2.34.1
+
