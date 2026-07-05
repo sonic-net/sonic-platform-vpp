@@ -18,7 +18,12 @@ add_vpp_plugin(sonic_ext
   aggr_tap_redirect_node.c
   host_xc_node.c
   l2_trap_fixup_node.c
+  ip4_loopback_node.c
+  ip6_loopback_node.c
   cli.c
+
+  API_FILES
+  sonic_ext.api
 
   LINK_LIBRARIES
   lcp
