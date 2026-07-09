@@ -21,6 +21,10 @@ fi
 
 # Create a folder for SwSS record files
 mkdir -p /var/log/swss
+# P4Orch unconditionally binds a ZMQ server on ipc:///zmq_swss/... ; in the
+# multi-container/VM image this dir is a host bind-mount, but the single
+# container must create it itself or orchagent aborts (zmq_bind ENOENT).
+mkdir -p /zmq_swss
 ORCHAGENT_ARGS="-d /var/log/swss "
 
 # Set orchagent pop batch size to 8192

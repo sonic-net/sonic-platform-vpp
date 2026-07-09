@@ -8,10 +8,6 @@ RUN [ -f /etc/rsyslog.conf ] && sed -ri "s/%syslogtag%/$docker_container_name#%s
 ## Make apt-get non-interactive
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y gnupg
-COPY ["sonic-dev.gpg.key", "/etc/apt/"]
-RUN apt-key add /etc/apt/sonic-dev.gpg.key
-RUN echo "deb http://packages.microsoft.com/repos/sonic-dev/ jessie main" >> /etc/apt/sources.list
 RUN apt-get update
 
 RUN apt-get install -y net-tools \
@@ -62,6 +58,9 @@ RUN apt-get install -y net-tools \
                        # For installing dependent Python packages of sonic-host-services
                        # these packages are needed at runtime
                        gir1.2-glib-2.0 \
+                       python3-gi \
+                       python3-dbus \
+                       python3-systemd \
                        libdbus-1-3 \
                        libunwind8 \
                        libgirepository-1.0-1 \
@@ -74,6 +73,10 @@ RUN apt-get install -y net-tools \
                        dbus \
 		       redis-server
 
+# The trixie config-engine base apt-installs python3-cffi, which pip cannot upgrade
+# (no RECORD file); remove it so wheel installs below can pull in a newer pip-managed cffi.
+RUN apt-get purge -y python3-cffi
+
 # For sonic-config-engine Python 3 package
 # Install pyangbind here, outside sonic-config-engine dependencies, as pyangbind causes enum34 to be installed.
 # Then immediately uninstall enum34, as enum34 should not be installed for Python >= 3.4, as it causes a
@@ -83,10 +86,15 @@ RUN pip3 install pyangbind==0.8.1
 RUN pip3 uninstall -y enum34
 
 # Dependencies of restore_neighbors.py
+# (scapy comes from the python3-scapy apt package installed above)
 RUN pip3 install \
-         scapy==2.4.4 \
          pyroute2==0.5.14 \
          netifaces==0.10.9
+
+# For sonic-host-services/dbus-python builds: these packages are required to
+# build dbus-python source archives (dbus-python-*.tar.gz), and avoid
+# "BackendUnavailable: Cannot import 'mesonpy'" during pip install with no build isolation.
+RUN pip3 install meson-python meson ninja patchelf
 
 {% if docker_sonic_vpp_debs.strip() -%}
 # Copy locally-built Debian package dependencies
