@@ -524,10 +524,12 @@ interface counter and behaves like the others across a port flap; after the cold
 Validated on a live `vms-kvm-vpp-t1-lag` KVM testbed (32-port, `asic_type=vpp`,
 VPP `v2606-0.4+b1sonic1`, Debian trixie):
 
-- **Full test passes.** `test_loopback_action_basic` reports **`1 passed` (~8.5 min)**:
-  all 10 RIF instances the test creates (Ethernet, VLAN, PortChannel, port
-  sub-interface and PortChannel sub-interface, across two cycles) pass both the
-  `FORWARD` and the `DROP` verification.
+- **Full module passes.** The `iface_loopback_action` module reports **`3 passed`
+  (~17 min)** — `test_loopback_action_basic`, `test_loopback_action_port_flap`, and
+  `test_loopback_action_reload`. Every RIF instance the module creates (Ethernet,
+  VLAN, PortChannel, port sub-interface and PortChannel sub-interface, across two
+  cycles) passes both the `FORWARD` and the `DROP` verification, and the drop
+  behaviour survives a port flap and a cold reboot.
 - **Plugin + control path:** `sonic_ext_plugin.so` loads with the
   `sonic-ext-ip4-loopback`/`sonic-ext-ip6-loopback` nodes (`vppctl show node
   sonic-ext-ip4-loopback` → `state active`), `create_switch` succeeds, and
@@ -548,7 +550,7 @@ blocked the run at a successive RIF shape — see §9.
 ## 9. Resolved Pre-existing Defects (found during enablement)
 
 The feature itself is validated end to end (§8.4). Getting the **full**
-`test_loopback_action_basic` to pass on `vms-kvm-vpp-t1-lag` first required fixing
+`iface_loopback_action` module to pass on `vms-kvm-vpp-t1-lag` first required fixing
 **five distinct, pre-existing defects** that are independent of the loopback
 feature — four in the stock VPP SAI layer (`sonic-sairedis/vslib/vpp`) and one in
 the KVM testbed VM template (`sonic-mgmt`). Each
