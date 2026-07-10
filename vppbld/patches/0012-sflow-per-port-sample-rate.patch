@@ -1,8 +1,8 @@
 diff --git a/src/plugins/sflow/node.c b/src/plugins/sflow/node.c
-index 3d5363166..461555a2e 100644
+index 3d5363166..3f45c97e2 100644
 --- a/src/plugins/sflow/node.c
 +++ b/src/plugins/sflow/node.c
-@@ -73,26 +73,30 @@ sflow_node_ingress_egress (vlib_main_t *vm, vlib_node_runtime_t *node,
+@@ -73,26 +73,35 @@ sflow_node_ingress_egress (vlib_main_t *vm, vlib_node_runtime_t *node,
    from = vlib_frame_vector_args (frame);
    n_left_from = frame->n_vectors;
  
@@ -17,31 +17,35 @@ index 3d5363166..461555a2e 100644
  
 -  /* note that sfwk->skip==1 means "take the next packet",
 -     so we never see sfwk->skip==0. */
--
-+  /* note that sfif->skip==1 means "take the next packet",
-+     so we never see sfif->skip==0. */
++  /* per-thread, per-interface sampling state: each thread keeps its own
++     skip/pool/seed so concurrent threads on the same interface don't race. */
++  sflow_per_if_sampler_t *smpif =
++    vec_elt_at_index (sfwk->per_interface, hw->hw_if_index);
+ 
++  /* note that smpif->skip==1 means "take the next packet",
++     so we never see smpif->skip==0. */
    u32 pkts = n_left_from;
 -  if (PREDICT_TRUE (sfwk->skip > pkts))
-+  if (PREDICT_TRUE (sfif->skip > pkts))
++  if (PREDICT_TRUE (smpif->skip > pkts))
      {
        /* skip the whole frame-vector */
 -      sfwk->skip -= pkts;
 -      sfwk->pool += pkts;
-+      sfif->skip -= pkts;
-+      sfif->pool += pkts;
++      smpif->skip -= pkts;
++      smpif->pool += pkts;
      }
    else
      {
 -      while (pkts >= sfwk->skip)
-+      while (pkts >= sfif->skip)
++      while (pkts >= smpif->skip)
  	{
  	  /* reach in to get the one we want. */
 -	  vlib_buffer_t *bN = vlib_get_buffer (vm, from[sfwk->skip - 1]);
-+	  vlib_buffer_t *bN = vlib_get_buffer (vm, from[sfif->skip - 1]);
++	  vlib_buffer_t *bN = vlib_get_buffer (vm, from[smpif->skip - 1]);
  
  	  /* Sample this packet header. */
  	  u32 hdr = bN->current_length;
-@@ -123,7 +127,7 @@ sflow_node_ingress_egress (vlib_main_t *vm, vlib_node_runtime_t *node,
+@@ -123,7 +132,7 @@ sflow_node_ingress_egress (vlib_main_t *vm, vlib_node_runtime_t *node,
  
  	  sflow_sample_t sample = {
  	    .sample_type = sample_type,
@@ -50,34 +54,31 @@ index 3d5363166..461555a2e 100644
  	    .input_if_index = if_index,
  	    .output_if_index = if_index_out,
  	    .sampled_packet_size =
-@@ -149,16 +153,16 @@ sflow_node_ingress_egress (vlib_main_t *vm, vlib_node_runtime_t *node,
- 	  sfwk->smpl++;
- 	  memcpy (sample.header, en, hdr);
+@@ -151,14 +160,14 @@ sflow_node_ingress_egress (vlib_main_t *vm, vlib_node_runtime_t *node,
  	  if (PREDICT_FALSE (!sflow_fifo_enqueue (&sfwk->fifo, &sample)))
--	    sfwk->drop++;
-+	  sfwk->drop++;
+ 	    sfwk->drop++;
  
 -	  pkts -= sfwk->skip;
 -	  sfwk->pool += sfwk->skip;
 -	  sfwk->skip = sflow_next_random_skip (sfwk);
-+	  pkts -= sfif->skip;
-+	  sfif->pool += sfif->skip;
-+	  sfif->skip = sflow_next_random_skip_if(smp, sfif);
++	  pkts -= smpif->skip;
++	  smpif->pool += smpif->skip;
++	  smpif->skip = sflow_next_random_skip_if (smp, sfif, smpif);
  	}
        /* We took a sample (or several) from this frame-vector, but now we are
  	 skipping the rest. */
 -      sfwk->skip -= pkts;
 -      sfwk->pool += pkts;
-+	  sfif->skip -= pkts;
-+      sfif->pool += pkts;
++      smpif->skip -= pkts;
++      smpif->pool += pkts;
      }
  
    /* the rest of this is boilerplate code just to make sure
 diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
-index 67b0cb38b..f231fb524 100644
+index 89529d1ca..908fbc5e1 100644
 --- a/src/plugins/sflow/sflow.c
 +++ b/src/plugins/sflow/sflow.c
-@@ -550,12 +550,18 @@ read_node_counters (sflow_main_t *smp, sflow_err_ctrs_t *ctrs)
+@@ -515,11 +515,13 @@ read_node_counters (sflow_main_t *smp, sflow_err_ctrs_t *ctrs)
      {
        sflow_per_thread_data_t *sfwk =
  	vec_elt_at_index (smp->per_thread_data, thread_index);
@@ -86,55 +87,76 @@ index 67b0cb38b..f231fb524 100644
        ctrs->counters[SFLOW_ERROR_DROPPED] += sfwk->drop;
        ctrs->counters[SFLOW_ERROR_DIPROCESSED] += sfwk->dsmp;
        ctrs->counters[SFLOW_ERROR_DIDROPPED] += sfwk->ddrp;
++      /* pool is now tracked per-thread, per-interface */
++      for (int i = 0; i < vec_len (sfwk->per_interface); i++)
++	ctrs->counters[SFLOW_ERROR_PROCESSED] += sfwk->per_interface[i].pool;
      }
+ }
+ 
+@@ -641,6 +643,42 @@ sflow_set_worker_sampling_state (sflow_main_t *smp)
+     }
+ }
+ 
++/* (Re)initialize the per-thread, per-interface sampling state for one
++   interface across all threads.  Called from the control path only (interface
++   enable, per-port or global rate change) so the datapath never races on
++   skip/pool/seed. */
++static void
++sflow_reset_interface_samplers (sflow_main_t *smp, u32 hw_if_index)
++{
++  sflow_per_interface_data_t *sfif =
++    vec_elt_at_index (smp->per_interface_data, hw_if_index);
++  for (clib_thread_index_t thread_index = 0;
++       thread_index < smp->total_threads; thread_index++)
++    {
++      sflow_per_thread_data_t *sfwk =
++	vec_elt_at_index (smp->per_thread_data, thread_index);
++      vec_validate (sfwk->per_interface, hw_if_index);
++      sflow_per_if_sampler_t *smpif =
++	vec_elt_at_index (sfwk->per_interface, hw_if_index);
++      smpif->pool = 0;
++      /* distinct seed per (thread, interface) so threads don't correlate */
++      smpif->seed = hw_if_index ^ (thread_index + 1);
++      smpif->skip = sflow_next_random_skip_if (smp, sfif, smpif);
++    }
++}
 +
-+  for (int i = 0; i < vec_len (smp->per_interface_data); i++)
-+  {
-+    sflow_per_interface_data_t *sfif = vec_elt_at_index (smp->per_interface_data, i);
-+    if (sfif)
-+      ctrs->counters[SFLOW_ERROR_PROCESSED] += sfif->pool;
-+  }
- }
- 
- static void
-@@ -676,6 +682,19 @@ sflow_set_worker_sampling_state (sflow_main_t *smp)
-     }
- }
- 
 +static void
 +sflow_set_interface_sampling_rate (sflow_main_t *smp)
 +{
-+  for (int i = 0; i < vec_len(smp->per_interface_data); i++)
-+  {
-+    sflow_per_interface_data_t *sfif = vec_elt_at_index(smp->per_interface_data, i);
-+    if (sfif && sfif->sflow_enabled && !sfif->samplingN)
++  for (int i = 0; i < vec_len (smp->per_interface_data); i++)
 +    {
-+      sfif->skip = sflow_next_random_skip_if(smp,sfif);
++      sflow_per_interface_data_t *sfif =
++	vec_elt_at_index (smp->per_interface_data, i);
++      if (sfif && sfif->sflow_enabled && !sfif->samplingN)
++	sflow_reset_interface_samplers (smp, i);
 +    }
-+  }
 +}
 +
  static void
  sflow_sampling_start (sflow_main_t *smp)
  {
-@@ -748,6 +767,7 @@ sflow_sampling_rate (sflow_main_t *smp, u32 samplingN)
+@@ -713,6 +751,7 @@ sflow_sampling_rate (sflow_main_t *smp, u32 samplingN)
        // dynamic change of sampling rate
        smp->samplingN = samplingN;
        sflow_set_worker_sampling_state (smp);
-+      sflow_set_interface_sampling_rate(smp);
++      sflow_set_interface_sampling_rate (smp);
      }
    else
      {
-@@ -889,14 +909,47 @@ sflow_enable_disable (sflow_main_t *smp, u32 sw_if_index, bool enable_disable)
+@@ -854,14 +893,53 @@ sflow_enable_disable (sflow_main_t *smp, u32 sw_if_index, bool enable_disable)
        sfif->hw_if_index = sw->hw_if_index;
        sfif->polled = 0;
        sfif->sflow_enabled = enable_disable;
 +
-+      if(enable_disable)
-+        {
-+          sfif->seed = sw->hw_if_index;
-+          sfif->skip = sflow_next_random_skip_if(smp,sfif);
-+        }  
++      if (enable_disable)
++	{
++	  /* make sure per-thread structures exist, then seed this
++	     interface's per-thread samplers before the feature arc starts
++	     delivering packets to the workers. */
++	  sflow_set_worker_sampling_state (smp);
++	  sflow_reset_interface_samplers (smp, sw->hw_if_index);
++	}
 +
        sflow_enable_disable_interface (smp, sfif);
        smp->interfacesEnabled += (enable_disable) ? 1 : -1;
@@ -145,14 +167,14 @@ index 67b0cb38b..f231fb524 100644
  }
  
 +int
-+sflow_set_sampling_rate_set(sflow_main_t *smp, u32 sw_if_index, u32 samplingN)
++sflow_set_sampling_rate_set (sflow_main_t *smp, u32 sw_if_index, u32 samplingN)
 +{
 +  vnet_sw_interface_t *sw;
 +
 +  /* Utterly wrong? */
 +  if (pool_is_free_index (smp->vnet_main->interface_main.sw_interfaces,
-+    sw_if_index))
-+  return VNET_API_ERROR_INVALID_SW_IF_INDEX;
++			  sw_if_index))
++    return VNET_API_ERROR_INVALID_SW_IF_INDEX;
 +
 +  /* Not a physical port? */
 +  sw = vnet_get_sw_interface (smp->vnet_main, sw_if_index);
@@ -165,46 +187,73 @@ index 67b0cb38b..f231fb524 100644
 +  sflow_per_interface_data_t *sfif = vec_elt_at_index (smp->per_interface_data, sw->hw_if_index);
 +
 +  sfif->samplingN = samplingN;
-+  sfif->skip = sflow_next_random_skip_if(smp, sfif);
++  /* re-seed the per-thread samplers for this interface with the new rate.
++     If sampling hasn't started yet the samplers are seeded on enable. */
++  if (smp->total_threads)
++    sflow_reset_interface_samplers (smp, sw->hw_if_index);
 +
-+  return 0; 
++  return 0;
 +
 +}
 +
- int 
- sflow_report_linux_ifindex(sflow_main_t *smp, bool enable)
- {
+ static clib_error_t *
+ sflow_sampling_rate_command_fn (vlib_main_t *vm, unformat_input_t *input,
+ 				vlib_cli_command_t *cmd)
 diff --git a/src/plugins/sflow/sflow.h b/src/plugins/sflow/sflow.h
-index 0540cae48..00ad8051e 100644
+index 7e8c0469e..cf90d9cea 100644
 --- a/src/plugins/sflow/sflow.h
 +++ b/src/plugins/sflow/sflow.h
-@@ -247,4 +247,14 @@ sflow_next_random_skip (sflow_per_thread_data_t *sfwk)
+@@ -162,6 +162,16 @@ sflow_drop_fifo_dequeue (sflow_drop_fifo_t *fifo, sflow_sample_t *sample)
+   return true;
+ }
+ 
++/* per-thread, per-interface sampling counters.  Kept per-thread so that
++   multiple worker threads sampling the same interface never share (and race
++   on) skip/pool/seed.  Indexed by hw_if_index. */
++typedef struct
++{
++  u32 skip;
++  u32 pool;
++  u32 seed;
++} sflow_per_if_sampler_t;
++
+ /* private to worker */
+ typedef struct
+ {
+@@ -173,6 +183,8 @@ typedef struct
+   u32 drop;
+   u32 dsmp;
+   u32 ddrp;
++  /* per-interface sampling state, indexed by hw_if_index */
++  sflow_per_if_sampler_t *per_interface;
+   CLIB_CACHE_LINE_ALIGN_MARK (_fifo);
+   sflow_fifo_t fifo;
+   CLIB_CACHE_LINE_ALIGN_MARK (_drop_fifo);
+@@ -246,4 +258,15 @@ sflow_next_random_skip (sflow_per_thread_data_t *sfwk)
    return (random_u32 (&sfwk->seed) % lim) + 1;
  }
  
 +static inline u32
-+sflow_next_random_skip_if(sflow_main_t *smp, sflow_per_interface_data_t *sfif)
++sflow_next_random_skip_if (sflow_main_t *smp, sflow_per_interface_data_t *sfif,
++			   sflow_per_if_sampler_t *smpif)
 +{
 +  u32 effectiveN = sfif->samplingN ? sfif->samplingN : smp->samplingN;
-+  if(effectiveN <= 1)
++  if (effectiveN <= 1)
 +    return 1;
 +  u32 lim = (2 * effectiveN) - 1;
-+  return (random_u32(&sfif->seed) % lim) + 1;
++  return (random_u32 (&smpif->seed) % lim) + 1;
 +}
 +
  #endif /* __included_sflow_h__ */
 diff --git a/src/plugins/sflow/sflow_common.h b/src/plugins/sflow/sflow_common.h
-index 3e1021e4a..d699ceac0 100644
+index 3e1021e4a..cd73302a8 100644
 --- a/src/plugins/sflow/sflow_common.h
 +++ b/src/plugins/sflow/sflow_common.h
-@@ -19,6 +19,10 @@ typedef struct
+@@ -19,6 +19,7 @@ typedef struct
    u32 linux_if_index;
    u32 polled;
    int sflow_enabled;
 +  u32 samplingN;
-+  u32 skip;
-+  u32 pool;
-+  u32 seed;
  } sflow_per_interface_data_t;
  
  /* mirror sflow_direction enum in sflow.api */
