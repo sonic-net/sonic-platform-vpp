@@ -1,0 +1,21 @@
+Subject: [PATCH] load-balance: tighten multipath error tolerance for SONiC
+
+SONiC VXLAN underlay ECMP tests expect near-uniform traffic distribution
+across equal-cost underlay paths. The default multipath_next_hop_error_
+tolerance of 0.1 (10%) allows enough skew that a small number of paths can
+be dropped from the load-balance bucket set, quantizing an N-way ECMP to
+fewer buckets. Tighten it to 0.01 so all equal-cost paths are retained.
+---
+diff --git a/src/vnet/dpo/load_balance.c b/src/vnet/dpo/load_balance.c
+index 8bec28f4a..245033ece 100644
+--- a/src/vnet/dpo/load_balance.c
++++ b/src/vnet/dpo/load_balance.c
+@@ -20,7 +20,7 @@
+ /*
+  * distribution error tolerance for load-balancing
+  */
+-const f64 multipath_next_hop_error_tolerance = 0.1;
++const f64 multipath_next_hop_error_tolerance = 0.01;
+ 
+ static const char *load_balance_attr_names[] = LOAD_BALANCE_ATTR_NAMES;
+ 

@@ -23,3 +23,12 @@
 #     scope.  Existing hash-eth-l34 and IP_FLOW_HASH_DEFAULT are byte-for-byte
 #     unchanged.
 0011-sonic-inner-aware-flow-hash.patch
+# 12. VXLAN encap inner-aware flow hash: hash inner IP 5-tuple on L3 VXLAN
+#     encap so inner flows spread across underlay ECMP / LAG paths
+0012-vxlan-encap-inner-aware-flow-hash.patch
+# 13. VXLAN underlay ECMP: tighten multipath load-balance error tolerance so
+#     all equal-cost underlay paths are retained
+0013-sonic-vxlan-underlay-ecmp-loadbalance-tolerance.patch
+# 14. VXLAN VNET source-independent ("decap-any") decap: match local dst+vni
+#     ignoring outer src (RIOT / secondary-VTEP VNET decap) + l2_bvi helper
+0014-sonic-vxlan-vnet-source-independent-decap.patch
