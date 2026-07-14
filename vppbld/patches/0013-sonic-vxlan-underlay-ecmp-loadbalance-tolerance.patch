@@ -5,6 +5,15 @@ across equal-cost underlay paths. The default multipath_next_hop_error_
 tolerance of 0.1 (10%) allows enough skew that a small number of paths can
 be dropped from the load-balance bucket set, quantizing an N-way ECMP to
 fewer buckets. Tighten it to 0.01 so all equal-cost paths are retained.
+
+Scope note: multipath_next_hop_error_tolerance is a GLOBAL FIB load-balance
+constant (ip_multipath_normalize_next_hops), not VXLAN-specific. Tightening it
+improves fairness for every ECMP group but also allocates more load-balance
+buckets for non-power-of-2 groups (e.g. a 3-way group grows from 16 to 256
+buckets), increasing per-load-balance memory and rebuild cost at large
+multipath scale. This does NOT affect LAG member hashing: bonding uses
+l2_flow_hash, not the multipath bucket allocator. (Inner-aware LAG/ECMP
+spreading for tunnelled traffic is provided separately by patch 0012.)
 ---
 diff --git a/src/vnet/dpo/load_balance.c b/src/vnet/dpo/load_balance.c
 index 8bec28f4a..245033ece 100644

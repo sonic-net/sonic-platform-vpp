@@ -6,11 +6,26 @@ decap on the exact (src,dst,vni) tuple. Register an additional source-
 independent bihash entry keyed on local dst ip + vni (outer src wildcarded)
 on tunnel add, maintain it on delete, and consult it in vxlan4/6_find_tunnel
 only after the exact lookup misses so existing decap behaviour is unchanged.
-Includes the L3-promiscuous VNET-decap BVI helper (l2_bvi) used to route the
-decapped inner packet into the tenant VRF.
+
+The source-independent wildcard and the L3-promiscuous BVI receive are scoped
+to secondary-VTEP decap terms only, via a decap-any flag the SAI layer sets in
+the high bit (VXLAN_DECAP_ANY_FLAG) of the wire decap_next_index; ordinary
+VXLAN tunnels keep exact outer-source matching and strict BVI my-mac. All
+wildcard bihash add/del return codes are checked: an add failure rolls back
+the tunnel, a delete-time re-point failure drops the stale entry. The
+L3-promiscuous ingress set is an O(1) sw_if_index bitmap in l2_bvi (no
+per-packet device-class/string lookups).
+
+Limitations: this covers L3 VNET decap-and-route only. L2 EVPN VXLAN
+(bridged, MAC-learning) is out of scope - such tunnels are not flagged
+decap-any, so they keep exact outer-source matching and strict BVI my-mac
+and are unaffected. The decap BVI is L3-enabled for both address families
+but set_interface_vrf carries a single family flag, so mixed-family inner
+traffic (e.g. inner IPv6 over an IPv4 VTEP) is a known gap shared with the
+primary-VTEP decap path.
 ---
 diff --git a/src/plugins/vxlan/decap.c b/src/plugins/vxlan/decap.c
-index 89422fda5..301ec5966 100644
+index 89422fd..301ec59 100644
 --- a/src/plugins/vxlan/decap.c
 +++ b/src/plugins/vxlan/decap.c
 @@ -86,6 +86,20 @@ vxlan4_find_tunnel (vxlan_main_t * vxm, last_tunnel_cache4 * cache,
@@ -61,54 +76,129 @@ index 89422fda5..301ec5966 100644
        *cache = key6;
      }
 diff --git a/src/plugins/vxlan/vxlan.c b/src/plugins/vxlan/vxlan.c
-index 46c014912..b5e62065d 100644
+index 46c0149..eeadd65 100644
 --- a/src/plugins/vxlan/vxlan.c
 +++ b/src/plugins/vxlan/vxlan.c
-@@ -480,6 +480,18 @@ int vnet_vxlan_add_del_tunnel
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include <vxlan/vxlan.h>
++#include <vnet/l2/l2_bvi.h>
+ #include <vnet/ip/format.h>
+ #include <vnet/fib/fib_entry.h>
+ #include <vnet/fib/fib_table.h>
+@@ -406,6 +407,18 @@ int vnet_vxlan_add_del_tunnel
+       if (p)
+ 	return VNET_API_ERROR_TUNNEL_EXIST;
+ 
++      /* SONiC VNET decap-any: SAI signals a source-independent decap term by
++       * setting VXLAN_DECAP_ANY_FLAG in the wire decap_next_index. Decode it
++       * into a local flag and strip it so the remaining value is a normal
++       * next index. */
++      u8 decap_any = 0;
++      if (a->decap_next_index != ~0 &&
++	  (a->decap_next_index & VXLAN_DECAP_ANY_FLAG))
++	{
++	  decap_any = 1;
++	  a->decap_next_index &= ~VXLAN_DECAP_ANY_FLAG;
++	}
++
+       /*if not set explicitly, default to l2 */
+       if (a->decap_next_index == ~0)
+ 	a->decap_next_index = VXLAN_INPUT_NEXT_L2_INPUT;
+@@ -421,6 +434,7 @@ int vnet_vxlan_add_del_tunnel
+ #define _(x) t->x = a->x;
+       foreach_copy_field;
+ #undef _
++      t->decap_any = decap_any;
+ 
+       vxlan_rewrite (t, is_ip6);
+       /*
+@@ -480,6 +494,27 @@ int vnet_vxlan_add_del_tunnel
  	  key6.value = (u64) dev_instance;
  	  add_failed = clib_bihash_add_del_24_8 (&vxm->vxlan6_tunnel_by_key,
  						 &key6, 1 /*add */ );
 +	  /* SONiC VNET decap-any: also register a source-independent decap
-+	   * entry keyed on local dst ip6 + vni (outer src wildcarded). */
-+	  if (!ip46_address_is_multicast (&t->dst))
++	   * entry keyed on local dst ip6 + vni (outer src wildcarded). Only
++	   * for decap-any terms so ordinary tunnels keep outer-src checking. */
++	  if (!add_failed && t->decap_any &&
++	      !ip46_address_is_multicast (&t->dst))
 +	    {
 +	      vxlan6_tunnel_key_t key6w;
 +	      key6w.key[0] = t->src.ip6.as_u64[0];
 +	      key6w.key[1] = t->src.ip6.as_u64[1];
 +	      key6w.key[2] = key6.key[2];
 +	      key6w.value = (u64) dev_instance;
-+	      clib_bihash_add_del_24_8 (&vxm->vxlan6_tunnel_by_key, &key6w,
-+					1 /*add */ );
++	      if (clib_bihash_add_del_24_8 (&vxm->vxlan6_tunnel_by_key, &key6w,
++					    1 /*add */ ))
++		{
++		  /* roll back the exact entry to avoid a half-programmed
++		   * tunnel, then fail the create. */
++		  clib_bihash_add_del_24_8 (&vxm->vxlan6_tunnel_by_key, &key6,
++					    0 /*del */ );
++		  add_failed = 1;
++		}
 +	    }
  	}
        else
  	{
-@@ -491,6 +503,17 @@ int vnet_vxlan_add_del_tunnel
+@@ -491,6 +526,24 @@ int vnet_vxlan_add_del_tunnel
  	  key4.value = di.as_u64;
  	  add_failed = clib_bihash_add_del_16_8 (&vxm->vxlan4_tunnel_by_key,
  						 &key4, 1 /*add */ );
 +	  /* SONiC VNET decap-any: also register a source-independent decap
-+	   * entry keyed on local dst ip + vni (outer src wildcarded to 0). */
-+	  if (!ip46_address_is_multicast (&t->dst))
++	   * entry keyed on local dst ip + vni (outer src wildcarded to 0).
++	   * Only for decap-any terms. */
++	  if (!add_failed && t->decap_any &&
++	      !ip46_address_is_multicast (&t->dst))
 +	    {
 +	      vxlan4_tunnel_key_t key4w;
 +	      key4w.key[0] = ((u64) t->src.ip4.as_u32) << 32;
 +	      key4w.key[1] = key4.key[1];
 +	      key4w.value = di.as_u64;
-+	      clib_bihash_add_del_16_8 (&vxm->vxlan4_tunnel_by_key, &key4w,
-+					1 /*add */ );
++	      if (clib_bihash_add_del_16_8 (&vxm->vxlan4_tunnel_by_key, &key4w,
++					    1 /*add */ ))
++		{
++		  clib_bihash_add_del_16_8 (&vxm->vxlan4_tunnel_by_key, &key4,
++					    0 /*del */ );
++		  add_failed = 1;
++		}
 +	    }
  	}
  
        if (add_failed)
-@@ -633,6 +656,76 @@ int vnet_vxlan_add_del_tunnel
+@@ -508,6 +561,11 @@ int vnet_vxlan_add_del_tunnel
+ 			       ~0);
+       vxm->tunnel_index_by_sw_if_index[sw_if_index] = dev_instance;
+ 
++      /* SONiC VNET decap-any: mark this tunnel's ingress sw_if_index so
++       * l2_to_bvi routes its decapped inner frames regardless of dst MAC. */
++      if (t->decap_any)
++	l2_bvi_set_l3_promiscuous (sw_if_index, 1);
++
+       /* setup l2 input config with l2 feature and bd 0 to drop packet */
+       vec_validate (l2im->configs, sw_if_index);
+       l2im->configs[sw_if_index].feature_bitmap = L2INPUT_FEAT_DROP;
+@@ -626,6 +684,10 @@ int vnet_vxlan_add_del_tunnel
+ 
+       vxm->tunnel_index_by_sw_if_index[sw_if_index] = ~0;
+ 
++      /* SONiC VNET decap-any: clear the L3-promiscuous mark for this ingress. */
++      if (t->decap_any)
++	l2_bvi_set_l3_promiscuous (sw_if_index, 0);
++
+       if (!is_ip6)
+ 	clib_bihash_add_del_16_8 (&vxm->vxlan4_tunnel_by_key, &key4,
+ 				  0 /*del */ );
+@@ -633,6 +695,93 @@ int vnet_vxlan_add_del_tunnel
  	clib_bihash_add_del_24_8 (&vxm->vxlan6_tunnel_by_key, &key6,
  				  0 /*del */ );
  
 +      /* SONiC VNET decap-any: keep or drop the source-independent entry.
-+       * If another tunnel shares the same local ip + vni it must stay, so
-+       * re-point the wildcard entry at that survivor; otherwise remove it. */
-+      if (!is_ip6 && !ip46_address_is_multicast (&t->dst))
++       * Only decap-any terms own a wildcard entry. If another decap-any
++       * tunnel shares the same local ip + vni it must stay, so re-point the
++       * wildcard entry at that survivor; otherwise remove it. */
++      if (t->decap_any && !is_ip6 && !ip46_address_is_multicast (&t->dst))
 +	{
 +	  vxlan4_tunnel_key_t key4w;
 +	  key4w.key[0] = ((u64) t->src.ip4.as_u32) << 32;
@@ -116,7 +206,8 @@ index 46c014912..b5e62065d 100644
 +	  vxlan_tunnel_t *st, *survivor = 0;
 +	  pool_foreach (st, vxm->tunnels)
 +	    {
-+	      if (st == t || ip46_address_is_multicast (&st->dst))
++	      if (st == t || !st->decap_any ||
++		  ip46_address_is_multicast (&st->dst))
 +		continue;
 +	      if (st->src.ip4.as_u32 == t->src.ip4.as_u32 &&
 +		  st->vni == t->vni &&
@@ -134,8 +225,16 @@ index 46c014912..b5e62065d 100644
 +		.next_index = survivor->decap_next_index
 +	      };
 +	      key4w.value = diw.as_u64;
-+	      clib_bihash_add_del_16_8 (&vxm->vxlan4_tunnel_by_key, &key4w,
-+					1 /*add */ );
++	      if (clib_bihash_add_del_16_8 (&vxm->vxlan4_tunnel_by_key, &key4w,
++					    1 /*add */ ))
++		{
++		  /* re-point failed: drop the wildcard rather than leave it
++		   * pointing at the tunnel slot we are about to free. */
++		  clib_bihash_add_del_16_8 (&vxm->vxlan4_tunnel_by_key, &key4w,
++					    0 /*del */ );
++		  clib_warning ("vxlan decap-any: ip4 wildcard re-point failed,"
++				" dropped stale entry for vni %u", t->vni);
++		}
 +	    }
 +	  else
 +	    clib_bihash_add_del_16_8 (&vxm->vxlan4_tunnel_by_key, &key4w,
@@ -143,8 +242,8 @@ index 46c014912..b5e62065d 100644
 +	}
 +
 +      /* SONiC VNET decap-any (ip6): keep or drop the source-independent
-+       * entry; re-point at a surviving same-local-ip+vni tunnel if any. */
-+      if (is_ip6 && !ip46_address_is_multicast (&t->dst))
++       * entry; re-point at a surviving same-local-ip+vni decap-any tunnel. */
++      if (t->decap_any && is_ip6 && !ip46_address_is_multicast (&t->dst))
 +	{
 +	  vxlan6_tunnel_key_t key6w;
 +	  key6w.key[0] = t->src.ip6.as_u64[0];
@@ -153,7 +252,8 @@ index 46c014912..b5e62065d 100644
 +	  vxlan_tunnel_t *st, *survivor = 0;
 +	  pool_foreach (st, vxm->tunnels)
 +	    {
-+	      if (st == t || ip46_address_is_multicast (&st->dst))
++	      if (st == t || !st->decap_any ||
++		  ip46_address_is_multicast (&st->dst))
 +		continue;
 +	      if (ip6_address_is_equal (&st->src.ip6, &t->src.ip6) &&
 +		  st->vni == t->vni &&
@@ -167,8 +267,14 @@ index 46c014912..b5e62065d 100644
 +	  if (survivor)
 +	    {
 +	      key6w.value = (u64) (survivor - vxm->tunnels);
-+	      clib_bihash_add_del_24_8 (&vxm->vxlan6_tunnel_by_key, &key6w,
-+					1 /*add */ );
++	      if (clib_bihash_add_del_24_8 (&vxm->vxlan6_tunnel_by_key, &key6w,
++					    1 /*add */ ))
++		{
++		  clib_bihash_add_del_24_8 (&vxm->vxlan6_tunnel_by_key, &key6w,
++					    0 /*del */ );
++		  clib_warning ("vxlan decap-any: ip6 wildcard re-point failed,"
++				" dropped stale entry for vni %u", t->vni);
++		}
 +	    }
 +	  else
 +	    clib_bihash_add_del_24_8 (&vxm->vxlan6_tunnel_by_key, &key6w,
@@ -178,61 +284,95 @@ index 46c014912..b5e62065d 100644
        if (!ip46_address_is_multicast (&t->dst))
  	{
  	  if (t->flow_index != ~0)
+diff --git a/src/plugins/vxlan/vxlan.h b/src/plugins/vxlan/vxlan.h
+index b89e75b..be5fed9 100644
+--- a/src/plugins/vxlan/vxlan.h
++++ b/src/plugins/vxlan/vxlan.h
+@@ -123,6 +123,12 @@ typedef struct
+   u32 dev_instance;		/* Real device instance in tunnel vector */
+   u32 user_instance;		/* Instance name being shown to user */
+ 
++  /* SONiC VNET decap-any: this tunnel is a secondary-VTEP decap term that
++   * accepts VXLAN packets from any outer source for its local dst+vni. Only
++   * such tunnels register the source-independent wildcard bihash entry and
++   * enable L3-promiscuous receive on their BVI. */
++  u8 decap_any;
++
+   VNET_DECLARE_REWRITE;
+ } vxlan_tunnel_t;
+ 
+@@ -212,6 +218,11 @@ typedef struct
+   u16 dst_port;
+ } vnet_vxlan_add_del_tunnel_args_t;
+ 
++/* SONiC VNET decap-any: high bit of the wire decap_next_index used by SAI to
++ * flag a source-independent decap term. Stripped by vnet_vxlan_add_del_tunnel
++ * before the value is validated/used as a real next index. */
++#define VXLAN_DECAP_ANY_FLAG (1u << 31)
++
+ int vnet_vxlan_add_del_tunnel
+   (vnet_vxlan_add_del_tunnel_args_t * a, u32 * sw_if_indexp);
+ 
 diff --git a/src/vnet/l2/l2_bvi.c b/src/vnet/l2/l2_bvi.c
-index a3c665404..b5e9b88bf 100644
+index a3c6654..beecc7f 100644
 --- a/src/vnet/l2/l2_bvi.c
 +++ b/src/vnet/l2/l2_bvi.c
-@@ -9,6 +9,36 @@
+@@ -9,6 +9,40 @@
  #include <vnet/l2/l2_fwd.h>
  #include <vnet/l2/l2_flood.h>
  #include <vnet/l2/l2_bvi.h>
-+#include <string.h>
++#include <vppinfra/bitmap.h>
 +
-+/* SONiC VNET decap-and-route (RIOT): a frame that ingressed on a VXLAN tunnel
-+ * and is being flooded to a BVI is a decap-and-route packet. On real hardware
-+ * VXLAN decap-and-route is MAC-agnostic, but VPP's BVI applies a strict my-mac
-+ * L2 filter, so decapped frames whose inner dst MAC != the router/BVI MAC are
-+ * dropped instead of being L3-routed in the VNET VRF. When the ingress
-+ * interface is a VXLAN tunnel, treat the BVI as L3-promiscuous and route
-+ * regardless of dst MAC. Normal L2 ports keep strict my-mac semantics. */
++/* SONiC VNET decap-and-route (RIOT): a frame that ingressed on a secondary-
++ * VTEP "decap-any" VXLAN tunnel and is being flooded to a BVI is a decap-and-
++ * route packet. On real hardware VXLAN decap-and-route is MAC-agnostic, but
++ * VPP's BVI applies a strict my-mac L2 filter, so decapped frames whose inner
++ * dst MAC != the router/BVI MAC are dropped instead of being L3-routed in the
++ * VNET VRF. For those tunnels only, treat the BVI as L3-promiscuous and route
++ * regardless of dst MAC. Ordinary L2/EVPN VXLAN tunnels and normal L2 ports
++ * keep strict my-mac semantics.
++ *
++ * The set of decap-any ingress sw_if_indexes is maintained as a bitmap owned
++ * here (vnet layer) and populated by the vxlan plugin via
++ * l2_bvi_set_l3_promiscuous() at tunnel add/del. This keeps the data-plane
++ * check an O(1) bitmap test - no per-packet pool/device-class lookups - and
++ * scopes the behaviour to exactly the decap-any terms. */
++static uword *l2_bvi_l3_promiscuous_bitmap;
++
++void
++l2_bvi_set_l3_promiscuous (u32 sw_if_index, int enable)
++{
++  if (sw_if_index == (u32) ~0)
++    return;
++  l2_bvi_l3_promiscuous_bitmap =
++    clib_bitmap_set (l2_bvi_l3_promiscuous_bitmap, sw_if_index, enable ? 1 : 0);
++}
++
 +int
 +l2_bvi_l3_promiscuous (u32 rx_sw_if_index)
 +{
-+  vnet_main_t *vnm = vnet_get_main ();
-+  vnet_sw_interface_t *si;
-+  vnet_hw_interface_t *hi;
-+  vnet_device_class_t *dc;
-+
 +  if (rx_sw_if_index == (u32) ~0)
 +    return 0;
-+  si = vnet_get_sw_interface_or_null (vnm, rx_sw_if_index);
-+  if (!si)
-+    return 0;
-+  hi = vnet_get_sup_hw_interface (vnm, rx_sw_if_index);
-+  if (!hi)
-+    return 0;
-+  dc = vnet_get_device_class (vnm, hi->dev_class_index);
-+  if (dc && dc->name && !strncmp ((char *) dc->name, "VXLAN", 6))
-+    return 1;
-+  return 0;
++  return clib_bitmap_get (l2_bvi_l3_promiscuous_bitmap, rx_sw_if_index) ? 1 : 0;
 +}
  
  /* Allocated BVI instances */
  static uword *l2_bvi_instances;
 diff --git a/src/vnet/l2/l2_bvi.h b/src/vnet/l2/l2_bvi.h
-index 1087190e6..2028493e8 100644
+index 1087190..305ab7a 100644
 --- a/src/vnet/l2/l2_bvi.h
 +++ b/src/vnet/l2/l2_bvi.h
-@@ -17,6 +17,8 @@
+@@ -17,6 +17,9 @@
  #define TO_BVI_ERR_BAD_MAC   1
  #define TO_BVI_ERR_ETHERTYPE 2
  
 +extern int l2_bvi_l3_promiscuous (u32 sw_if_index);
++extern void l2_bvi_set_l3_promiscuous (u32 sw_if_index, int enable);
 +
  static_always_inline u32
  l2_to_bvi_dmac_check (vnet_hw_interface_t * hi, u8 * dmac,
  		      ethernet_interface_t * ei, u8 have_sec_dmac)
-@@ -69,7 +71,12 @@ l2_to_bvi (vlib_main_t * vlib_main,
+@@ -69,7 +72,12 @@ l2_to_bvi (vlib_main_t * vlib_main,
  				   0 /* have_sec_dmac */ );
  
        if (rv != TO_BVI_ERR_OK)
