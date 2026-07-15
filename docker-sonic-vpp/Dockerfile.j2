@@ -1,4 +1,6 @@
-FROM docker-swss-layer-trixie-{{DOCKER_USERNAME}}:{{DOCKER_USERTAG}}
+ARG BASE=docker-swss-layer-trixie-{{DOCKER_USERNAME}}:{{DOCKER_USERTAG}}
+
+FROM $BASE AS base
 
 ARG docker_container_name
 
@@ -215,6 +217,27 @@ RUN rm /etc/frr/frr.conf
 
 # Create /var/warmboot/teamd folder for teammgrd
 RUN mkdir -p /var/warmboot/teamd
+
+# Trim build-only and unused payload so the flattened image below stays small.
+# These run in the builder stage, so the rsync into the final stage never sees them.
+# - build-only pip tooling (only needed to build dbus-python during this build)
+RUN pip3 uninstall -y meson-python meson ninja patchelf 2>/dev/null || true
+# - unit-test suite shipped inside the sonic wheels (not used at runtime)
+RUN rm -rf /usr/local/lib/python3*/dist-packages/tests
+# - device data for platforms this single-container image never runs
+#   (it only ever uses PLATFORM=x86_64-kvm_x86_64-r0)
+RUN find /usr/share/sonic/device -mindepth 1 -maxdepth 1 -type d \
+        ! -name 'x86_64-kvm_x86_64-r0' -exec rm -rf {} +
+
+# Flatten: start from a clean base and rsync in only the net filesystem
+# changes from the builder stage. This collapses all the install/purge churn
+# above into a single layer, so purged build dependencies no longer ship.
+FROM $BASE
+
+RUN --mount=type=bind,from=base,target=/changes-to-image \
+    rsync -axAX --omit-dir-times --no-D \
+      --exclude=/sys --exclude=/proc --exclude=/dev --exclude=resolv.conf \
+      /changes-to-image/ /
 
 # Set PLATFORM and HWSKU environment variables
 ENV PLATFORM=x86_64-kvm_x86_64-r0
