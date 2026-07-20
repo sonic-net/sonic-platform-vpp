@@ -1,0 +1,209 @@
+parameters:
+- name: timeout
+  type: number
+  default: 60
+
+- name: sairedis_run_id
+  type: string
+  default: ''
+
+- name: vpp_artifact_name
+  type: string
+  default: vpp-trixie
+
+- name: image_artifact_name
+  type: string
+  default: docker-sai-test-vpp-platform
+
+jobs:
+- job: BuildSaiVppTestImage
+  displayName: Overlay PR VPP packages on SAI test image
+  timeoutInMinutes: ${{ parameters.timeout }}
+
+  pool:
+    vmImage: ubuntu-22.04
+
+  steps:
+  - checkout: self
+    clean: true
+
+  - task: DownloadPipelineArtifact@2
+    inputs:
+      artifact: ${{ parameters.vpp_artifact_name }}
+      path: $(Build.ArtifactStagingDirectory)/vpp
+    displayName: Download current-run VPP packages
+
+  - ${{ if eq(parameters.sairedis_run_id, '') }}:
+    - task: DownloadPipelineArtifact@2
+      name: downloadSaiRedis
+      inputs:
+        source: specific
+        project: build
+        pipeline: Azure.sonic-sairedis
+        artifact: docker-sai-test-vpp
+        path: $(Build.ArtifactStagingDirectory)/sairedis
+        runVersion: latestFromBranch
+        runBranch: refs/heads/master
+      displayName: Download latest successful SAI VPP test image
+
+  - ${{ if ne(parameters.sairedis_run_id, '') }}:
+    - task: DownloadPipelineArtifact@2
+      name: downloadSaiRedis
+      inputs:
+        source: specific
+        project: build
+        pipeline: Azure.sonic-sairedis
+        artifact: docker-sai-test-vpp
+        path: $(Build.ArtifactStagingDirectory)/sairedis
+        runVersion: specific
+        runId: ${{ parameters.sairedis_run_id }}
+      displayName: Download specified SAI VPP test image
+
+  - script: |
+      set -euxo pipefail
+
+      vpp_dir="$(Build.ArtifactStagingDirectory)/vpp"
+      sairedis_dir="$(Build.ArtifactStagingDirectory)/sairedis"
+      context_dir="$(Build.ArtifactStagingDirectory)/overlay-context"
+      output_dir="$(Build.ArtifactStagingDirectory)/output"
+      deb_dir="$context_dir/debs"
+      base_image_tag="$(cat "$sairedis_dir/image-tag.txt")"
+      image_tag="docker-sai-test-vpp:$(Build.DefinitionName).$(Build.BuildNumber).platform-vpp"
+
+      test -s "$sairedis_dir/docker-sai-test-vpp.gz"
+      test -s "$sairedis_dir/provenance.txt"
+      test -s "$sairedis_dir/SHA256SUMS"
+      for contract_file in \
+          ci-matrix-tests.txt \
+          ci-pass-tests.txt \
+          evaluate_ci_baseline.py \
+          gen_compatibility_matrix.py; do
+          test -s "$sairedis_dir/ci-contract/$contract_file"
+      done
+      (
+          cd "$sairedis_dir"
+          sha256sum -c SHA256SUMS
+      )
+
+      rm -rf "$context_dir" "$output_dir"
+      mkdir -p "$deb_dir" "$output_dir/ci-contract"
+
+      copy_one_deb()
+      {
+          local pattern="$1"
+          mapfile -t matches < <(find "$vpp_dir" -type f -name "$pattern" | sort)
+          if [[ "${#matches[@]}" -ne 1 ]]; then
+              echo "Expected exactly one $pattern package, found ${#matches[@]}" >&2
+              printf '  %s\n' "${matches[@]}" >&2
+              exit 1
+          fi
+          cp -v "${matches[0]}" "$deb_dir/"
+      }
+
+      copy_one_deb 'libvppinfra_*_amd64.deb'
+      copy_one_deb 'vpp_*_amd64.deb'
+      copy_one_deb 'vpp-plugin-core_*_amd64.deb'
+      copy_one_deb 'vpp-plugin-dpdk_*_amd64.deb'
+      cp -v .azure-pipelines/Dockerfile.sai-vpp-overlay "$context_dir/Dockerfile"
+
+      docker load -i "$sairedis_dir/docker-sai-test-vpp.gz"
+      docker image inspect "$base_image_tag" >/dev/null
+      docker build --no-cache \
+          --build-arg "BASE_IMAGE=$base_image_tag" \
+          --label com.sonic.saivpp-ci=true \
+          --label "com.sonic.platform-vpp.source=$(Build.SourceVersion)" \
+          -t "$image_tag" \
+          "$context_dir"
+
+        base_packages="$output_dir/base-package-inventory.txt"
+        derived_packages="$output_dir/derived-package-inventory.txt"
+        docker run --rm --entrypoint dpkg-query "$base_image_tag" \
+          -W -f='${binary:Package}\t${Version}\n' | sort > "$base_packages"
+        docker run --rm --entrypoint dpkg-query "$image_tag" \
+          -W -f='${binary:Package}\t${Version}\n' | sort > "$derived_packages"
+
+        package_changes="$output_dir/package-changes.txt"
+        comm -3 "$base_packages" "$derived_packages" > "$package_changes"
+        if awk '
+          {
+            package = $1
+            sub(/^[[:space:]]+/, "", package)
+            if (package != "libvppinfra" &&
+              package != "vpp" &&
+              package != "vpp-plugin-core" &&
+              package != "vpp-plugin-dpdk") {
+              print
+              unexpected = 1
+            }
+          }
+          END { exit unexpected }
+        ' "$package_changes"; then
+          :
+        else
+          echo "Derivative image changed packages outside the VPP overlay:" >&2
+          cat "$package_changes" >&2
+          exit 1
+        fi
+
+        package_identity="$output_dir/sairedis-package-identity.txt"
+        for package in \
+          libsairedis \
+          libsaivs \
+          libsaimetadata \
+          saiserver \
+          python-saithrift; do
+          base_entry="$(grep -E "^${package}(:[^[:space:]]+)?[[:space:]]" "$base_packages")"
+          derived_entry="$(grep -E "^${package}(:[^[:space:]]+)?[[:space:]]" "$derived_packages")"
+          test -n "$base_entry"
+          test "$base_entry" = "$derived_entry"
+          echo "$derived_entry" >> "$package_identity"
+        done
+
+      docker save "$image_tag" | gzip -c > "$output_dir/docker-sai-test-vpp.gz"
+      echo "$image_tag" > "$output_dir/image-tag.txt"
+      cp -a "$sairedis_dir/ci-contract/." "$output_dir/ci-contract/"
+      cp -v "$sairedis_dir/provenance.txt" "$output_dir/sairedis-provenance.txt"
+      cp -v "$sairedis_dir/SHA256SUMS" "$output_dir/SAIREDIS_SHA256SUMS"
+
+      provenance="$output_dir/platform-vpp-provenance.txt"
+      {
+          echo "build_definition=$(Build.DefinitionName)"
+          echo "build_number=$(Build.BuildNumber)"
+          echo "build_id=$(Build.BuildId)"
+          echo "source_version=$(Build.SourceVersion)"
+          echo "source_branch=$(Build.SourceBranch)"
+          echo "sairedis_requested_run_id=${{ parameters.sairedis_run_id }}"
+          echo "sairedis_downloaded_build=$(downloadSaiRedis.BuildNumber)"
+          echo "sairedis_base_image=$base_image_tag"
+          echo "derived_image=$image_tag"
+          echo
+          echo "replacement_packages:"
+          for deb in "$deb_dir"/*.deb; do
+              echo "File=$(basename "$deb")"
+              dpkg-deb -f "$deb" Package Version Architecture
+              sha256sum "$deb"
+          done
+      } > "$provenance"
+
+      cp -a "$deb_dir" "$output_dir/vpp-debs"
+      (
+          cd "$output_dir"
+          sha256sum \
+            docker-sai-test-vpp.gz \
+            base-package-inventory.txt \
+            derived-package-inventory.txt \
+              image-tag.txt \
+            package-changes.txt \
+              platform-vpp-provenance.txt \
+            sairedis-package-identity.txt \
+              sairedis-provenance.txt \
+              SAIREDIS_SHA256SUMS \
+            ci-contract/* \
+            vpp-debs/* > SHA256SUMS
+      )
+      rm -rf "$context_dir" "$vpp_dir" "$sairedis_dir"
+    displayName: Build VPP PR SAI test image
+
+  - publish: $(Build.ArtifactStagingDirectory)/output
+    artifact: ${{ parameters.image_artifact_name }}
+    displayName: Archive VPP PR SAI test image
