@@ -31,6 +31,9 @@ parameters:
   - name: arch
     type: string
     default: amd64
+  - name: sairedis_run_id
+    type: string
+    default: ''
 
 variables:
   - name: BUILD_BRANCH
@@ -51,3 +54,19 @@ stages:
     parameters:
       arch: amd64
       debian_version: bookworm
+
+- stage: BuildSaiVppTestImage
+  displayName: Build VPP PR SAI test image
+  dependsOn: BuildVpp
+  condition: succeeded('BuildVpp')
+  jobs:
+  - template: .azure-pipelines/build-sai-vpp-test-image-template.yml
+    parameters:
+      sairedis_run_id: ${{ parameters.sairedis_run_id }}
+
+- stage: TestSaiVpp
+  displayName: Test VPP PR against SAI compatibility matrix
+  dependsOn: BuildSaiVppTestImage
+  condition: succeeded('BuildSaiVppTestImage')
+  jobs:
+  - template: .azure-pipelines/test-sai-vpp-template.yml
