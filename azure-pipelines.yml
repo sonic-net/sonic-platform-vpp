@@ -34,7 +34,7 @@ parameters:
     default: amd64
   - name: sairedis_run_id
     type: string
-    default: '1170125'
+    default: ''
 
 variables:
   - name: BUILD_BRANCH
