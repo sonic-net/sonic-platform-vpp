@@ -75,7 +75,7 @@ index 3d5363166..3f45c97e2 100644
  
    /* the rest of this is boilerplate code just to make sure
 diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
-index 89529d1ca..908fbc5e1 100644
+index 89529d1ca..141a15595 100644
 --- a/src/plugins/sflow/sflow.c
 +++ b/src/plugins/sflow/sflow.c
 @@ -515,11 +515,13 @@ read_node_counters (sflow_main_t *smp, sflow_err_ctrs_t *ctrs)
@@ -199,6 +199,27 @@ index 89529d1ca..908fbc5e1 100644
  static clib_error_t *
  sflow_sampling_rate_command_fn (vlib_main_t *vm, unformat_input_t *input,
  				vlib_cli_command_t *cmd)
+@@ -1116,6 +1194,20 @@ show_sflow_command_fn (vlib_main_t *vm, unformat_input_t *input,
+ 	  vnet_hw_interface_t *hw =
+ 	    vnet_get_hw_interface (smp->vnet_main, sfif->hw_if_index);
+ 	  vlib_cli_output (vm, "sflow enable %s\n", (char *) hw->name);
++	  u32 eff_n = sfif->samplingN ? sfif->samplingN : smp->samplingN;
++	  vlib_cli_output (vm, "  sampling-rate %u", eff_n);
++	  for (int tt = 0; tt < vec_len (smp->per_thread_data); tt++)
++	    {
++	      sflow_per_thread_data_t *sfwk =
++		vec_elt_at_index (smp->per_thread_data, tt);
++	      if (sfif->hw_if_index < vec_len (sfwk->per_interface))
++		{
++		  sflow_per_if_sampler_t *smpif =
++		    vec_elt_at_index (sfwk->per_interface, sfif->hw_if_index);
++		  vlib_cli_output (vm, "    thread %u samplingN %u skip %u", tt,
++				   eff_n, smpif->skip);
++		}
++	    }
+ 	}
+     }
+   vlib_cli_output (vm, "Status\n");
 diff --git a/src/plugins/sflow/sflow.h b/src/plugins/sflow/sflow.h
 index 7e8c0469e..cf90d9cea 100644
 --- a/src/plugins/sflow/sflow.h
