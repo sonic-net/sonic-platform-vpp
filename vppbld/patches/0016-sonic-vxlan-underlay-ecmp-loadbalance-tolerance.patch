@@ -13,7 +13,7 @@ buckets for non-power-of-2 groups (e.g. a 3-way group grows from 16 to 256
 buckets), increasing per-load-balance memory and rebuild cost at large
 multipath scale. This does NOT affect LAG member hashing: bonding uses
 l2_flow_hash, not the multipath bucket allocator. (Inner-aware LAG/ECMP
-spreading for tunnelled traffic is provided separately by patch 0012.)
+spreading for tunnelled traffic is provided separately by patch 0015.)
 ---
 diff --git a/src/vnet/dpo/load_balance.c b/src/vnet/dpo/load_balance.c
 index 8bec28f4a..245033ece 100644
