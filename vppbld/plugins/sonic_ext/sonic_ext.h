@@ -176,6 +176,12 @@ typedef struct
 
 typedef struct
 {
+  /* Tracks whether the interface-output "sonic-ext-trim-admission" feature
+   * arc is currently enabled on this port. vnet_feature_enable_disable() is
+   * not idempotent (each enable pushes another instance of the arc onto the
+   * feature config), so the arc is toggled only on an actual transition of
+   * this state. Zero-initialized by vec_validate -> arc off. */
+  u8 feature_enabled;
   sonic_ext_trim_queue_t q[SONIC_EXT_TRIM_MAX_QUEUES];
 } sonic_ext_trim_port_t;
 
@@ -308,7 +314,7 @@ extern vlib_node_registration_t sonic_ext_trim_node;
 /* Enable/disable the sonic-ext-trim-admission feature on an egress
  * interface-output arc.  Driven from the binary API when a port gains or
  * loses trim-eligible queues. */
-void sonic_ext_trim_enable_disable (u32 sw_if_index, int enable);
+int sonic_ext_trim_enable_disable (u32 sw_if_index, int enable);
 
 /* Get (optionally allocate) the per-port admission state for sw_if_index.
  * Returns NULL when create==0 and the port has no state. */
