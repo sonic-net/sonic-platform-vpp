@@ -94,11 +94,12 @@ sonic_ext_trim_bucket_admit (vlib_main_t *vm, sonic_ext_trim_queue_t *q,
   return 0; /* rejected -- bucket drained (e.g. PIR=1 blocking scheduler) */
 }
 
-void
+int
 sonic_ext_trim_enable_disable (u32 sw_if_index, int enable)
 {
-  vnet_feature_enable_disable ("interface-output", "sonic-ext-trim-admission",
-			       sw_if_index, enable, 0, 0);
+  return vnet_feature_enable_disable ("interface-output",
+				      "sonic-ext-trim-admission", sw_if_index,
+				      enable, 0, 0);
 }
 
 void
@@ -123,14 +124,27 @@ sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
   q->configured = 1;
 
   /* Enable the admission feature on this port iff at least one queue is
-   * trim-eligible; otherwise keep the arc a no-op. */
+   * trim-eligible; otherwise keep the arc a no-op. vnet_feature_enable_disable
+   * is not idempotent -- calling it on every queue_set would stack duplicate
+   * "sonic-ext-trim-admission" instances on the interface-output arc -- so only
+   * toggle on an actual transition of the port's eligibility state. */
   for (i = 0; i < SONIC_EXT_TRIM_MAX_QUEUES; i++)
     if (port->q[i].eligible)
       {
 	any_eligible = 1;
 	break;
       }
-  sonic_ext_trim_enable_disable (sw_if_index, any_eligible);
+
+  if ((u8) (any_eligible ? 1 : 0) != port->feature_enabled)
+    {
+      int rv = sonic_ext_trim_enable_disable (sw_if_index, any_eligible);
+      if (rv == 0)
+	port->feature_enabled = any_eligible ? 1 : 0;
+      else
+	clib_warning (
+	  "sonic-ext trim: feature %s on sw_if_index %u failed (rv=%d)",
+	  any_eligible ? "enable" : "disable", sw_if_index, rv);
+    }
 }
 
 /* ------------------------------------------------------------------ */
