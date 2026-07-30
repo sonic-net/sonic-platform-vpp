@@ -14,8 +14,7 @@ trigger:
     - master
     - 202???
 
-pool:
-  vmImage: ubuntu-latest
+pool: sonic-ubuntu-1c
 
 schedules:
 - cron: "0 8 * * *"
