@@ -1,0 +1,174 @@
+diff --git a/src/plugins/sflow/sflow.api b/src/plugins/sflow/sflow.api
+index 57a478b62..c2fae8dd1 100644
+--- a/src/plugins/sflow/sflow.api
++++ b/src/plugins/sflow/sflow.api
+@@ -282,3 +282,29 @@ define sflow_interface_details
+   u32 context;
+   vl_api_interface_index_t hw_if_index;
+ };
++
++/** \brief
++    @param client_index - opaque cookie to identify the sender
++    @param context - sender context, to match reply w/ request
++    @param sampling_N - A port's sampling rate
++    @param hw_if_index - hardware interface handle
++*/
++autoreply define sflow_interface_sampling_rate_set {
++    u32 client_index;
++    u32 context;
++    u32 sampling_N [default=10000];
++    vl_api_interface_index_t hw_if_index;
++};
++
++/** \brief
++    @param client_index - opaque cookie to identify the sender
++    @param context - sender context, to match reply w/ request
++    @param direction - A port's direction
++    @param hw_if_index - hardware interface handle
++*/
++autoreply define sflow_interface_direction_set {
++    u32 client_index;
++    u32 context;
++    u32 direction;
++    vl_api_interface_index_t hw_if_index;
++};
+diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
+index 6a8cb6af8..c19726256 100644
+--- a/src/plugins/sflow/sflow.c
++++ b/src/plugins/sflow/sflow.c
+@@ -1396,6 +1396,32 @@ send_sflow_interface_details (vpe_api_main_t *am, vl_api_registration_t *reg,
+   vl_api_send_msg (reg, (u8 *) mp);
+ }
+ 
++static void
++vl_api_sflow_interface_sampling_rate_set_t_handler (
++  vl_api_sflow_interface_sampling_rate_set_t *mp)
++{
++  vl_api_sflow_interface_sampling_rate_set_reply_t *rmp;
++  sflow_main_t *smp = &sflow_main;
++  int rv;
++
++  rv = sflow_set_sampling_rate_set (smp, ntohl (mp->hw_if_index), ntohl (mp->sampling_N));
++
++  REPLY_MACRO (VL_API_SFLOW_INTERFACE_SAMPLING_RATE_SET_REPLY);
++}
++
++static void
++vl_api_sflow_interface_direction_set_t_handler (
++  vl_api_sflow_interface_direction_set_t *mp)
++{
++  vl_api_sflow_interface_direction_set_reply_t *rmp;
++  sflow_main_t *smp = &sflow_main;
++  int rv;
++
++  rv = sflow_set_direction_set (smp, ntohl (mp->hw_if_index), ntohl (mp->direction));
++
++  REPLY_MACRO (VL_API_SFLOW_INTERFACE_DIRECTION_SET_REPLY);
++}
++
+ static void
+ vl_api_sflow_interface_dump_t_handler (vl_api_sflow_interface_dump_t *mp)
+ {
+diff --git a/src/plugins/sflow/sflow_test.c b/src/plugins/sflow/sflow_test.c
+index adeb53539..675bdd0ba 100644
+--- a/src/plugins/sflow/sflow_test.c
++++ b/src/plugins/sflow/sflow_test.c
+@@ -318,6 +318,98 @@ api_sflow_direction_set (vat_main_t *vam)
+   return ret;
+ }
+ 
++static int
++api_sflow_interface_sampling_rate_set (vat_main_t *vam)
++{
++  unformat_input_t *i = vam->input;
++  u32 sampling_N = ~0;
++  u32 hw_if_index = ~0;
++  vl_api_sflow_interface_sampling_rate_set_t *mp;
++  int ret;
++
++  /* Parse args required to build the message */
++  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
++    {
++      if (unformat (i, "sampling_N %d", &sampling_N))
++	;
++      else if (unformat (i, "sw_if_index %d", &hw_if_index))
++	;
++      else
++	break;
++    }
++
++  if (sampling_N == ~0)
++    {
++      errmsg ("missing sampling_N number \n");
++      return -99;
++    }
++  if (hw_if_index == ~0)
++    {
++      errmsg ("missing interface \n");
++      return -99;
++    }
++
++  /* Construct the API message */
++  M (SFLOW_INTERFACE_SAMPLING_RATE_SET, mp);
++  mp->sampling_N = ntohl (sampling_N);
++  mp->hw_if_index = ntohl (hw_if_index);
++
++  /* send it... */
++  S (mp);
++
++  /* Wait for a reply... */
++  W (ret);
++  return ret;
++}
++
++static int
++api_sflow_interface_direction_set (vat_main_t *vam)
++{
++  unformat_input_t *i = vam->input;
++  u32 direction = ~0;
++  u32 hw_if_index = ~0;
++  vl_api_sflow_interface_direction_set_t *mp;
++  int ret;
++
++  /* Parse args required to build the message */
++  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
++    {
++      if (unformat (i, "direction rx"))
++	direction = SFLOW_DIRN_INGRESS;
++      else if (unformat (i, "direction tx"))
++	direction = SFLOW_DIRN_EGRESS;
++      else if (unformat (i, "direction both"))
++	direction = SFLOW_DIRN_BOTH;
++      else if (unformat (i, "sw_if_index %d", &hw_if_index))
++	;
++      else
++	break;
++    }
++
++  if (direction == ~0)
++    {
++      errmsg ("missing direction\n");
++      return -99;
++    }
++  if (hw_if_index == ~0)
++    {
++      errmsg ("missing interface\n");
++      return -99;
++    }
++
++  /* Construct the API message */
++  M (SFLOW_INTERFACE_DIRECTION_SET, mp);
++  mp->direction = ntohl (direction);
++  mp->hw_if_index = ntohl (hw_if_index);
++
++  /* send it... */
++  S (mp);
++
++  /* Wait for a reply... */
++  W (ret);
++  return ret;
++}
++
+ static void
+ vl_api_sflow_drop_monitoring_get_reply_t_handler (
+   vl_api_sflow_drop_monitoring_get_reply_t *mp)
