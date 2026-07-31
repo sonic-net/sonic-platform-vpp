@@ -141,8 +141,8 @@ void sonic_ext_set_host_xc (u8 is_enable);
 
 /* Returns non-zero if phy_sw_if_index is an "aggregate" parent whose
  * LCP host tap should have the aggr-tap-redirect feature enabled --
- * today that means BVI; in the future it will also cover bond /
- * port-channel master interfaces.  Used by the LCP pair add callback. */
+ * today that means a BVI, a bond / port-channel master, or a routed
+ * sub-interface of a bond.  Used by the LCP pair add callback. */
 int sonic_ext_phy_is_aggregate (u32 phy_sw_if_index);
 
 /* Returns non-zero iff phy_sw_if_index is a BVI (bridge-virtual
@@ -150,5 +150,11 @@ int sonic_ext_phy_is_aggregate (u32 phy_sw_if_index);
  * can opt out of bvi-specific features (bcast-redirect runs on
  * the BVI's own ip4-unicast arc; today only BVIs need it). */
 int sonic_ext_phy_is_bvi (u32 phy_sw_if_index);
+
+/* Returns non-zero iff phy_sw_if_index is a bond (port-channel) master
+ * or a sub-interface whose parent hw is a bond master.  Used to detect
+ * port-channel aggregates and to funnel tap-less bonded sub-interface
+ * punts to the bond master host tap. */
+int sonic_ext_phy_is_bond (u32 phy_sw_if_index);
 
 #endif /* __included_sonic_ext_h__ */

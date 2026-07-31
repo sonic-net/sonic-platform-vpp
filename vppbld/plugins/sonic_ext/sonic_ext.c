@@ -88,12 +88,42 @@ sonic_ext_phy_is_bvi (u32 phy_sw_if_index)
 }
 
 /*
+ * Is `phy_sw_if_index` a bond (port-channel) master, or a sub-interface
+ * whose super (parent) hw is a bond master?  Used by the aggregate
+ * detection helper and the sub-interface funnel.  We test the device
+ * class name rather than linking against the bonding symbols so this
+ * stays decoupled from the bonding implementation.
+ */
+int
+sonic_ext_phy_is_bond (u32 phy_sw_if_index)
+{
+  vnet_main_t *vnm = vnet_get_main ();
+  vnet_sw_interface_t *swi;
+  vnet_hw_interface_t *hw;
+  vnet_device_class_t *dc;
+
+  if (phy_sw_if_index == ~0)
+    return 0;
+  swi = vnet_get_sw_interface_or_null (vnm, phy_sw_if_index);
+  if (!swi)
+    return 0;
+  hw = vnet_get_sup_hw_interface (vnm, phy_sw_if_index);
+  if (!hw)
+    return 0;
+  dc = vnet_get_device_class (vnm, hw->dev_class_index);
+  if (dc && dc->name && !strcmp ((char *) dc->name, "bond"))
+    return 1;
+  return 0;
+}
+
+/*
  * Is `phy_sw_if_index` an "aggregate" parent whose linux-cp host tap
- * should receive aggr-tap-redirect?  Today that means BVI (loop /
- * bridge-virtual interface); tomorrow it will also mean bond /
- * port-channel masters.  Sub-interfaces are never aggregates; their
- * parent might be, but the parent has its own LCP pair which will
- * have produced its own callback.
+ * should receive aggr-tap-redirect?  Today that means a BVI (loop /
+ * bridge-virtual interface), a bond / port-channel master, or a routed
+ * sub-interface of a bond.  For the bond sub-interface case the host
+ * sub-tap (be<id>.<vlan>) is where linux-cp-punt-xc / ip[46]-punt land
+ * the punted frame, and aggr-tap-redirect steers it to the originating
+ * member (with the wire VLAN tag re-pushed from the capture cookie).
  */
 int
 sonic_ext_phy_is_aggregate (u32 phy_sw_if_index)
@@ -101,9 +131,10 @@ sonic_ext_phy_is_aggregate (u32 phy_sw_if_index)
   if (sonic_ext_phy_is_bvi (phy_sw_if_index))
     return 1;
 
-  /* TODO: bond / port-channel detection -- compare hw->dev_class
-   * name to "bond" so we don't have to link against the bonding
-   * plugin. */
+  /* A bond master OR a sub-interface of a bond (is_bond resolves the
+   * super hw, so it is true for both). */
+  if (sonic_ext_phy_is_bond (phy_sw_if_index))
+    return 1;
 
   return 0;
 }
@@ -189,23 +220,6 @@ sonic_ext_set_host_xc (u8 is_enable)
       sem->host_xc_enabled = 1;
     }
 }
-
-/*
- * On new interface creation, we don't enable any sonic-ext features
- * directly: capture, host-xc and aggr-tap-redirect all need LCP pair
- * context (we want capture only on real wire phys, and the other two
- * only on host taps).  The LCP pair add callback is the single point
- * that wires every per-interface feature.  Keeping this hook around
- * (as a no-op stub) leaves space for future bookkeeping that doesn't
- * need LCP context.
- */
-static clib_error_t *
-sonic_ext_sw_interface_add_del (vnet_main_t *vnm, u32 sw_if_index, u32 is_add)
-{
-  return 0;
-}
-
-VNET_SW_INTERFACE_ADD_DEL_FUNCTION (sonic_ext_sw_interface_add_del);
 
 /*
  * LCP pair add/del: when a new linux-cp pair appears, enable the per-
