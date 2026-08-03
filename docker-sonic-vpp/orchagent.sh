@@ -32,6 +32,12 @@ if [ "$SYNC_MODE" == "enable" ]; then
     ORCHAGENT_ARGS+="-s "
 fi
 
+# Pass FIB suppression flag when enabled in CONFIG_DB
+SUPPRESS_FIB_CONFIG=$(sonic-cfggen -d -v "DEVICE_METADATA['localhost'].get('suppress-fib-pending', '')")
+if [ "$SUPPRESS_FIB_CONFIG" == "enabled" ]; then
+    ORCHAGENT_ARGS+="-F "
+fi
+
 # Set mac address
 ORCHAGENT_ARGS+="-m $MAC_ADDRESS"
 
