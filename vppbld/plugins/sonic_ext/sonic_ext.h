@@ -286,9 +286,12 @@ sonic_ext_trim_port_t *sonic_ext_trim_port_get (u32 sw_if_index, int create);
 
 /* Program one egress (port, queue) admission slot and (re)evaluate whether
  * the sonic-ext-trim-admission feature should be enabled on the port.
- * Shared by the binary API handler and the debug CLI. */
-void sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
-                                   u64 rate_bytes_per_sec, u64 capacity_bytes);
+ * Shared by the binary API handler and the debug CLI. Returns 0 on success or
+ * a nonzero vnet API error if the feature-arc enable/disable transition failed,
+ * so the caller can surface the failure (the queue state itself is always
+ * programmed). */
+int sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
+                                  u64 rate_bytes_per_sec, u64 capacity_bytes);
 
 /* Software token-bucket admission decision for one packet of `len` bytes
  * on queue `q`.  Refills from rate_bytes_per_sec, then either debits and
