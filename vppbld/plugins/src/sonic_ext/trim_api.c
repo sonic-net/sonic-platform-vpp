@@ -102,17 +102,18 @@ sonic_ext_trim_enable_disable (u32 sw_if_index, int enable)
 				      enable, 0, 0);
 }
 
-void
+int
 sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
 			      u64 rate_bytes_per_sec, u64 capacity_bytes)
 {
   sonic_ext_trim_port_t *port;
   sonic_ext_trim_queue_t *q;
   int any_eligible = 0;
+  int rv = 0;
   int i;
 
   if (queue >= SONIC_EXT_TRIM_MAX_QUEUES)
-    return;
+    return VNET_API_ERROR_INVALID_VALUE;
 
   port = sonic_ext_trim_port_get (sw_if_index, 1 /* create */);
   q = &port->q[queue];
@@ -137,7 +138,7 @@ sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
 
   if ((u8) (any_eligible ? 1 : 0) != port->feature_enabled)
     {
-      int rv = sonic_ext_trim_enable_disable (sw_if_index, any_eligible);
+      rv = sonic_ext_trim_enable_disable (sw_if_index, any_eligible);
       if (rv == 0)
 	port->feature_enabled = any_eligible ? 1 : 0;
       else
@@ -145,6 +146,8 @@ sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
 	  "sonic-ext trim: feature %s on sw_if_index %u failed (rv=%d)",
 	  any_eligible ? "enable" : "disable", sw_if_index, rv);
     }
+
+  return rv;
 }
 
 /* ------------------------------------------------------------------ */
@@ -215,7 +218,7 @@ vl_api_sonic_ext_trim_queue_set_t_handler (
       goto done;
     }
 
-  sonic_ext_trim_queue_program (sw_if_index, queue, mp->eligible ? 1 : 0,
+  rv = sonic_ext_trim_queue_program (sw_if_index, queue, mp->eligible ? 1 : 0,
 				clib_net_to_host_u64 (mp->rate_bytes_per_sec),
 				clib_net_to_host_u64 (mp->capacity_bytes));
 

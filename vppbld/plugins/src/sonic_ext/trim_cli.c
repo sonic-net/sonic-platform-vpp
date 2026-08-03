@@ -226,7 +226,9 @@ sonic_ext_trim_queue_command_fn (vlib_main_t *vm, unformat_input_t *input,
     return clib_error_return (0, "queue must be 0..%u",
 			      SONIC_EXT_TRIM_MAX_QUEUES - 1);
 
-  sonic_ext_trim_queue_program (sw_if_index, queue, eligible, rate, cap);
+  if (sonic_ext_trim_queue_program (sw_if_index, queue, eligible, rate, cap))
+    return clib_error_return (
+      0, "failed to enable/disable the trim admission feature on the interface");
   return 0;
 }
 
