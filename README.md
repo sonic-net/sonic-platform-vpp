@@ -48,6 +48,14 @@ Refer to the [Getting started](docs/README.getting-started.md) document in docs 
 
 Refer to the [document](docs/README.sonic_vm.md) in docs directory for details. 
 
+# VPP SAI compatibility CI
+
+The Azure pipeline builds the Trixie VPP packages from the current commit and tests them with the VPP SAI unit-test framework published by `sonic-sairedis`. `BuildSaiVppTestImage` downloads an approved `docker-sai-test-vpp` artifact, installs only the current run's `libvppinfra`, `vpp`, `vpp-plugin-core`, and `vpp-plugin-dpdk` packages in a derivative image, verifies that every non-VPP Debian package is unchanged, and publishes combined provenance and checksums.
+
+`TestSaiVpp` runs the four-module compatibility matrix on the `sonictest` pool. The expected 85-selector matrix, 34-selector stable-pass baseline, evaluator, and matrix generator come from the same approved sairedis artifact as the base image, so this repository does not carry a copy of sairedis test policy.
+
+By default, the pipeline selects the latest successful `Azure.sonic-sairedis` master artifact. Set the optional `sairedis_run_id` pipeline parameter to an immutable Azure build ID to validate against a specific sairedis image. Privileged test execution must retain the repository's trusted-maintainer authorization policy for pull requests.
+
 
 # Troubleshooting
 
