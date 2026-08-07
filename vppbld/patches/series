@@ -29,4 +29,9 @@
 0013-sflow-per-port-direction.patch
 # 14. Adding new VPP API handlers for per port and direction patches
 0014-sflow-per-port-api.patch
-
+# 15. VXLAN encap inner-aware flow hash: hash inner IP 5-tuple on L3 VXLAN
+#     encap so inner flows spread across underlay ECMP / LAG paths
+0015-vxlan-encap-inner-aware-flow-hash.patch
+# 17. VXLAN VNET source-independent ("decap-any") decap: match local dst+vni
+#     ignoring outer src (RIOT / secondary-VTEP VNET decap) + l2_bvi helper
+0017-sonic-vxlan-vnet-source-independent-decap.patch
