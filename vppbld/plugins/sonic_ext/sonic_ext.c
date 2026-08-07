@@ -31,6 +31,41 @@ VLIB_PLUGIN_REGISTER () = {
 };
 
 /*
+ * A "device-input" feature must never be toggled on a sub-interface.
+ *
+ * The driver input nodes start that arc from the *device's* own
+ * sw_if_index -- e.g. virtio (all linux-cp taps) calls
+ * vnet_feature_start_device_input (vif->sw_if_index, ...) and dpdk
+ * calls it with xd->sw_if_index -- so a sub-interface never gets a
+ * device-input dispatch of its own; it always rides its parent's.
+ * Enabling there is therefore a no-op, but *disabling* is actively
+ * destructive: vnet_config feature strings are interned and shared by
+ * every interface with an identical feature set, so removing the
+ * feature via the sub-interface rewrites the very config the parent is
+ * still pointing at.  The parent silently loses the feature and its
+ * input node falls back to the arc's end node (ethernet-input).
+ *
+ * Concretely: creating and then deleting a physical sub-port such as
+ * Ethernet64.20 used to strip host-xc off Ethernet64's tap.  Every
+ * later Linux-originated VLAN-tagged frame on that tap then reached
+ * ethernet-input instead of host-xc, and -- the tap having no VLAN
+ * sub-interface of its own -- was dropped as "unknown vlan".  That is
+ * exactly the path a LAG sub-port's ARP takes once the port has been
+ * enslaved (PortChannel1.20 -> team -> Ethernet64 tap), so the
+ * neighbour never resolved and LAG sub-port forwarding died -- but
+ * only when a physical sub-port had been created and removed earlier
+ * in the same session.
+ */
+static int
+sonic_ext_sw_is_sub (u32 sw_if_index)
+{
+  vnet_sw_interface_t *swi =
+    vnet_get_sw_interface_or_null (vnet_get_main (), sw_if_index);
+
+  return swi && swi->type == VNET_SW_INTERFACE_TYPE_SUB;
+}
+
+/*
  * Per-interface feature enable helpers.  All three live in this file
  * (rather than in the per-node files) so that the LCP pair add/del
  * callback, the sw_if_index add/del callback and the CLI all share the
@@ -39,6 +74,9 @@ VLIB_PLUGIN_REGISTER () = {
 void
 sonic_ext_capture_enable_disable (u32 sw_if_index, int enable)
 {
+  if (sonic_ext_sw_is_sub (sw_if_index))
+    return;
+
   vnet_feature_enable_disable ("device-input", "sonic-ext-capture",
 			       sw_if_index, enable, 0, 0);
 }
@@ -46,6 +84,9 @@ sonic_ext_capture_enable_disable (u32 sw_if_index, int enable)
 void
 sonic_ext_host_xc_enable_disable (u32 sw_if_index, int enable)
 {
+  if (sonic_ext_sw_is_sub (sw_if_index))
+    return;
+
   vnet_feature_enable_disable ("device-input", "sonic-ext-host-xc",
 			       sw_if_index, enable, 0, 0);
 }
@@ -55,6 +96,23 @@ sonic_ext_aggr_tap_redirect_enable_disable (u32 sw_if_index, int enable)
 {
   vnet_feature_enable_disable ("interface-output",
 			       "sonic-ext-aggr-tap-redirect", sw_if_index,
+			       enable, 0, 0);
+}
+
+/*
+ * Enable / disable sonic-ext-glean-redirect on the ip4-drop / ip6-drop
+ * arcs.  Those arcs are dispatched with sw_if_index 0 (ip_drop_or_punt
+ * hardcodes it), so this is a single global toggle -- not per phy.
+ * The node scopes itself per packet: it only acts on buffers that
+ * carry a capture cookie (i.e. ingressed on a real wire phy) whose
+ * VLIB_TX adjacency is an unresolved glean / arp adjacency.
+ */
+void
+sonic_ext_glean_redirect_enable_disable (int enable)
+{
+  vnet_feature_enable_disable ("ip4-drop", "sonic-ext-glean-redirect", 0,
+			       enable, 0, 0);
+  vnet_feature_enable_disable ("ip6-drop", "sonic-ext-glean-redirect", 0,
 			       enable, 0, 0);
 }
 
@@ -192,6 +250,17 @@ sonic_ext_set_punt_via_member (u8 is_enable)
     {
       lcp_itf_pair_walk (sonic_ext_capture_walk_enable_cb, NULL);
       sem->capture_enabled = 1;
+    }
+
+  /* Glean-redirect is a single global feature on the ip4/ip6-drop
+   * arcs (dispatched with sw_if_index 0).  Enable once; the node
+   * self-scopes via the capture cookie + glean/arp adjacency check
+   * and short-circuits when punt_via_member is off, so we never need
+   * to disable it per-interface. */
+  if (is_enable && !sem->glean_redirect_enabled)
+    {
+      sonic_ext_glean_redirect_enable_disable (1);
+      sem->glean_redirect_enabled = 1;
     }
 
   /* The aggr-tap-redirect feature itself is wired per-interface from
