@@ -28,11 +28,31 @@ There are two types of sonic-vpp image build targets supported
 
 ## Building a single container image
 
-1. git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git
-2. make init
-3. NOBULLSEYE=1 NOBUSTER=1 make configure PLATFORM=vpp
-4. NOBULLSEYE=1 NOBUSTER=1 make SONIC_BUILD_JOBS=4 target/docker-sonic-vpp.gz
-Note: this is not tested and could be broken, which will be fixed later. In the meantime, use branch prior-to-build-change for single container image build.
+```bash
+git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git
+cd sonic-buildimage
+make init
+NOBULLSEYE=1 NOBUSTER=1 make configure PLATFORM=vpp
+NOBULLSEYE=1 NOBUSTER=1 BUILD_SKIP_TEST=y INCLUDE_FIPS=n \
+    make SONIC_BUILD_JOBS=4 target/docker-sonic-vpp.gz
+```
+
+The two extra flags are currently required for the single-container target:
+
+- `INCLUDE_FIPS=n` — the container pulls in `libzmq3-dev`, whose `krb5-multidev`
+  dependency conflicts with the FIPS build of krb5 that ships in the base image
+  when FIPS is enabled (the default). The single container is a reduced-feature
+  demo/test image, so building it without FIPS is expected.
+- `BUILD_SKIP_TEST=y` — skips a currently-failing upstream `sonic-host-services`
+  unit test (unrelated to VPP). Drop it once that test is fixed upstream.
+
+The build takes a while the first time (it also builds the `sonic-slave`
+container images). The Docker daemon that runs inside the slave container needs
+the legacy iptables kernel modules loaded on the host:
+
+```bash
+sudo modprobe ip_tables iptable_nat iptable_filter
+```
 
 ### Testing the single container image
 

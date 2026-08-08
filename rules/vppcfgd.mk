@@ -1,7 +1,9 @@
 # sonic-vppcfgd package
 
 SONIC_VPPCFGD = sonic_vppcfgd-1.0-py3-none-any.whl
-$(SONIC_VPPCFGD)_SRC_PATH = $(SRC_PATH)/sonic-vppcfgd
+# Build from the in-repo overlay source so no copy into sonic-buildimage's
+# src/ is required (sonic-vppcfgd is not an upstream buildimage package).
+$(SONIC_VPPCFGD)_SRC_PATH = $(PLATFORM_PATH)/platform/mkrules/src/sonic-vppcfgd
 # These dependencies are only needed because they are dependencies
 # of sonic-config-engine and vppcfgd explicitly calls sonic-cfggen
 # as part of its unit tests.

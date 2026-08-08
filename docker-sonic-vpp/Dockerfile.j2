@@ -1,4 +1,6 @@
-FROM docker-swss-layer-trixie-{{DOCKER_USERNAME}}:{{DOCKER_USERTAG}}
+ARG BASE=docker-swss-layer-trixie-{{DOCKER_USERNAME}}:{{DOCKER_USERTAG}}
+
+FROM $BASE AS base
 
 ARG docker_container_name
 
@@ -8,10 +10,6 @@ RUN [ -f /etc/rsyslog.conf ] && sed -ri "s/%syslogtag%/$docker_container_name#%s
 ## Make apt-get non-interactive
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y gnupg
-COPY ["sonic-dev.gpg.key", "/etc/apt/"]
-RUN apt-key add /etc/apt/sonic-dev.gpg.key
-RUN echo "deb http://packages.microsoft.com/repos/sonic-dev/ jessie main" >> /etc/apt/sources.list
 RUN apt-get update
 
 RUN apt-get install -y net-tools \
@@ -62,6 +60,9 @@ RUN apt-get install -y net-tools \
                        # For installing dependent Python packages of sonic-host-services
                        # these packages are needed at runtime
                        gir1.2-glib-2.0 \
+                       python3-gi \
+                       python3-dbus \
+                       python3-systemd \
                        libdbus-1-3 \
                        libunwind8 \
                        libgirepository-1.0-1 \
@@ -74,6 +75,10 @@ RUN apt-get install -y net-tools \
                        dbus \
 		       redis-server
 
+# The trixie config-engine base apt-installs python3-cffi, which pip cannot upgrade
+# (no RECORD file); remove it so wheel installs below can pull in a newer pip-managed cffi.
+RUN apt-get purge -y python3-cffi
+
 # For sonic-config-engine Python 3 package
 # Install pyangbind here, outside sonic-config-engine dependencies, as pyangbind causes enum34 to be installed.
 # Then immediately uninstall enum34, as enum34 should not be installed for Python >= 3.4, as it causes a
@@ -83,10 +88,15 @@ RUN pip3 install pyangbind==0.8.1
 RUN pip3 uninstall -y enum34
 
 # Dependencies of restore_neighbors.py
+# (scapy comes from the python3-scapy apt package installed above)
 RUN pip3 install \
-         scapy==2.4.4 \
          pyroute2==0.5.14 \
          netifaces==0.10.9
+
+# For sonic-host-services/dbus-python builds: these packages are required to
+# build dbus-python source archives (dbus-python-*.tar.gz), and avoid
+# "BackendUnavailable: Cannot import 'mesonpy'" during pip install with no build isolation.
+RUN pip3 install meson-python meson ninja patchelf
 
 {% if docker_sonic_vpp_debs.strip() -%}
 # Copy locally-built Debian package dependencies
@@ -207,6 +217,27 @@ RUN rm /etc/frr/frr.conf
 
 # Create /var/warmboot/teamd folder for teammgrd
 RUN mkdir -p /var/warmboot/teamd
+
+# Trim build-only and unused payload so the flattened image below stays small.
+# These run in the builder stage, so the rsync into the final stage never sees them.
+# - build-only pip tooling (only needed to build dbus-python during this build)
+RUN pip3 uninstall -y meson-python meson ninja patchelf 2>/dev/null || true
+# - unit-test suite shipped inside the sonic wheels (not used at runtime)
+RUN rm -rf /usr/local/lib/python3*/dist-packages/tests
+# - device data for platforms this single-container image never runs
+#   (it only ever uses PLATFORM=x86_64-kvm_x86_64-r0)
+RUN find /usr/share/sonic/device -mindepth 1 -maxdepth 1 -type d \
+        ! -name 'x86_64-kvm_x86_64-r0' -exec rm -rf {} +
+
+# Flatten: start from a clean base and rsync in only the net filesystem
+# changes from the builder stage. This collapses all the install/purge churn
+# above into a single layer, so purged build dependencies no longer ship.
+FROM $BASE
+
+RUN --mount=type=bind,from=base,target=/changes-to-image \
+    rsync -axAX --omit-dir-times --no-D \
+      --exclude=/sys --exclude=/proc --exclude=/dev --exclude=resolv.conf \
+      /changes-to-image/ /
 
 # Set PLATFORM and HWSKU environment variables
 ENV PLATFORM=x86_64-kvm_x86_64-r0
