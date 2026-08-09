@@ -99,6 +99,9 @@ sonic_ext_buffer (vlib_buffer_t *b)
 
 typedef struct
 {
+  /* API message ID base */
+  u16 msg_id_base;
+
   /* Global feature toggles. */
   u8 punt_via_member;
   u8 host_xc;
@@ -116,6 +119,7 @@ typedef struct
   u64 glean_redirects;
   u64 host_xc_direct;
   u64 l2_trap_fixups;
+  u64 ip2me_hits;
 } sonic_ext_main_t;
 
 extern sonic_ext_main_t sonic_ext_main;
@@ -125,6 +129,8 @@ extern vlib_node_registration_t sonic_ext_aggr_tap_redirect_node;
 extern vlib_node_registration_t sonic_ext_glean_redirect_node;
 extern vlib_node_registration_t sonic_ext_host_xc_node;
 extern vlib_node_registration_t sonic_ext_l2_trap_fixup_node;
+extern vlib_node_registration_t sonic_ext_ip2me_ip4_node;
+extern vlib_node_registration_t sonic_ext_ip2me_ip6_node;
 
 /* Enable / disable sonic-ext-capture on a given interface.  No-op if
  * the capture sidecar is not yet initialized. */
@@ -151,6 +157,14 @@ int sonic_ext_redirect_to_ingress_tap (vlib_buffer_t *b, u32 orig_rx,
 				       u32 excluded_tap, u32 *host_tap,
 				       u16 *pushed_tpid,
 				       u16 *pushed_vlan_id);
+
+/* Enable / disable the "receive-DPO check before ACL" feature on a
+ * given L2 port sw_if_index.  Registers sonic-ext-ip2me-ip4/ip6 on the
+ * l2-input-ip4 / l2-input-ip6 feature arcs, ahead of the ACL plugin, so
+ * that ip2me (destined-to-this-switch) traffic bypasses any ingress drop
+ * ACL that would otherwise discard it.  Driven from the SAI-VPP layer
+ * wherever such a drop ACL is bound. */
+void sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable);
 
 /* Toggle accessors used by CLI and node fast paths. */
 void sonic_ext_set_punt_via_member (u8 is_enable);
