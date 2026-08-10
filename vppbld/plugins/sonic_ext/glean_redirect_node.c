@@ -242,7 +242,6 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
-  vnet_main_t *vnm = vnet_get_main ();
   clib_thread_index_t thread_index = vm->thread_index;
   u32 n_left_from, *from;
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b;
@@ -264,17 +263,13 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
     {
       u32 next0 = 0;
       sonic_ext_buffer_opaque_t *seb;
-      vnet_sw_interface_t *swo;
-      const lcp_itf_pair_t *ilip;
-      index_t ilipi;
       u32 adj_index0 = vnet_buffer (b[0])->ip.adj_index[VLIB_TX];
       u32 orig_rx = ~0;
       u32 host_tap = ~0;
-      u32 saved_vlan_tag = 0;
+      u16 pushed_tpid = 0;
       u16 pushed_vlan_id = 0;
       int did_redirect = 0;
       u64 key;
-      i32 adv;
 
       /* Default: continue down the drop arc (real drop). */
       vnet_feature_next (&next0, b[0]);
@@ -314,7 +309,6 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	  goto trace0;
 	}
       orig_rx = seb->orig_rx_sw_if_index;
-      saved_vlan_tag = seb->orig_vlan_tag;
 
       /* Rate-limit per resolving adjacency: one punt per window is
        * enough to (re)arm the kernel's own ARP; the rest keep
@@ -326,57 +320,13 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	  goto trace0;
 	}
 
-      swo = vnet_get_sw_interface (vnm, orig_rx);
-      {
-	u32 phy_sw = (swo->type == VNET_SW_INTERFACE_TYPE_SUB)
-		       ? swo->sup_sw_if_index
-		       : orig_rx;
-	ilipi = lcp_itf_pair_find_by_phy (phy_sw);
-      }
-      if (PREDICT_FALSE (ilipi == INDEX_INVALID))
+      if (PREDICT_FALSE (!sonic_ext_redirect_to_ingress_tap (
+	    b[0], orig_rx, ~0, &host_tap, &pushed_tpid, &pushed_vlan_id)))
 	{
 	  n_no_lcp++;
 	  goto trace0;
 	}
-      ilip = lcp_itf_pair_get (ilipi);
-      host_tap = ilip->lip_host_sw_if_index;
 
-      /* Clear the cookie before letting the buffer out -- defends
-       * against re-entering this node on the redirected pass and
-       * against a future packet on a recycled buffer. */
-      seb->magic = 0;
-
-      /* Rewind to the original wire L2 (recovers vlan bytes that
-       * ethernet-input parsed past), then re-push the outer VLAN tag
-       * from the wire-time capture snapshot so the kernel 8021q layer
-       * demuxes the frame to the right sub-interface netdev.  Mirrors
-       * sonic-ext-aggr-tap-redirect. */
-      adv =
-	(i32) vnet_buffer (b[0])->l2_hdr_offset - (i32) b[0]->current_data;
-      vlib_buffer_advance (b[0], adv);
-
-      if (saved_vlan_tag && b[0]->current_data >= 4)
-	{
-	  u8 *cur = vlib_buffer_get_current (b[0]);
-	  u16 cur_etype = clib_net_to_host_u16 (*(u16 *) (cur + 12));
-	  if (cur_etype != ETHERNET_TYPE_VLAN &&
-	      cur_etype != ETHERNET_TYPE_DOT1AD &&
-	      cur_etype != ETHERNET_TYPE_VLAN_9100)
-	    {
-	      u8 save_macs[12];
-	      u8 *new_cur;
-	      clib_memcpy_fast (save_macs, cur, 12);
-	      vlib_buffer_advance (b[0], -4);
-	      new_cur = vlib_buffer_get_current (b[0]);
-	      clib_memcpy_fast (new_cur, save_macs, 12);
-	      clib_memcpy_fast (new_cur + 12, &saved_vlan_tag, 4);
-	      vnet_buffer (b[0])->l2_hdr_offset -= 4;
-	      pushed_vlan_id =
-		clib_net_to_host_u16 (*((u16 *) &saved_vlan_tag + 1)) & 0x0fff;
-	    }
-	}
-
-      vnet_buffer (b[0])->sw_if_index[VLIB_TX] = host_tap;
       next[0] = SONIC_EXT_GLEAN_REDIRECT_NEXT_INTERFACE_OUTPUT;
       did_redirect = 1;
       n_redirected++;

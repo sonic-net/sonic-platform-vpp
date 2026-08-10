@@ -116,6 +116,80 @@ sonic_ext_glean_redirect_enable_disable (int enable)
 			       enable, 0, 0);
 }
 
+int
+sonic_ext_redirect_to_ingress_tap (vlib_buffer_t *b, u32 orig_rx,
+				   u32 excluded_tap, u32 *host_tap,
+				   u16 *pushed_tpid, u16 *pushed_vlan_id)
+{
+  vnet_main_t *vnm = vnet_get_main ();
+  sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b);
+  vnet_sw_interface_t *swo;
+  const lcp_itf_pair_t *lip;
+  index_t lipi;
+  u32 phy_sw;
+  u32 saved_vlan_tag = seb->orig_vlan_tag;
+  i32 adv;
+
+  *host_tap = ~0;
+  *pushed_tpid = 0;
+  *pushed_vlan_id = 0;
+
+  swo = vnet_get_sw_interface_or_null (vnm, orig_rx);
+  if (!swo)
+    return 0;
+
+  if (swo->type == VNET_SW_INTERFACE_TYPE_SUB)
+    phy_sw = swo->sup_sw_if_index;
+  else
+    phy_sw = orig_rx;
+
+  lipi = lcp_itf_pair_find_by_phy (phy_sw);
+  if (lipi == INDEX_INVALID)
+    return 0;
+
+  lip = lcp_itf_pair_get (lipi);
+  *host_tap = lip->lip_host_sw_if_index;
+  if (*host_tap == excluded_tap)
+    return 0;
+
+  seb->magic = 0;
+
+  /* Restore the original wire L2 position.  ethernet-input may have
+   * advanced past the Ethernet header before either redirect node runs. */
+  adv = (i32) vnet_buffer (b)->l2_hdr_offset - (i32) b->current_data;
+  vlib_buffer_advance (b, adv);
+
+  /* Re-push the captured outer tag only if the restored frame does not
+   * already contain one.  The raw TPID+TCI snapshot preserves the exact
+   * ingress tag without relying on sub-interface configuration. */
+  if (saved_vlan_tag && b->current_data >= 4)
+    {
+      u8 *cur = vlib_buffer_get_current (b);
+      u16 cur_etype = clib_net_to_host_u16 (*(u16 *) (cur + 12));
+
+      if (cur_etype != ETHERNET_TYPE_VLAN &&
+	  cur_etype != ETHERNET_TYPE_DOT1AD &&
+	  cur_etype != ETHERNET_TYPE_VLAN_9100)
+	{
+	  u8 save_macs[12];
+	  u8 *new_cur;
+
+	  clib_memcpy_fast (save_macs, cur, 12);
+	  vlib_buffer_advance (b, -4);
+	  new_cur = vlib_buffer_get_current (b);
+	  clib_memcpy_fast (new_cur, save_macs, 12);
+	  clib_memcpy_fast (new_cur + 12, &saved_vlan_tag, 4);
+	  vnet_buffer (b)->l2_hdr_offset -= 4;
+	  *pushed_tpid = clib_net_to_host_u16 (*(u16 *) &saved_vlan_tag);
+	  *pushed_vlan_id =
+	    clib_net_to_host_u16 (*((u16 *) &saved_vlan_tag + 1)) & 0x0fff;
+	}
+    }
+
+  vnet_buffer (b)->sw_if_index[VLIB_TX] = *host_tap;
+  return 1;
+}
+
 /*
  * Is `phy_sw_if_index` a BVI (bridge-virtual interface)?  Used by
  * the aggregate-detection helper.  Distinct from is_aggregate so
