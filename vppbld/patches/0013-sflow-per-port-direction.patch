@@ -1,0 +1,88 @@
+diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
+index 5b7237c9c..f4283f608 100644
+--- a/src/plugins/sflow/sflow.c
++++ b/src/plugins/sflow/sflow.c
+@@ -792,12 +792,14 @@ void
+ sflow_enable_disable_interface (sflow_main_t *smp,
+ 				sflow_per_interface_data_t *sfif)
+ {
++  u32 direction = sflow_direction_resolve (smp, sfif);
++
+   bool ingress_on =
+-    sfif->sflow_enabled && (smp->samplingD == SFLOW_DIRN_INGRESS ||
+-			    smp->samplingD == SFLOW_DIRN_BOTH);
++    sfif->sflow_enabled && (direction == SFLOW_DIRN_INGRESS ||
++			    direction == SFLOW_DIRN_BOTH);
+   bool egress_on =
+     sfif->sflow_enabled &&
+-    (smp->samplingD == SFLOW_DIRN_EGRESS || smp->samplingD == SFLOW_DIRN_BOTH);
++    (direction == SFLOW_DIRN_EGRESS || direction == SFLOW_DIRN_BOTH);
+   bool drop_on = sfif->sflow_enabled && smp->dropM;
+   bool ingress_enabled = (vnet_feature_is_enabled ("device-input", "sflow",
+ 						   sfif->sw_if_index) == 1);
+@@ -940,6 +942,37 @@ sflow_set_sampling_rate_set (sflow_main_t *smp, u32 sw_if_index, u32 samplingN)
+ 
+ }
+ 
++int
++sflow_set_direction_set (sflow_main_t *smp, u32 sw_if_index, u32 direction)
++{
++  vnet_sw_interface_t *sw;
++
++  /* Utterly wrong? */
++  if (pool_is_free_index (smp->vnet_main->interface_main.sw_interfaces,
++			  sw_if_index))
++    return VNET_API_ERROR_INVALID_SW_IF_INDEX;
++
++  /* Not a physical port? */
++  sw = vnet_get_sw_interface (smp->vnet_main, sw_if_index);
++  if (sw->type != VNET_SW_INTERFACE_TYPE_HARDWARE)
++    return VNET_API_ERROR_INVALID_SW_IF_INDEX;
++
++  if (direction > SFLOW_DIRN_BOTH)
++    return VNET_API_ERROR_INVALID_VALUE;
++
++  SFLOW_DBG ("sw_if_index=%u, sup_sw_if_index=%u, hw_if_index=%u\n",
++	     sw->sw_if_index, sw->sup_sw_if_index, sw->hw_if_index);
++
++  vec_validate (smp->per_interface_data, sw->hw_if_index);
++  sflow_per_interface_data_t *sfif =
++    vec_elt_at_index (smp->per_interface_data, sw->hw_if_index);
++
++  sfif->direction = direction;
++  sflow_enable_disable_interface (smp, sfif);
++
++  return 0;
++}
++
+ static clib_error_t *
+ sflow_sampling_rate_command_fn (vlib_main_t *vm, unformat_input_t *input,
+ 				vlib_cli_command_t *cmd)
+diff --git a/src/plugins/sflow/sflow.h b/src/plugins/sflow/sflow.h
+index cf90d9cea..e26896b1a 100644
+--- a/src/plugins/sflow/sflow.h
++++ b/src/plugins/sflow/sflow.h
+@@ -269,4 +269,11 @@ sflow_next_random_skip_if (sflow_main_t *smp, sflow_per_interface_data_t *sfif,
+   return (random_u32 (&smpif->seed) % lim) + 1;
+ }
+ 
++static inline u32
++sflow_direction_resolve (sflow_main_t *smp, sflow_per_interface_data_t *sfif)
++{
++  u32 effectiveD = sfif->direction ? sfif->direction : smp->samplingD;
++  return effectiveD;
++}
++
+ #endif /* __included_sflow_h__ */
+diff --git a/src/plugins/sflow/sflow_common.h b/src/plugins/sflow/sflow_common.h
+index cd73302a8..6055d04f1 100644
+--- a/src/plugins/sflow/sflow_common.h
++++ b/src/plugins/sflow/sflow_common.h
+@@ -20,6 +20,7 @@ typedef struct
+   u32 polled;
+   int sflow_enabled;
+   u32 samplingN;
++  u32 direction;
+ } sflow_per_interface_data_t;
+ 
+ /* mirror sflow_direction enum in sflow.api */
