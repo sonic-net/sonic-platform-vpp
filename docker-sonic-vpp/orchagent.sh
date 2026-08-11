@@ -21,6 +21,10 @@ fi
 
 # Create a folder for SwSS record files
 mkdir -p /var/log/swss
+# P4Orch unconditionally binds a ZMQ server on ipc:///zmq_swss/... ; in the
+# multi-container/VM image this dir is a host bind-mount, but the single
+# container must create it itself or orchagent aborts (zmq_bind ENOENT).
+mkdir -p /zmq_swss
 ORCHAGENT_ARGS="-d /var/log/swss "
 
 # Set orchagent pop batch size to 8192
@@ -30,6 +34,12 @@ ORCHAGENT_ARGS+="-b 8192 "
 SYNC_MODE=$(echo $SWSS_VARS | jq -r '.synchronous_mode')
 if [ "$SYNC_MODE" == "enable" ]; then
     ORCHAGENT_ARGS+="-s "
+fi
+
+# Pass FIB suppression flag when enabled in CONFIG_DB
+SUPPRESS_FIB_CONFIG=$(sonic-cfggen -d -v "DEVICE_METADATA['localhost'].get('suppress-fib-pending', '')")
+if [ "$SUPPRESS_FIB_CONFIG" == "enabled" ]; then
+    ORCHAGENT_ARGS+="-F "
 fi
 
 # Set mac address

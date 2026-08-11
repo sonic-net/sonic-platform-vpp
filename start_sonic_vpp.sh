@@ -61,6 +61,8 @@ function start_sonic_vpp_cntr()
 
     if ! eval cntr_running $SONIC_VPP; then
 	echo "Starting $SONIC_VPP container"
+    modprobe psample
+    modprobe drop_monitor
 	docker run --rm --init --privileged -e "VPP_DPDK_PORTS=$PORTS" -e "SONIC_NUM_PORTS=${#portlist[@]}" \
 	       -e "DPDK_DISABLE=$DPDK_DISABLE" -e "VPP_CONF_DB=$VPP_CONF_DB" -e "NO_LINUX_NL=$NO_LINUX_NL" --network $netns --name $SONIC_VPP -d $SONIC_VPP_IMG > /dev/null
 #	docker create --rm --init --privileged -e "VPP_DPDK_PORTS=$PORTS" -e "SONIC_NUM_PORTS=${#portlist[@]}" \

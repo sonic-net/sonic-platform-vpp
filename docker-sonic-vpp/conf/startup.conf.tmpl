@@ -252,6 +252,7 @@ plugins {
         plugin vxlan_plugin.so { enable }
 	plugin tunterm_acl_plugin.so { enable }
 	plugin ip_validate_plugin.so { enable }
+	plugin sonic_ext_plugin.so { enable }
 
 	## Enable all plugins by default and then selectively disable specific plugins
 	# plugin dpdk_plugin.so { disable }
@@ -299,7 +300,3 @@ plugins {
    # class dpdk/cryptodev { rate-limit 100 level debug syslog-level error }
 # }
 
-# Why not support sub interfaces
-linux-cp {
-   lcp-auto-subint
-}
