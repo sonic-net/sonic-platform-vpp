@@ -24,17 +24,21 @@ machinery of 0011 to the underlay.
 
 Read the inner Ethernet ethertype directly at the buffer current pointer
 (the inner Ethernet header is present for both L2 and L3 tunnels at the
-encap call sites) and hash the inner IPv4/IPv6 5-tuple.  Fall back to the
-generic vnet_l2_compute_flow_hash() (which honours l2_len and VLAN tags)
-for anything that is not plain inner IPv4/IPv6.
+encap call sites) and hash the inner IPv4/IPv6 5-tuple.  Tagged inner
+frames are handled by skipping up to two 802.1Q/802.1ad VLAN tags before
+reading the inner ethertype; this cannot be delegated to
+vnet_l2_compute_flow_hash() because that helper depends on l2.l2_len,
+which is not valid on the routed path (it shares storage with
+ip.flow_hash in the buffer opaque union).  Anything that is not plain
+inner IPv4/IPv6 still falls back to the generic vnet_l2_compute_flow_hash().
 
 Signed-off-by: Aaron Bernardino <aaronber@microsoft.com>
 ---
 diff --git a/src/plugins/vxlan/encap.c b/src/plugins/vxlan/encap.c
-index 9d304b76d..71024b3b4 100644
+index 9d304b7..475239d 100644
 --- a/src/plugins/vxlan/encap.c
 +++ b/src/plugins/vxlan/encap.c
-@@ -57,6 +57,30 @@ format_vxlan_encap_trace (u8 * s, va_list * args)
+@@ -57,6 +57,44 @@ format_vxlan_encap_trace (u8 * s, va_list * args)
  }
  #endif
  
@@ -48,11 +52,25 @@ index 9d304b76d..71024b3b4 100644
 +   * flow for a given tunnel endpoint onto a single outer UDP source port and
 +   * a single underlay ECMP path. The inner Ethernet header is present at the
 +   * current data pointer, so read its ethertype directly and hash the inner
-+   * IP 5-tuple. Fall back to the generic L2 hash (which honours l2_len and
-+   * VLAN tags) for anything that is not plain inner IPv4/IPv6. */
++   * IP 5-tuple. Skip up to two VLAN tags so tagged inner frames are hashed on
++   * their real inner headers too. Fall back to the generic L2 hash for
++   * anything that is not plain inner IPv4/IPv6. */
 +  ethernet_header_t *eh = vlib_buffer_get_current (b);
 +  u16 ethertype = clib_net_to_host_u16 (eh->type);
 +  u8 *l3h = (u8 *) (eh + 1);
++
++  if (ethertype == ETHERNET_TYPE_VLAN || ethertype == ETHERNET_TYPE_DOT1AD)
++    {
++      ethernet_vlan_header_t *vlan = (ethernet_vlan_header_t *) l3h;
++      ethertype = clib_net_to_host_u16 (vlan->type);
++      l3h = (u8 *) (vlan + 1);
++      if (ethertype == ETHERNET_TYPE_VLAN)
++        {
++          vlan = (ethernet_vlan_header_t *) l3h;
++          ethertype = clib_net_to_host_u16 (vlan->type);
++          l3h = (u8 *) (vlan + 1);
++        }
++    }
 +
 +  if (ethertype == ETHERNET_TYPE_IP4)
 +    return ip4_compute_flow_hash ((ip4_header_t *) l3h, IP_FLOW_HASH_DEFAULT);
@@ -65,7 +83,7 @@ index 9d304b76d..71024b3b4 100644
  always_inline uword
  vxlan_encap_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
  		    vlib_frame_t *from_frame, u8 is_ip4)
-@@ -125,8 +149,8 @@ vxlan_encap_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
+@@ -125,8 +163,8 @@ vxlan_encap_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
  	  vlib_buffer_t *b1 = b[1];
  	  b += 2;
  
@@ -76,7 +94,7 @@ index 9d304b76d..71024b3b4 100644
  
  	  /* Get next node index and adj index from tunnel next_dpo */
  	  if (sw_if_index0 != vnet_buffer (b0)->sw_if_index[VLIB_TX])
-@@ -351,7 +375,7 @@ vxlan_encap_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
+@@ -351,7 +389,7 @@ vxlan_encap_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
  	  vlib_buffer_t *b0 = b[0];
  	  b += 1;
  
