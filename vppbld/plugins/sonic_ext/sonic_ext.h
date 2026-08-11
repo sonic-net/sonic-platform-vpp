@@ -107,11 +107,13 @@ typedef struct
    * interfaces, so that toggling on/off is idempotent. */
   u8 capture_enabled;
   u8 host_xc_enabled;
+  u8 glean_redirect_enabled;
 
   /* Counters (per-feature, per-thread accounting kept in node
    * registrations; these are summary counters for `show sonic-ext`). */
   u64 captures;
   u64 aggr_tap_redirects;
+  u64 glean_redirects;
   u64 host_xc_direct;
   u64 l2_trap_fixups;
 } sonic_ext_main_t;
@@ -120,6 +122,7 @@ extern sonic_ext_main_t sonic_ext_main;
 
 extern vlib_node_registration_t sonic_ext_capture_node;
 extern vlib_node_registration_t sonic_ext_aggr_tap_redirect_node;
+extern vlib_node_registration_t sonic_ext_glean_redirect_node;
 extern vlib_node_registration_t sonic_ext_host_xc_node;
 extern vlib_node_registration_t sonic_ext_l2_trap_fixup_node;
 
@@ -134,6 +137,20 @@ void sonic_ext_host_xc_enable_disable (u32 sw_if_index, int enable);
  * (always the LCP host tap of an aggregate phy -- BVI today, bond
  * tomorrow).  Driven from the LCP pair add/del callback. */
 void sonic_ext_aggr_tap_redirect_enable_disable (u32 sw_if_index, int enable);
+
+/* Enable / disable sonic-ext-glean-redirect.  Global (the ip4-drop /
+ * ip6-drop arcs dispatch with sw_if_index 0), so there is no
+ * per-interface argument; the node scopes itself per packet via the
+ * capture cookie and the glean/arp adjacency check. */
+void sonic_ext_glean_redirect_enable_disable (int enable);
+
+/* Redirect a captured packet to the LCP host tap of its ingress phy.
+ * Restores the original L2 header and outer VLAN tag before updating
+ * VLIB_TX.  excluded_tap prevents redirecting back to the current tap. */
+int sonic_ext_redirect_to_ingress_tap (vlib_buffer_t *b, u32 orig_rx,
+				       u32 excluded_tap, u32 *host_tap,
+				       u16 *pushed_tpid,
+				       u16 *pushed_vlan_id);
 
 /* Toggle accessors used by CLI and node fast paths. */
 void sonic_ext_set_punt_via_member (u8 is_enable);

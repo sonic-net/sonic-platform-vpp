@@ -111,7 +111,6 @@ VLIB_NODE_FN (sonic_ext_aggr_tap_redirect_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
-  vnet_main_t *vnm = vnet_get_main ();
   u32 n_left_from, *from;
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b;
   u16 nexts[VLIB_FRAME_SIZE], *next;
@@ -127,17 +126,12 @@ VLIB_NODE_FN (sonic_ext_aggr_tap_redirect_node)
     {
       u32 next0 = 0;
       sonic_ext_buffer_opaque_t *seb;
-      vnet_sw_interface_t *swo;
-      const lcp_itf_pair_t *mlip;
-      index_t mlipi;
       u32 aggr_tap = vnet_buffer (b[0])->sw_if_index[VLIB_TX];
       u32 orig_rx = ~0;
       u32 member_tap = ~0;
-      u32 saved_vlan_tag = 0;
       u16 pushed_tpid = 0;
       u16 pushed_vlan_id = 0;
       int did_redirect = 0;
-      i32 adv;
 
       /* Always default to the feature-arc next so non-redirected
        * packets continue to the aggregate tap's TX node. */
@@ -157,80 +151,18 @@ VLIB_NODE_FN (sonic_ext_aggr_tap_redirect_node)
 	  goto trace0;
 	}
       orig_rx = seb->orig_rx_sw_if_index;
-      saved_vlan_tag = seb->orig_vlan_tag;
 
-      /* Clear the cookie before any branch that might let the buffer
-       * out -- this defends both against re-entering this node and
-       * against a future packet on a recycled buffer. */
-      seb->magic = 0;
-
-      swo = vnet_get_sw_interface (vnm, orig_rx);
-      {
-	u32 phy_sw = (swo->type == VNET_SW_INTERFACE_TYPE_SUB)
-		       ? swo->sup_sw_if_index
-		       : orig_rx;
-	mlipi = lcp_itf_pair_find_by_phy (phy_sw);
-      }
-      if (PREDICT_FALSE (mlipi == INDEX_INVALID))
+      if (PREDICT_FALSE (!sonic_ext_redirect_to_ingress_tap (
+	    b[0], orig_rx, aggr_tap, &member_tap, &pushed_tpid,
+	    &pushed_vlan_id)))
 	{
+	  /* This path continues to output, so consume the cookie even when
+	   * no useful redirect target exists. */
+	  seb->magic = 0;
 	  n_no_lcp++;
 	  goto trace0;
 	}
-      mlip = lcp_itf_pair_get (mlipi);
-      member_tap = mlip->lip_host_sw_if_index;
 
-      /* Don't redirect to ourselves -- can happen if linux-cp punt
-       * already pointed VLIB_TX at the right tap, e.g. in a future
-       * config where a non-aggregate phy somehow ends up on this
-       * arc with the feature enabled.  Cheap defence. */
-      if (PREDICT_FALSE (member_tap == aggr_tap))
-	{
-	  n_no_lcp++; /* count under the "no useful redirect" bucket */
-	  goto trace0;
-	}
-
-      /* Rewind to the original wire L2 (recovers any vlan tag bytes
-       * that ethernet-input parsed past).  See sonic_ext.h header
-       * comment on l2_hdr_offset. */
-      adv =
-	(i32) vnet_buffer (b[0])->l2_hdr_offset - (i32) b[0]->current_data;
-      vlib_buffer_advance (b[0], adv);
-
-      /* Re-push the outer VLAN tag from the wire-time snapshot the
-       * capture node took.  This is the only reliable source: at
-       * capture time (device-input arc) we are still positioned at
-       * the head of the ethernet frame, before ethernet-input has
-       * classified or stripped anything.  Mirror the inverse of
-       * l2_vtr push-1: save dst+src mac, advance the buffer back
-       * by 4, write dst+src to the new position, write TPID+TCI
-       * at offset 12.  Skip if a tag is already present
-       * (transparent bridge / no-pop config) or the snapshot was
-       * empty (untagged ingress). */
-      if (saved_vlan_tag && b[0]->current_data >= 4)
-	{
-	  u8 *cur = vlib_buffer_get_current (b[0]);
-	  u16 cur_etype = clib_net_to_host_u16 (*(u16 *) (cur + 12));
-	  if (cur_etype != ETHERNET_TYPE_VLAN &&
-	      cur_etype != ETHERNET_TYPE_DOT1AD &&
-	      cur_etype != ETHERNET_TYPE_VLAN_9100)
-	    {
-	      u8 save_macs[12];
-	      u8 *new_cur;
-	      clib_memcpy_fast (save_macs, cur, 12);
-	      vlib_buffer_advance (b[0], -4);
-	      new_cur = vlib_buffer_get_current (b[0]);
-	      clib_memcpy_fast (new_cur, save_macs, 12);
-	      clib_memcpy_fast (new_cur + 12, &saved_vlan_tag, 4);
-	      vnet_buffer (b[0])->l2_hdr_offset -= 4;
-	      pushed_tpid =
-		clib_net_to_host_u16 (*(u16 *) &saved_vlan_tag);
-	      pushed_vlan_id =
-		clib_net_to_host_u16 (*((u16 *) &saved_vlan_tag + 1)) &
-		0x0fff;
-	    }
-	}
-
-      vnet_buffer (b[0])->sw_if_index[VLIB_TX] = member_tap;
       next[0] = SONIC_EXT_AGGR_TAP_REDIRECT_NEXT_INTERFACE_OUTPUT;
       did_redirect = 1;
       n_redirected++;
