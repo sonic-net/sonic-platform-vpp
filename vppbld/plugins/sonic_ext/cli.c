@@ -128,7 +128,11 @@ sonic_ext_ip2me_command_fn (vlib_main_t *vm, unformat_input_t *input,
       error = clib_error_return (0, "please specify an interface");
       goto done;
     }
-  (void) got_enable;
+  if (!got_enable)
+    {
+      error = clib_error_return (0, "please specify on|off");
+      goto done;
+    }
 
   sonic_ext_ip2me_enable_disable (sw_if_index, enable);
 
@@ -139,7 +143,7 @@ done:
 
 VLIB_CLI_COMMAND (sonic_ext_ip2me_command, static) = {
   .path = "sonic-ext ip2me",
-  .short_help = "sonic-ext ip2me <interface> [on|enable|off|disable]",
+  .short_help = "sonic-ext ip2me <interface> <on|enable|off|disable>",
   .function = sonic_ext_ip2me_command_fn,
 };
 

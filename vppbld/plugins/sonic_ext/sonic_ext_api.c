@@ -39,7 +39,6 @@ static void
 vl_api_sonic_ext_ip2me_enable_disable_t_handler (
   vl_api_sonic_ext_ip2me_enable_disable_t *mp)
 {
-  sonic_ext_main_t *sem = &sonic_ext_main;
   vnet_interface_main_t *im = &vnet_get_main ()->interface_main;
   vl_api_sonic_ext_ip2me_enable_disable_reply_t *rmp;
   u32 sw_if_index = ntohl (mp->sw_if_index);
@@ -55,7 +54,6 @@ vl_api_sonic_ext_ip2me_enable_disable_t_handler (
 
 exit:
   REPLY_MACRO (VL_API_SONIC_EXT_IP2ME_ENABLE_DISABLE_REPLY);
-  (void) sem;
 }
 
 /* API definitions */

@@ -53,11 +53,11 @@
  * do a FIB forwarding-lookup on the inner destination IP; if it resolves
  * to a local receive (DPO_RECEIVE), the destination is one of the
  * switch's own addresses (ip2me) and we steer the frame to
- * l2-input-feat-arc-end -- skipping ONLY the ACL plugin -- so the rest of
- * the l2-input chain (vtr / learn / fwd) still runs and the packet
- * reaches the BVI and ip4-local for the normal punt.  Everything else
- * falls through to the ACL via vnet_feature_next(), so transit / data
- * traffic is dropped exactly as the ACL intends.
+ * l2-input-feat-arc-end -- skipping the ACL plugin (and any later
+ * l2-input-ip* features) -- so the rest of the l2-input chain still
+ * runs and the packet reaches the BVI and ip4-local for the normal punt.
+ * Everything else falls through to the ACL via vnet_feature_next(), so
+ * transit / data traffic is dropped exactly as the ACL intends.
  *
  * Consistency with the ACL: the L3 header offset (ethernet_buffer_header_size)
  * and the interface used for the FIB (sw_if_index[VLIB_RX]) are exactly what
