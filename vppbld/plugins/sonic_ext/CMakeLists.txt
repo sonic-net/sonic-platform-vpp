@@ -14,12 +14,17 @@
 add_vpp_plugin(sonic_ext
   SOURCES
   sonic_ext.c
+  sonic_ext_api.c
   capture_node.c
   aggr_tap_redirect_node.c
   glean_redirect_node.c
   host_xc_node.c
   l2_trap_fixup_node.c
+  ip2me_node.c
   cli.c
+
+  API_FILES
+  sonic_ext.api
 
   LINK_LIBRARIES
   lcp

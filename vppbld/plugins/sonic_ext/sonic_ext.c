@@ -20,6 +20,7 @@
 #include <vnet/interface.h>
 #include <vnet/l2/l2_input.h>
 #include <vnet/l2/l2_bvi.h>
+#include <vnet/l2/l2_in_out_feat_arc.h>
 #include <vpp/app/version.h>
 #include <plugins/linux-cp/lcp_interface.h>
 
@@ -188,6 +189,24 @@ sonic_ext_redirect_to_ingress_tap (vlib_buffer_t *b, u32 orig_rx,
 
   vnet_buffer (b)->sw_if_index[VLIB_TX] = *host_tap;
   return 1;
+}
+
+/*
+ * Enable / disable the "receive-DPO check before ACL" feature on an L2
+ * port.  Both the ip4 and ip6 flavours are toggled together on the
+ * l2-input-ip4 / l2-input-ip6 feature arcs (via the L2-specific
+ * vnet_l2_feature_enable_disable, which also flips the port's
+ * L2INPUT_FEAT_INPUT_FEAT_ARC bitmap so the sub-arc is dispatched).
+ * VNET_FEATURE_INIT ordering (.runs_before acl-plugin-in-ip*-l2)
+ * guarantees the ip2me node runs ahead of any ingress drop ACL.
+ */
+void
+sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable)
+{
+  vnet_l2_feature_enable_disable ("l2-input-ip4", "sonic-ext-ip2me-ip4",
+				  sw_if_index, enable, 0, 0);
+  vnet_l2_feature_enable_disable ("l2-input-ip6", "sonic-ext-ip2me-ip6",
+				  sw_if_index, enable, 0, 0);
 }
 
 /*
