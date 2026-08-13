@@ -3,6 +3,7 @@
 ## Revision History
 
 | Date | Author | Description |
+|---|---|---|
 | 2026-05-20 | yue-fred-gao | Initial version with both SPAN and everflow |
 | 2026-08-13 | yue-fred-gao | Updated Everflow mirror semantics to hybrid behavior: MIRROR_INGRESS clones immediately in ACL node; MIRROR_EGRESS sets deferred flag for late clone at egress. Synced section text, node graph summary, test expectations, and file change summary. |
 
@@ -885,6 +886,8 @@ The VPP ACL plugin (`src/plugins/acl/`) has full 5-tuple matching with port rang
 
 **Why the change must start in the ACL plugin**: `match_acl_in_index` and `match_rule_index` are local to `dataplane_node.c`, so the ACL plugin must transfer mirror intent into packet metadata. The clone itself is then performed later by `sonic-ext-egress-mirror` on `interface-output` to obtain post-rewrite wire form.
 
+**Why global arc lifecycle control is needed**: Late clone is only used by deferred egress mirror actions. The `sonic-ext-egress-mirror` node should be added to the `interface-output` arc globally when the first active `MIRROR_EGRESS` ACL action is configured, and removed when the last active `MIRROR_EGRESS` action is deleted or disabled.
+
 ### 11.2 Change 1: New Action Value
 
 **File**: `src/plugins/acl/acl_types.api`
@@ -986,7 +989,6 @@ if (PREDICT_FALSE (action == 3))   /* ACL_ACTION_API_PERMIT_MIRROR */
                         sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b[0]);
                         seb->magic = SONIC_EXT_BUFFER_MAGIC;
                         seb->mirror_sw_if_index = mirror_sw_if_index;
-                        seb->mirror_flags = 0;
                     }
                 else
                     {
@@ -1084,19 +1086,136 @@ Everflow reuses the mirror session infrastructure from Phase 1:
 | Component | Description |
 |---|---|
 | VPP ACL plugin patch | `acl_types.api`, `types.h`, `dataplane_node.c`, `acl.c` (defer-flag decode + metadata write) |
-| sonic_ext egress node | `sonic-ext-egress-mirror` clones late on `interface-output` from metadata |
+| sonic_ext egress node | `sonic-ext-egress-mirror` clones late on `interface-output` from metadata; presence on arc is controlled globally by active MIRROR_EGRESS actions |
 | `SwitchVppAcl.cpp` modification | Handle `ACTION_MIRROR_INGRESS/EGRESS` |
 | `SaiVppXlate.h/c` modification | `VPP_ACL_ACTION_API_PERMIT_MIRROR`, encoded `mirror_action` (4-bit flags + 28-bit sw_if_index) in rule |
+
+### 12.2.1 `sonic_ext_buffer_opaque_t` Extension
+
+Deferred egress mirroring stores mirror destination metadata in per-buffer
+`sonic_ext` opaque storage:
+
+```c
+typedef struct
+{
+    u32 magic;
+    u32 orig_rx_sw_if_index;
+    u32 orig_vlan_tag;
+
+    /* Added for deferred egress mirror.
+     * ~0 means no pending mirror action. */
+    u32 mirror_sw_if_index;
+} sonic_ext_buffer_opaque_t;
+```
+
+Comment: as a future optimization, we can reduce `sonic_ext_buffer_opaque_t`
+size by storing a compact mirror session id in the buffer and using a mirror
+session table (`session_id -> mirror_sw_if_index`) in `sonic_ext`. The mapped
+`mirror_sw_if_index` can point to either a SPAN destination interface or an
+ERSPAN GRE tunnel interface.
 
 ### 12.3 Statistics
 
 ACL per-rule counters work for all action types including mirror. The stats segment path `/acl/{N}/matches` increments for every matched rule regardless of action. No changes needed.
+
+### 12.4 Global `interface-output` Arc Lifecycle
+
+To avoid unnecessary per-packet overhead when deferred egress mirroring is not in use,
+`sonic-ext-egress-mirror` is managed with a global active-action refcount:
+
+1. On ACL entry create/enable for `SAI_ACL_ENTRY_ATTR_ACTION_MIRROR_EGRESS`, increment `active_egress_mirror_actions`.
+2. If transition is `0 -> 1`, enable `sonic-ext-egress-mirror` on `interface-output` arc globally.
+3. On ACL entry delete/disable for `SAI_ACL_ENTRY_ATTR_ACTION_MIRROR_EGRESS`, decrement the refcount.
+4. If transition is `1 -> 0`, disable `sonic-ext-egress-mirror` from `interface-output` arc globally.
+
+`SAI_ACL_ENTRY_ATTR_ACTION_MIRROR_INGRESS` does not affect this refcount because it
+clones immediately in ACL node and does not require late-clone execution.
+
+### 12.5 Placement in `interface-output` Arc
+
+`sonic-ext-egress-mirror` must be placed at the tail of the `interface-output`
+feature arc for the original packet path:
+
+1. After normal forwarding graph processing, including route/adjacency rewrite.
+2. After optional tunnel encapsulation nodes (for example GRE/ERSPAN/VXLAN paths).
+3. Before `sonic-ext-aggr-tap-redirect` (which may consume/reset sonic_ext cookie metadata).
+4. Before final TX handoff (`device-tx` or tunnel transmit node).
+
+This ordering ensures the mirrored copy reflects the final wire-form packet
+(post-rewrite, post-encapsulation), while still allowing the original packet to
+continue on the same egress path.
+
+Example node registration placement:
+
+```c
+VNET_FEATURE_INIT (sonic_ext_egress_mirror, static) = {
+    .arc_name = "interface-output",
+    .node_name = "sonic-ext-egress-mirror",
+
+    /* Run after rewrite / encap work is done */
+    .runs_after = VNET_FEATURES (
+        "ip4-rewrite",
+        "ip6-rewrite",
+        "mpls-output",
+        "gre-erspan-encap"
+    ),
+
+    /* Must run before aggr-tap redirect, which can clear seb->magic */
+    .runs_before = VNET_FEATURES (
+        "sonic-ext-aggr-tap-redirect",
+        "interface-output-end"
+    ),
+};
+```
+
+If a platform uses different egress node names, keep the same intent: register
+`sonic-ext-egress-mirror` after rewrite/encap features, before any node that
+consumes/resets sonic_ext metadata (for example aggr-tap redirect), and then
+immediately before final transmit handoff.
+
+### 12.6 Re-cloning Prevention
+
+To prevent clone-of-clone recursion when mirrored packets re-enter
+`interface-output`, the egress mirror node resets `mirror_sw_if_index` to `~0`
+on **both the original and the clone** immediately after the clone is created.
+The fast-path entry check bails out when `mirror_sw_if_index == ~0`, so neither
+packet can trigger a second clone.
+
+Reference behavior:
+
+```c
+if (seb->magic != SONIC_EXT_BUFFER_MAGIC ||
+    seb->mirror_sw_if_index == ~0)
+{
+    goto passthrough;
+}
+
+u32 dst_sw_if_index = seb->mirror_sw_if_index;
+
+/* Clear on original before clone so the clone inherits ~0 already */
+seb->mirror_sw_if_index = ~0;
+
+clone = vlib_buffer_copy(vm, b0);
+if (clone)
+{
+    /* clone->mirror_sw_if_index is already ~0 (copied from original above) */
+    enqueue_clone_to_mirror_tx(clone, dst_sw_if_index);
+}
+```
+
+By clearing `mirror_sw_if_index` on the original **before** calling
+`vlib_buffer_copy`, the cloned buffer inherits `~0` automatically through
+VPP's `opaque2` memcpy, so no separate per-clone fixup is needed.
 
 ---
 
 ## 13. Everflow — VPP Node Graphs
 
 ### 13.1 Ingress ACL + Egress Mirror (deferred)
+
+When at least one `MIRROR_EGRESS` action is active, `sonic-ext-egress-mirror` is
+present on `interface-output` arc globally and executes late clone for deferred
+traffic.
 
 ```
  Packet arrives on Ethernet0
@@ -1150,6 +1269,11 @@ so clone happens immediately in the ACL node.
 For **egress ACL + egress mirror**, clone timing is still late egress: the
 packet is mirrored after rewrite/encap as observed at `interface-output`.
 
+Re-cloning is blocked in `sonic-ext-egress-mirror` by clearing
+`mirror_sw_if_index` to `~0` on the original **before** `vlib_buffer_copy`;
+the clone therefore inherits `~0` and cannot trigger a second clone on
+re-entry.
+
 ### 13.4 Node Graph Summary
 
 | Scenario | Clone Origin | Mirror Dest | Clone Path | Nodes |
@@ -1180,6 +1304,9 @@ These are saivpp unit tests with no direct sonic-mgmt equivalents. They validate
 | ACL-05 | Unbind MIRROR ACL from port | Implicit via `setup_acl_table` teardown | ACL removed from interface |
 | ACL-06 | Multiple mirror rules, different sessions | — | Each rule references different `sw_if_index` |
 | ACL-07 | Delete ACL entry with mirror action | Implicit via `remove_acl_rule_config` | Rule removed; no orphan state |
+| ACL-08 | First `ACTION_MIRROR_EGRESS` configured | — | `sonic-ext-egress-mirror` is added to `interface-output` arc globally |
+| ACL-09 | Last `ACTION_MIRROR_EGRESS` removed | — | `sonic-ext-egress-mirror` is removed from `interface-output` arc globally |
+| ACL-10 | Mirrored clone re-enters `interface-output` | — | `mirror_sw_if_index` is `~0` on clone; node passes through without cloning again |
 
 ### 14.2 Dataplane — IPv4 Match Qualifiers
 
@@ -1401,10 +1528,10 @@ SONiC AclOrch (ACL_TABLE["EVERFLOW"] ports = ["PortChannel0001"])
 | `vppbld/repo/src/plugins/acl/types.h` | Modify | Add `acl_mirror_action_t mirror_action` to `acl_rule_t` |
 | `vppbld/repo/src/plugins/acl/dataplane_node.c` | Modify | Decode mirror flags; MIRROR_INGRESS clones immediately, MIRROR_EGRESS writes metadata for late sonic_ext clone |
 | `vppbld/repo/src/plugins/acl/acl.c` | Modify | Add validation for mirror rules |
-| `src/sonic-sairedis/vslib/vpp/SwitchVppAcl.cpp` | Modify | Handle `ACTION_MIRROR_INGRESS/EGRESS`; set `ACL_MIRROR_F_DEFERRED` only for MIRROR_EGRESS |
+| `src/sonic-sairedis/vslib/vpp/SwitchVppAcl.cpp` | Modify | Handle `ACTION_MIRROR_INGRESS/EGRESS`; set `ACL_MIRROR_F_DEFERRED` only for MIRROR_EGRESS; maintain global `sonic-ext-egress-mirror` arc refcount (first add / last remove) |
 | `src/sonic-sairedis/vslib/vpp/vppxlate/SaiVppXlate.h` | Modify | Add `VPP_ACL_ACTION_API_PERMIT_MIRROR`, encoded `mirror_action` in rule |
 | `src/sonic-sairedis/vslib/vpp/vppxlate/SaiVppXlate.c` | Modify | Pass encoded `mirror_action` in ACL API |
-| `vppbld/plugins/sonic_ext/egress_mirror_node.c` | Modify | Consume ACL-written mirror metadata and clone on late `interface-output` |
+| `vppbld/plugins/sonic_ext/egress_mirror_node.c` | Modify | Consume ACL-written mirror metadata and clone on late `interface-output`; support global arc add/remove lifecycle |
 
 ## Appendix B: VPP Existing API Reference
 
