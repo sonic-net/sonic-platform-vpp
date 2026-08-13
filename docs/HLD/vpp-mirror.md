@@ -1,6 +1,14 @@
 # Port Mirroring and Everflow on VPP Dataplane — High Level Design
 
+## Revision History
+
+| Date | Author | Description |
+| 2026-05-20 | yue-fred-gao | Initial version with both SPAN and everflow |
+| 2026-08-13 | yue-fred-gao | Updated Everflow mirror semantics to hybrid behavior: MIRROR_INGRESS clones immediately in ACL node; MIRROR_EGRESS sets deferred flag for late clone at egress. Synced section text, node graph summary, test expectations, and file change summary. |
+
 ## Table of Contents
+
+- [Revision History](#revision-history)
 
 - **Phase 1: Port Mirroring**
   1. [Overview](#1-overview)
@@ -866,16 +874,16 @@ sai_port_api->set_port_attribute(port_oid, &port_attr);
 
 ### 11.1 Gap Analysis
 
-The VPP ACL plugin (`src/plugins/acl/`) has full 5-tuple matching with port ranges and per-rule counters, but **no mirror action**:
+The VPP ACL plugin (`src/plugins/acl/`) has full 5-tuple matching with port ranges and per-rule counters, but no deferred Everflow handoff to a post-rewrite mirror stage:
 
 | Gap | Location | Detail |
 |---|---|---|
 | No ACL mirror action | `acl_types.api` | Only `DENY=0`, `PERMIT=1`, `PERMIT_REFLECT=2` |
 | No mirror destination in rule | `types.h` | `acl_rule_t` has no `mirror_sw_if_index` field |
-| No clone logic in dataplane | `dataplane_node.c` | Action dispatch: `action ? forward : drop`. No clone path. |
+| No deferred mirror metadata handoff | `dataplane_node.c` | Action dispatch lacks a path to stash mirror destination metadata for a later egress node. |
 | No mirror action in saivpp ACL | `SwitchVppAcl.cpp` | No handling of `SAI_ACL_ENTRY_ATTR_ACTION_MIRROR_INGRESS/EGRESS` |
 
-**Why the change must be in the ACL plugin**: `match_acl_in_index` and `match_rule_index` are local variables in `dataplane_node.c` — they are not stored in `vnet_buffer()`. A downstream graph node cannot determine which rule matched. The clone must happen inside the ACL plugin.
+**Why the change must start in the ACL plugin**: `match_acl_in_index` and `match_rule_index` are local to `dataplane_node.c`, so the ACL plugin must transfer mirror intent into packet metadata. The clone itself is then performed later by `sonic-ext-egress-mirror` on `interface-output` to obtain post-rewrite wire form.
 
 ### 11.2 Change 1: New Action Value
 
@@ -911,14 +919,52 @@ The VPP ACL plugin (`src/plugins/acl/`) has full 5-tuple matching with port rang
  typedef struct
  {
    u8 is_permit;
-+  u32 mirror_sw_if_index;
++  acl_mirror_action_t mirror_action;
    u8 is_ipv6;
    ...
  } acl_rule_t;
 ```
-Question: do we need to create acl_rule_v2_t to avoid breaking backward compatiblity?
 
-### 11.4 Change 3: Clone Logic in `dataplane_node.c`
+Keep the API payload as a single `u32` for compatibility, but represent it in
+`acl_rule_t` with a dedicated mirror-action struct:
+
+```c
+typedef struct
+{
+    u32 raw;
+} acl_mirror_action_t;
+
+#define ACL_MIRROR_SW_IF_BITS        28u
+#define ACL_MIRROR_FLAGS_BITS         4u
+#define ACL_MIRROR_SW_IF_MASK         ((1u << ACL_MIRROR_SW_IF_BITS) - 1u)
+#define ACL_MIRROR_FLAGS_SHIFT        ACL_MIRROR_SW_IF_BITS
+#define ACL_MIRROR_FLAGS_MASK         (0xfu << ACL_MIRROR_FLAGS_SHIFT)
+
+#define ACL_MIRROR_F_DEFERRED         (1u << 0)
+
+/* encoded value in acl_mirror_action_t::raw */
+/* [27:0] mirror destination sw_if_index */
+/* [31:28] mirror flags                  */
+
+static_always_inline u32
+acl_mirror_action_get_sw_if_index (acl_mirror_action_t m)
+{
+    return m.raw & ACL_MIRROR_SW_IF_MASK;
+}
+
+static_always_inline u8
+acl_mirror_action_get_flags (acl_mirror_action_t m)
+{
+    return (u8) ((m.raw & ACL_MIRROR_FLAGS_MASK) >> ACL_MIRROR_FLAGS_SHIFT);
+}
+```
+
+`acl_rule_t` uses this struct for mirror action metadata. `SwitchVppAcl.cpp`
+sets `ACL_MIRROR_F_DEFERRED` only for `SAI_ACL_ENTRY_ATTR_ACTION_MIRROR_EGRESS`.
+`SAI_ACL_ENTRY_ATTR_ACTION_MIRROR_INGRESS` keeps flags clear and clones
+immediately in `dataplane_node.c`.
+
+### 11.4 Change 3: Hybrid Clone/Mark Logic in `dataplane_node.c`
 
 Insert after `next[0] = action ? next[0] : 0;` (line ~536):
 
@@ -928,27 +974,35 @@ if (PREDICT_FALSE (action == 3))   /* ACL_ACTION_API_PERMIT_MIRROR */
     pkts_acl_permit++;
 
     acl_rule_t *mir_rule = &(am->acls[match_acl_in_index].rules[match_rule_index]);
-    u32 mirror_sw_if_index = mir_rule->mirror_sw_if_index;
+        acl_mirror_action_t mirror_action = mir_rule->mirror_action;
+        u32 mirror_sw_if_index = acl_mirror_action_get_sw_if_index(mirror_action);
+        u8 flags = acl_mirror_action_get_flags(mirror_action);
+        u8 defer_mirror = (flags & ACL_MIRROR_F_DEFERRED) != 0;
 
     if (mirror_sw_if_index != ~0)
       {
-        vlib_buffer_t *clone = vlib_buffer_copy (vm, b[0]);
-        if (PREDICT_TRUE (clone != NULL))
+                if (PREDICT_TRUE (defer_mirror))
           {
-            vnet_buffer (clone)->sw_if_index[VLIB_TX] = mirror_sw_if_index;
-            clone->flags |= VNET_BUFFER_F_SPAN_CLONE;
-
-            /* Dispatch to interface-output — works for both SPAN and ERSPAN:
-             *   Physical port → device-tx         (SPAN)
-             *   GRE tunnel    → gre-erspan-encap  (ERSPAN)
-             */
-            vnet_main_t *vnm = vnet_get_main ();
-            vlib_frame_t *f = vnet_get_frame_to_sw_interface (vnm,
-                                                              mirror_sw_if_index);
-            u32 *to_next = vlib_frame_vector_args (f);
-            to_next += f->n_vectors;
-            to_next[0] = vlib_get_buffer_index (vm, clone);
-            f->n_vectors++;
+                        sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b[0]);
+                        seb->magic = SONIC_EXT_BUFFER_MAGIC;
+                        seb->mirror_sw_if_index = mirror_sw_if_index;
+                        seb->mirror_flags = 0;
+                    }
+                else
+                    {
+                        /* Immediate clone path (used by MIRROR_INGRESS action) */
+                        vlib_buffer_t *clone = vlib_buffer_copy (vm, b[0]);
+                        if (PREDICT_TRUE (clone != NULL))
+                            {
+                                vnet_buffer (clone)->sw_if_index[VLIB_TX] = mirror_sw_if_index;
+                                clone->flags |= VNET_BUFFER_F_SPAN_CLONE;
+                                vnet_main_t *vnm = vnet_get_main ();
+                                vlib_frame_t *f = vnet_get_frame_to_sw_interface (vnm, mirror_sw_if_index);
+                                u32 *to_next = vlib_frame_vector_args (f);
+                                to_next += f->n_vectors;
+                                to_next[0] = vlib_get_buffer_index (vm, clone);
+                                f->n_vectors++;
+                            }
           }
       }
   }
@@ -959,7 +1013,8 @@ if (PREDICT_FALSE (action == 3))   /* ACL_ACTION_API_PERMIT_MIRROR */
 **File**: `src/plugins/acl/acl.c`
 
 ```c
-if (r->is_permit == 3 && r->mirror_sw_if_index == ~0)
+if (r->is_permit == 3 &&
+        acl_mirror_action_get_sw_if_index(r->mirror_action) == ~0)
   return VNET_API_ERROR_INVALID_VALUE;
 ```
 
@@ -977,7 +1032,7 @@ if (r->is_permit == 3 && r->mirror_sw_if_index == ~0)
 
  typedef struct _vpp_acl_rule {
      vpp_acl_action_e action;
-+    uint32_t mirror_sw_if_index;
++    uint32_t mirror_action; /* 4-bit flags + 28-bit sw_if_index */
      vpp_ip_addr_t src_prefix;
      ...
  } vpp_acl_rule_t;
@@ -987,13 +1042,27 @@ if (r->is_permit == 3 && r->mirror_sw_if_index == ~0)
 
 ```cpp
 case SAI_ACL_ENTRY_ATTR_ACTION_MIRROR_INGRESS:
+{
+    if (value->aclaction.enable)
+    {
+        rule->action = VPP_ACL_ACTION_API_PERMIT_MIRROR;
+        sai_object_id_t session_oid = value->aclaction.parameter.objlist.list[0];
+        uint32_t sw_if_index = lookup_mirror_session_sw_if_index(session_oid);
+        rule->mirror_action =
+            (sw_if_index & ACL_MIRROR_SW_IF_MASK);
+    }
+    break;
+}
 case SAI_ACL_ENTRY_ATTR_ACTION_MIRROR_EGRESS:
 {
     if (value->aclaction.enable)
     {
         rule->action = VPP_ACL_ACTION_API_PERMIT_MIRROR;
         sai_object_id_t session_oid = value->aclaction.parameter.objlist.list[0];
-        rule->mirror_sw_if_index = lookup_mirror_session_sw_if_index(session_oid);
+        uint32_t sw_if_index = lookup_mirror_session_sw_if_index(session_oid);
+        rule->mirror_action =
+            (sw_if_index & ACL_MIRROR_SW_IF_MASK) |
+            (ACL_MIRROR_F_DEFERRED << ACL_MIRROR_FLAGS_SHIFT);
     }
     break;
 }
@@ -1014,9 +1083,10 @@ Everflow reuses the mirror session infrastructure from Phase 1:
 
 | Component | Description |
 |---|---|
-| VPP ACL plugin patch | `acl_types.api`, `types.h`, `dataplane_node.c`, `acl.c` |
+| VPP ACL plugin patch | `acl_types.api`, `types.h`, `dataplane_node.c`, `acl.c` (defer-flag decode + metadata write) |
+| sonic_ext egress node | `sonic-ext-egress-mirror` clones late on `interface-output` from metadata |
 | `SwitchVppAcl.cpp` modification | Handle `ACTION_MIRROR_INGRESS/EGRESS` |
-| `SaiVppXlate.h/c` modification | `VPP_ACL_ACTION_API_PERMIT_MIRROR`, `mirror_sw_if_index` in rule |
+| `SaiVppXlate.h/c` modification | `VPP_ACL_ACTION_API_PERMIT_MIRROR`, encoded `mirror_action` (4-bit flags + 28-bit sw_if_index) in rule |
 
 ### 12.3 Statistics
 
@@ -1026,71 +1096,72 @@ ACL per-rule counters work for all action types including mirror. The stats segm
 
 ## 13. Everflow — VPP Node Graphs
 
-### 13.1 Ingress SPAN (ACL-based local mirror)
+### 13.1 Ingress ACL + Egress Mirror (deferred)
 
 ```
  Packet arrives on Ethernet0
      ┌────────────────────────────┐
      │ acl-plugin-in-ip4-fa       │  ACL match, action=3
-     │   vlib_buffer_copy()       │
+ │   writes seb->mirror_sw_if_index  │  no immediate clone
+     └──────────────┬────────────────┘
+                    ▼
+      [ip4-lookup] → [ip4-rewrite / encap]
+                    ▼
+           interface-output arc
+                    ▼
+     ┌────────────────────────────┐
+     │ sonic-ext-egress-mirror    │  clones post-rewrite packet
      └─────┬──────────┬───────────┘
         original    clone
            │          ▼
-           │  ┌──────────────────────┐
-           │  │ interface-output     │  → Ethernet8
-           │  └──────────┬───────────┘
-           |             |
-           │             ▼
-           |  ┌──────────────────────┐
-           |  │ Ethernet8-tx         │
-           |  └──────────────────────┘
+           │  interface-output → mirror destination
            ▼
-      [ip4-lookup]
+      original forwarded
 ```
 
-### 13.2 Ingress ERSPAN (ACL-based remote mirror)
+### 13.2 Ingress ERSPAN (deferred)
 
 ```
  Packet arrives on Ethernet0
      ┌────────────────────────────┐
      │ acl-plugin-in-ip4-fa       │  ACL match, action=3
-     │   vlib_buffer_copy()       │
+ │   writes seb->mirror_sw_if_index  │  no immediate clone
+     └──────────────┬────────────────┘
+                    ▼
+      [ip4-lookup] → [vxlan/gre/ipip encap] → [ip4-rewrite]
+                    ▼
+           interface-output arc
+                    ▼
+     ┌────────────────────────────┐
+     │ sonic-ext-egress-mirror    │  clone now includes tunnel+rewrite
      └─────┬──────────┬───────────┘
-        original    clone
-           │          ▼
-           │  ┌──────────────────────┐
-           │  │ interface-output     │  → gre0
-           │  └──────────┬───────────┘
-           │             ▼
-           │  ┌──────────────────────┐
-           │  │ gre-erspan-encap     │  + ERSPAN Type II + GRE
-           │  └──────────┬───────────┘
-           │             ▼
-           │  ┌──────────────────────┐
-           │  │ adj-l2-midchain      │  + outer IP rewrite
-           │  └──────────┬───────────┘
-           │             ▼
-           │  ┌──────────────────────┐
-           │  │ ip4-rewrite          │  + L2 header
-           │  └──────────┬───────────┘
-           ▼             ▼
-      [ip4-lookup] [{underlay}-tx]
+        original    clone→mirror destination
 ```
 
 ### 13.3 Egress SPAN / ERSPAN
 
-Same as ingress but clone originates from `acl-plugin-out-ip4-fa` instead of `acl-plugin-in-ip4-fa`. The clone path is identical.
+`acl-plugin-out-ip4-fa` sets deferred metadata for MIRROR_EGRESS and does not
+clone when deferred bit is set. `sonic-ext-egress-mirror` then clones on
+`interface-output`.
+
+`acl-plugin-in-ip4-fa` for MIRROR_INGRESS keeps `ACL_MIRROR_F_DEFERRED` clear,
+so clone happens immediately in the ACL node.
+
+For **egress ACL + egress mirror**, clone timing is still late egress: the
+packet is mirrored after rewrite/encap as observed at `interface-output`.
 
 ### 13.4 Node Graph Summary
 
 | Scenario | Clone Origin | Mirror Dest | Clone Path | Nodes |
 |---|---|---|---|---|
-| Ingress SPAN | `acl-plugin-in-ip4-fa` | phy port | interface-output → device-tx | 3 |
-| Ingress ERSPAN | `acl-plugin-in-ip4-fa` | GRE tunnel | interface-output → gre-erspan-encap → adj-l2-midchain → ip4-rewrite → device-tx | 6 |
-| Egress SPAN | `acl-plugin-out-ip4-fa` | phy port | interface-output → device-tx | 3 |
-| Egress ERSPAN | `acl-plugin-out-ip4-fa` | GRE tunnel | interface-output → gre-erspan-encap → adj-l2-midchain → ip4-rewrite → device-tx | 6 |
+| Ingress SPAN (`MIRROR_INGRESS_ACTION`) | `acl-plugin-in-ip4-fa` (clone) | phy port | interface-output → device-tx | 3 |
+| Ingress ERSPAN (`MIRROR_INGRESS_ACTION`) | `acl-plugin-in-ip4-fa` (clone) | GRE tunnel | interface-output → gre-erspan-encap → adj-l2-midchain → ip4-rewrite → device-tx | 6 |
+| Egress SPAN | `acl-plugin-out-ip4-fa` (mark) | phy port | ...rewrite... → `sonic-ext-egress-mirror` → device-tx | 4+ |
+| Egress ERSPAN | `acl-plugin-out-ip4-fa` (mark) | GRE tunnel | ...rewrite/encap... → `sonic-ext-egress-mirror` → tunnel tx | 6+ |
 
-The ACL plugin uses a shared function (`acl_fa_inner_node_fn`) for both input and output. The `is_input` parameter selects the lookup context. The clone code is identical for all scenarios.
+The ACL plugin uses a shared function (`acl_fa_inner_node_fn`) for input and
+output; MIRROR_INGRESS clones immediately, while MIRROR_EGRESS records metadata
+and relies on `sonic-ext-egress-mirror` for late clone execution.
 
 ---
 
@@ -1102,8 +1173,8 @@ These are saivpp unit tests with no direct sonic-mgmt equivalents. They validate
 
 | Test Case | Description | sonic-mgmt Coverage | Expected Result |
 |---|---|---|---|
-| ACL-01 | Create ACL rule with `ACTION_MIRROR_INGRESS` | Implicit via `setup_acl_table` fixture | VPP rule has `is_permit=3` and valid `mirror_sw_if_index` |
-| ACL-02 | Create ACL rule with `ACTION_MIRROR_EGRESS` | Implicit via `setup_acl_table` fixture | VPP rule bound to output direction |
+| ACL-01 | Create ACL rule with `ACTION_MIRROR_INGRESS` | Implicit via `setup_acl_table` fixture | VPP rule has `is_permit=3`; `mirror_action.flags` has deferred bit clear |
+| ACL-02 | Create ACL rule with `ACTION_MIRROR_EGRESS` | Implicit via `setup_acl_table` fixture | VPP rule bound to output direction; `mirror_action.flags` has deferred bit set |
 | ACL-03 | ACL rule with both mirror + packet action | — | Packet forwarded and cloned |
 | ACL-04 | Bind MIRROR ACL table to port | Implicit via `setup_acl_table` fixture | `show acl-plugin interface` shows ACL |
 | ACL-05 | Unbind MIRROR ACL from port | Implicit via `setup_acl_table` teardown | ACL removed from interface |
@@ -1326,13 +1397,14 @@ SONiC AclOrch (ACL_TABLE["EVERFLOW"] ports = ["PortChannel0001"])
 
 | File | Change | Description |
 |---|---|---|
-| `vppbld/repo/src/plugins/acl/acl_types.api` | Modify | Add `ACL_ACTION_API_PERMIT_MIRROR=3`; add `mirror_sw_if_index` to `acl_rule` |
-| `vppbld/repo/src/plugins/acl/types.h` | Modify | Add `mirror_sw_if_index` to `acl_rule_t` |
-| `vppbld/repo/src/plugins/acl/dataplane_node.c` | Modify | Add buffer clone logic for `action==3` |
+| `vppbld/repo/src/plugins/acl/acl_types.api` | Modify | Add `ACL_ACTION_API_PERMIT_MIRROR=3`; add encoded `mirror_action` (4-bit flags + 28-bit sw_if_index) to `acl_rule` |
+| `vppbld/repo/src/plugins/acl/types.h` | Modify | Add `acl_mirror_action_t mirror_action` to `acl_rule_t` |
+| `vppbld/repo/src/plugins/acl/dataplane_node.c` | Modify | Decode mirror flags; MIRROR_INGRESS clones immediately, MIRROR_EGRESS writes metadata for late sonic_ext clone |
 | `vppbld/repo/src/plugins/acl/acl.c` | Modify | Add validation for mirror rules |
-| `src/sonic-sairedis/vslib/vpp/SwitchVppAcl.cpp` | Modify | Handle `ACTION_MIRROR_INGRESS/EGRESS` |
-| `src/sonic-sairedis/vslib/vpp/vppxlate/SaiVppXlate.h` | Modify | Add `VPP_ACL_ACTION_API_PERMIT_MIRROR`, `mirror_sw_if_index` in rule |
-| `src/sonic-sairedis/vslib/vpp/vppxlate/SaiVppXlate.c` | Modify | Pass `mirror_sw_if_index` in ACL API |
+| `src/sonic-sairedis/vslib/vpp/SwitchVppAcl.cpp` | Modify | Handle `ACTION_MIRROR_INGRESS/EGRESS`; set `ACL_MIRROR_F_DEFERRED` only for MIRROR_EGRESS |
+| `src/sonic-sairedis/vslib/vpp/vppxlate/SaiVppXlate.h` | Modify | Add `VPP_ACL_ACTION_API_PERMIT_MIRROR`, encoded `mirror_action` in rule |
+| `src/sonic-sairedis/vslib/vpp/vppxlate/SaiVppXlate.c` | Modify | Pass encoded `mirror_action` in ACL API |
+| `vppbld/plugins/sonic_ext/egress_mirror_node.c` | Modify | Consume ACL-written mirror metadata and clone on late `interface-output` |
 
 ## Appendix B: VPP Existing API Reference
 
