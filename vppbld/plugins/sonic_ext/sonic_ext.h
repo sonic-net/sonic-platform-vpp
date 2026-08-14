@@ -103,6 +103,9 @@ sonic_ext_buffer (vlib_buffer_t *b)
 
 typedef struct
 {
+  /* API message ID base */
+  u16 msg_id_base;
+
   /* Global feature toggles. */
   u8 punt_via_member;
   u8 host_xc;
@@ -111,13 +114,16 @@ typedef struct
    * interfaces, so that toggling on/off is idempotent. */
   u8 capture_enabled;
   u8 host_xc_enabled;
+  u8 glean_redirect_enabled;
 
   /* Counters (per-feature, per-thread accounting kept in node
    * registrations; these are summary counters for `show sonic-ext`). */
   u64 captures;
   u64 aggr_tap_redirects;
+  u64 glean_redirects;
   u64 host_xc_direct;
   u64 l2_trap_fixups;
+  u64 ip2me_hits;
 
   /* Binary API message-id base (registered in sonic_ext_init). */
   u16 msg_id_base;
@@ -132,8 +138,11 @@ extern sonic_ext_main_t sonic_ext_main;
 
 extern vlib_node_registration_t sonic_ext_capture_node;
 extern vlib_node_registration_t sonic_ext_aggr_tap_redirect_node;
+extern vlib_node_registration_t sonic_ext_glean_redirect_node;
 extern vlib_node_registration_t sonic_ext_host_xc_node;
 extern vlib_node_registration_t sonic_ext_l2_trap_fixup_node;
+extern vlib_node_registration_t sonic_ext_ip2me_ip4_node;
+extern vlib_node_registration_t sonic_ext_ip2me_ip6_node;
 extern vlib_node_registration_t sonic_ext_ip4_loopback_node;
 extern vlib_node_registration_t sonic_ext_ip6_loopback_node;
 
@@ -153,14 +162,36 @@ void sonic_ext_host_xc_enable_disable (u32 sw_if_index, int enable);
  * tomorrow).  Driven from the LCP pair add/del callback. */
 void sonic_ext_aggr_tap_redirect_enable_disable (u32 sw_if_index, int enable);
 
+/* Enable / disable sonic-ext-glean-redirect.  Global (the ip4-drop /
+ * ip6-drop arcs dispatch with sw_if_index 0), so there is no
+ * per-interface argument; the node scopes itself per packet via the
+ * capture cookie and the glean/arp adjacency check. */
+void sonic_ext_glean_redirect_enable_disable (int enable);
+
+/* Redirect a captured packet to the LCP host tap of its ingress phy.
+ * Restores the original L2 header and outer VLAN tag before updating
+ * VLIB_TX.  excluded_tap prevents redirecting back to the current tap. */
+int sonic_ext_redirect_to_ingress_tap (vlib_buffer_t *b, u32 orig_rx,
+				       u32 excluded_tap, u32 *host_tap,
+				       u16 *pushed_tpid,
+				       u16 *pushed_vlan_id);
+
+/* Enable / disable the "receive-DPO check before ACL" feature on a
+ * given L2 port sw_if_index.  Registers sonic-ext-ip2me-ip4/ip6 on the
+ * l2-input-ip4 / l2-input-ip6 feature arcs, ahead of the ACL plugin, so
+ * that ip2me (destined-to-this-switch) traffic bypasses any ingress drop
+ * ACL that would otherwise discard it.  Driven from the SAI-VPP layer
+ * wherever such a drop ACL is bound. */
+void sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable);
+
 /* Toggle accessors used by CLI and node fast paths. */
 void sonic_ext_set_punt_via_member (u8 is_enable);
 void sonic_ext_set_host_xc (u8 is_enable);
 
 /* Returns non-zero if phy_sw_if_index is an "aggregate" parent whose
  * LCP host tap should have the aggr-tap-redirect feature enabled --
- * today that means BVI; in the future it will also cover bond /
- * port-channel master interfaces.  Used by the LCP pair add callback. */
+ * today that means a BVI, a bond / port-channel master, or a routed
+ * sub-interface of a bond.  Used by the LCP pair add callback. */
 int sonic_ext_phy_is_aggregate (u32 phy_sw_if_index);
 
 /* Returns non-zero iff phy_sw_if_index is a BVI (bridge-virtual
@@ -168,5 +199,11 @@ int sonic_ext_phy_is_aggregate (u32 phy_sw_if_index);
  * can opt out of bvi-specific features (bcast-redirect runs on
  * the BVI's own ip4-unicast arc; today only BVIs need it). */
 int sonic_ext_phy_is_bvi (u32 phy_sw_if_index);
+
+/* Returns non-zero iff phy_sw_if_index is a bond (port-channel) master
+ * or a sub-interface whose parent hw is a bond master.  Used to detect
+ * port-channel aggregates and to funnel tap-less bonded sub-interface
+ * punts to the bond master host tap. */
+int sonic_ext_phy_is_bond (u32 phy_sw_if_index);
 
 #endif /* __included_sonic_ext_h__ */

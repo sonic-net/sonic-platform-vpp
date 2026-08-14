@@ -26,5 +26,7 @@ include $(PLATFORM_RULES)/onie.mk
 include $(PLATFORM_RULES)/kvm-image.mk
 include $(PLATFORM_RULES)/raw-image.mk
 include $(PLATFORM_RULES)/vpp.mk
+include $(PLATFORM_RULES)/vppcfgd.mk
+include $(PLATFORM_RULES)/docker-sonic-vpp.mk
 
 SONIC_ALL += $(SONIC_ONE_IMAGE) $(SONIC_KVM_IMAGE) $(DOCKER_SONIC_VPP) $(SONIC_RAW_IMAGE)

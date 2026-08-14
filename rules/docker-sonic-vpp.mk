@@ -16,7 +16,7 @@
 
 DOCKER_SONIC_VPP = docker-sonic-vpp.gz
 $(DOCKER_SONIC_VPP)_PATH = $(PLATFORM_PATH)/docker-sonic-vpp
-$(DOCKER_SONIC_VPP)_DEPENDS += $(SYNCD_VPP) \
+$(DOCKER_SONIC_VPP)_DEPENDS += $(SYNCD_VS) \
                               $(PYTHON_SWSSCOMMON) \
                               $(PYTHON3_SWSSCOMMON) \
                               $(LIBTEAMDCTL) \
@@ -42,8 +42,8 @@ $(DOCKER_SONIC_VPP)_PYTHON_WHEELS += $(SWSSSDK_PY3) \
 ifeq ($(INSTALL_DEBUG_TOOLS), y)
 $(DOCKER_SONIC_VPP)_DEPENDS += $(LIBSWSSCOMMON_DBG) \
                               $(LIBSAIREDIS_DBG) \
-                              $(LIBSAIVPP_DBG) \
-                              $(SYNCD_VPP_DBG)
+                              $(LIBSAIVS_DBG) \
+                              $(SYNCD_VS_DBG)
 endif
 
 $(DOCKER_SONIC_VPP)_FILES += $(CONFIGDB_LOAD_SCRIPT) \
