@@ -85,6 +85,69 @@ VLIB_CLI_COMMAND (sonic_ext_host_xc_command, static) = {
 };
 
 static clib_error_t *
+sonic_ext_ip2me_command_fn (vlib_main_t *vm, unformat_input_t *input,
+			    vlib_cli_command_t *cmd)
+{
+  unformat_input_t _line_input, *line_input = &_line_input;
+  vnet_main_t *vnm = vnet_get_main ();
+  u32 sw_if_index = ~0;
+  int enable = 1;
+  int got_enable = 0;
+  clib_error_t *error = 0;
+
+  if (!unformat_user (input, unformat_line_input, line_input))
+    return 0;
+
+  while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (line_input, "%U", unformat_vnet_sw_interface, vnm,
+		    &sw_if_index))
+	;
+      else if (unformat (line_input, "on") ||
+	       unformat (line_input, "enable"))
+	{
+	  enable = 1;
+	  got_enable = 1;
+	}
+      else if (unformat (line_input, "off") ||
+	       unformat (line_input, "disable"))
+	{
+	  enable = 0;
+	  got_enable = 1;
+	}
+      else
+	{
+	  error = clib_error_return (0, "unknown input `%U'",
+				     format_unformat_error, line_input);
+	  goto done;
+	}
+    }
+
+  if (sw_if_index == ~0)
+    {
+      error = clib_error_return (0, "please specify an interface");
+      goto done;
+    }
+  if (!got_enable)
+    {
+      error = clib_error_return (0, "please specify on|off");
+      goto done;
+    }
+
+  sonic_ext_ip2me_enable_disable (sw_if_index, enable);
+
+done:
+  unformat_free (line_input);
+  return error;
+}
+
+VLIB_CLI_COMMAND (sonic_ext_ip2me_command, static) = {
+  .path = "sonic-ext ip2me",
+  .short_help = "sonic-ext ip2me <interface> <on|enable|off|disable>",
+  .function = sonic_ext_ip2me_command_fn,
+};
+
+static clib_error_t *
 show_sonic_ext_command_fn (vlib_main_t *vm, unformat_input_t *input,
 			   vlib_cli_command_t *cmd)
 {
@@ -96,8 +159,10 @@ show_sonic_ext_command_fn (vlib_main_t *vm, unformat_input_t *input,
 		   sem->host_xc ? "on" : "off");
   vlib_cli_output (vm, "  captures        : %llu", sem->captures);
   vlib_cli_output (vm, "  aggr-tap redir  : %llu", sem->aggr_tap_redirects);
+  vlib_cli_output (vm, "  glean redirect  : %llu", sem->glean_redirects);
   vlib_cli_output (vm, "  host-xc direct  : %llu", sem->host_xc_direct);
   vlib_cli_output (vm, "  l2 trap fixups  : %llu", sem->l2_trap_fixups);
+  vlib_cli_output (vm, "  ip2me hits      : %llu", sem->ip2me_hits);
   return 0;
 }
 
