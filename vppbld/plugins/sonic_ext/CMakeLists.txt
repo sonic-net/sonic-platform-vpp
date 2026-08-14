@@ -21,6 +21,8 @@ add_vpp_plugin(sonic_ext
   host_xc_node.c
   l2_trap_fixup_node.c
   ip2me_node.c
+  ip4_loopback_node.c
+  ip6_loopback_node.c
   cli.c
 
   API_FILES

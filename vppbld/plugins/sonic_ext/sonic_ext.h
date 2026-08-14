@@ -25,6 +25,10 @@
 
 #define SONIC_EXT_PLUGIN_BUILD_VER "1.0"
 
+/* Router-interface loopback (hairpin) packet action values. */
+#define SONIC_EXT_LOOPBACK_ACTION_FORWARD 0
+#define SONIC_EXT_LOOPBACK_ACTION_DROP    1
+
 /*
  * Per-buffer metadata stash, overlaid on vnet_buffer2(b)->unused[].
  *
@@ -120,6 +124,14 @@ typedef struct
   u64 host_xc_direct;
   u64 l2_trap_fixups;
   u64 ip2me_hits;
+
+  /* Binary API message-id base (registered in sonic_ext_init). */
+  u16 msg_id_base;
+
+  /* Per-sw_if_index RIF loopback action, SONIC_EXT_LOOPBACK_ACTION_*
+   * (default FORWARD). Written only from the main/API thread; read by the
+   * ip4/ip6-loopback output-arc nodes on worker threads. */
+  u8 *loopback_action_by_sw_if_index;
 } sonic_ext_main_t;
 
 extern sonic_ext_main_t sonic_ext_main;
@@ -131,6 +143,12 @@ extern vlib_node_registration_t sonic_ext_host_xc_node;
 extern vlib_node_registration_t sonic_ext_l2_trap_fixup_node;
 extern vlib_node_registration_t sonic_ext_ip2me_ip4_node;
 extern vlib_node_registration_t sonic_ext_ip2me_ip6_node;
+extern vlib_node_registration_t sonic_ext_ip4_loopback_node;
+extern vlib_node_registration_t sonic_ext_ip6_loopback_node;
+
+/* Set the per-interface RIF loopback (hairpin) action and enable/disable the
+ * ip4-output / ip6-output arc nodes accordingly. Returns 0 on success. */
+int sonic_ext_iface_loopback_set_action (u32 sw_if_index, u8 action);
 
 /* Enable / disable sonic-ext-capture on a given interface.  No-op if
  * the capture sidecar is not yet initialized. */

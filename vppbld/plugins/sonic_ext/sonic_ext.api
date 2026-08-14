@@ -16,6 +16,25 @@
 option version = "1.0.0";
 import "vnet/interface_types.api";
 
+/** \brief Set the loopback (hairpin) packet action on a router interface
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param sw_if_index - the interface the action applies to
+    @param action - 0 = FORWARD (default), 1 = DROP
+
+    When action is DROP, a routed packet whose ingress interface equals its
+    egress interface (a hairpin) is dropped on the ip4-output / ip6-output arc
+    and the interface tx-error counter is incremented. The node is enabled on
+    the interface's output arcs only while the action is DROP.
+*/
+autoreply define iface_loopback_set_action
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u8 action;
+};
+
 /** \brief Enable / disable the "receive-DPO check before ACL" feature on
     an L2 port.  Registers sonic-ext-ip2me-ip4/ip6 on the l2-input-ip4 /
     l2-input-ip6 feature arcs, ahead of the ACL plugin, so ip2me

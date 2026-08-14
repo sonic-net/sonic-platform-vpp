@@ -24,6 +24,15 @@
 #include <vpp/app/version.h>
 #include <plugins/linux-cp/lcp_interface.h>
 
+#include <vlibapi/api.h>
+#include <vlibmemory/api.h>
+
+#include <sonic_ext/sonic_ext.api_enum.h>
+#include <sonic_ext/sonic_ext.api_types.h>
+
+#define REPLY_MSG_ID_BASE sonic_ext_main.msg_id_base
+#include <vlibapi/api_helper_macros.h>
+
 sonic_ext_main_t sonic_ext_main;
 
 VLIB_PLUGIN_REGISTER () = {
@@ -384,6 +393,33 @@ sonic_ext_set_host_xc (u8 is_enable)
 }
 
 /*
+ * On new interface creation, we don't enable any sonic-ext features
+ * directly: capture, host-xc and aggr-tap-redirect all need LCP pair
+ * context (we want capture only on real wire phys, and the other two
+ * only on host taps).  The LCP pair add callback is the single point
+ * that wires every per-interface feature.  Keeping this hook around
+ * (as a no-op stub) leaves space for future bookkeeping that doesn't
+ * need LCP context.
+ */
+static clib_error_t *
+sonic_ext_sw_interface_add_del (vnet_main_t *vnm, u32 sw_if_index, u32 is_add)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+
+  /* On interface delete, reset the loopback action so a recycled sw_if_index
+   * does not inherit a stale DROP. The output-arc features are torn down by
+   * VPP. */
+  if (!is_add
+      && sw_if_index < vec_len (sem->loopback_action_by_sw_if_index))
+    sem->loopback_action_by_sw_if_index[sw_if_index] =
+      SONIC_EXT_LOOPBACK_ACTION_FORWARD;
+
+  return 0;
+}
+
+VNET_SW_INTERFACE_ADD_DEL_FUNCTION (sonic_ext_sw_interface_add_del);
+
+/*
  * LCP pair add/del: when a new linux-cp pair appears, enable the per-
  * interface sonic-ext features that apply.
  *
@@ -431,6 +467,75 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 0);
 }
 
+int
+sonic_ext_iface_loopback_set_action (u32 sw_if_index, u8 action)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  int enable = (action == SONIC_EXT_LOOPBACK_ACTION_DROP);
+  u8 prev;
+  int rv;
+
+  /* loopback_action_by_sw_if_index is written only here, from the main/API
+   * thread. The ip4/ip6-loopback nodes read it on worker threads, but
+   * vnet_feature_enable_disable() below performs a worker barrier sync, so the
+   * vector growth/update is visible before the feature (and thus the node) is
+   * enabled on this interface. */
+  vec_validate_init_empty (sem->loopback_action_by_sw_if_index, sw_if_index,
+			   SONIC_EXT_LOOPBACK_ACTION_FORWARD);
+  prev = sem->loopback_action_by_sw_if_index[sw_if_index];
+
+  /* Idempotent: VPP feature enable/disable is ref-counted, so a repeated SET to
+   * the same action (e.g. a SAI attribute replay) would enable the output-arc
+   * feature more than once and a single later disable would leave the drop node
+   * installed. Only toggle the arcs on an actual FORWARD<->DROP transition. */
+  if (prev == action)
+    return 0;
+
+  /* Set the action before enabling so the node sees DROP the moment the arc is
+   * live; on DROP->FORWARD the node keeps forwarding until it is disabled. */
+  sem->loopback_action_by_sw_if_index[sw_if_index] = action;
+
+  rv = vnet_feature_enable_disable ("ip4-output", "sonic-ext-ip4-loopback",
+				    sw_if_index, enable, 0, 0);
+  if (rv)
+    {
+      sem->loopback_action_by_sw_if_index[sw_if_index] = prev;
+      return rv;
+    }
+
+  rv = vnet_feature_enable_disable ("ip6-output", "sonic-ext-ip6-loopback",
+				    sw_if_index, enable, 0, 0);
+  if (rv)
+    {
+      /* Roll back the ip4 arc and the stored action to avoid a half-enabled
+       * state. */
+      vnet_feature_enable_disable ("ip4-output", "sonic-ext-ip4-loopback",
+				   sw_if_index, !enable, 0, 0);
+      sem->loopback_action_by_sw_if_index[sw_if_index] = prev;
+    }
+
+  return rv;
+}
+
+static void
+vl_api_iface_loopback_set_action_t_handler (
+  vl_api_iface_loopback_set_action_t *mp)
+{
+  vl_api_iface_loopback_set_action_reply_t *rmp;
+  int rv = 0;
+  u32 sw_if_index = ntohl (mp->sw_if_index);
+
+  VALIDATE_SW_IF_INDEX (mp);
+
+  rv = sonic_ext_iface_loopback_set_action (sw_if_index, mp->action);
+
+  BAD_SW_IF_INDEX_LABEL;
+  REPLY_MACRO (VL_API_IFACE_LOOPBACK_SET_ACTION_REPLY);
+}
+
+/* API definitions */
+#include <sonic_ext/sonic_ext.api.c>
+
 static clib_error_t *
 sonic_ext_init (vlib_main_t *vm)
 {
@@ -440,6 +545,7 @@ sonic_ext_init (vlib_main_t *vm)
     .pair_del_fn = sonic_ext_lcp_pair_del_cb,
   };
   clib_memset (sem, 0, sizeof (*sem));
+  sem->msg_id_base = setup_message_id_table ();
   lcp_itf_pair_register_vft (&sonic_ext_lcp_vft);
 
   /* Default-on: capture + aggr-tap-redirect (punt-via-member) and
