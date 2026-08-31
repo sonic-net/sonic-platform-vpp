@@ -3,6 +3,8 @@ maintainer: SONiC-VPP contributors
 features:
   - punt-via-member: redirect punted unicast/ARP over aggregated interface (BVI, Bond) to the original member tap
   - host-xc: bypass ethernet-input for packets injected from the linux-cp host tap
+  - iface-loopback: drop and count routed hairpin packets (RIF loopback packet
+    action) whose egress interface equals their ingress interface
 description: "VPP extensions for SONiC features"
 state: experimental
 properties: [API, CLI]
