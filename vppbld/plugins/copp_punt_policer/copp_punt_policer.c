@@ -39,7 +39,7 @@
 
 #include <vnet/vnet.h>
 #include <vnet/plugin/plugin.h>
-#include <vnet/policer/policer.h>
+#include <policer/policer.h>
 #include <copp_punt_policer/copp_punt_policer.h>
 #include <vppinfra/elog.h>
 
@@ -78,7 +78,7 @@ copp_punt_policer_find_entry (copp_punt_policer_main_t *cpm, u16 ethertype)
 
 /*
  * Bind (or unbind) an ethertype -> policer-name entry. On bind, the
- * named policer is looked up now via vnet_policer_main's
+ * named policer is looked up now via policer_main's
  * policer_index_by_name hash (populated by policer_add(), which
  * SwitchVppPolicer.cpp already calls for every SAI POLICER object) --
  * if the name isn't found yet, the entry is still recorded with

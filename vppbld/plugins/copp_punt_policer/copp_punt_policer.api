@@ -29,7 +29,7 @@ option version = "1.0.0";
            0x0800 for match_ip4_ttl_expiring below)
     @param policer_name - name of an existing VPP policer object
            (created via policer_add, e.g. "copp-policer-0x<oid>");
-           looked up once at bind time via vnet_policer_main's
+           looked up once at bind time via policer_main's
            policer_index_by_name hash
     @param is_bind - 1 to add/replace the binding, 0 to remove it
     @param match_ip4_ttl_expiring - when true (only meaningful with

@@ -23,7 +23,7 @@
 #include <vnet/vnet.h>
 #include <vnet/ethernet/packet.h>
 #include <vnet/feature/feature.h>
-#include <vnet/policer/policer.h>
+#include <policer/policer.h>
 #include <copp_punt_policer/copp_punt_policer.h>
 #include <vppinfra/elog.h>
 #include <plugins/linux-cp/lcp_interface.h>
@@ -118,8 +118,11 @@ typedef enum
 static_always_inline u32
 copp_punt_policer_resolve_index (copp_punt_policer_entry_t *entry)
 {
-  vnet_policer_main_t *pm = &vnet_policer_main;
+  policer_main_t *pm = policer_get_main ();
   uword *p;
+
+  if (PREDICT_FALSE (pm == 0))
+    return ~0;
 
   if (PREDICT_TRUE (entry->policer_index != ~0))
     {
@@ -220,7 +223,15 @@ copp_punt_policer_x1 (copp_punt_policer_main_t *cpm, vlib_buffer_t *b,
       }
 
     {
-      vnet_policer_main_t *pm = &vnet_policer_main;
+      policer_main_t *pm = policer_get_main ();
+
+      if (PREDICT_FALSE (pm == 0))
+        {
+          *out_verdict = POLICE_VIOLATE;
+          *next = COPP_PUNT_POLICER_NEXT_DROP;
+          return COPP_PUNT_POLICER_ERROR_DROP_UNRESOLVED;
+        }
+
       policer_t *policer = pool_elt_at_index (pm->policers, policer_index);
       /*
        * VPP's own pps-mode policer config translation calibrates the 
