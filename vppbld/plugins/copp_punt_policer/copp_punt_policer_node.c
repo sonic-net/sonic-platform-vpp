@@ -145,7 +145,7 @@ copp_punt_policer_resolve_index (copp_punt_policer_entry_t *entry)
  * counters.
  */
 static_always_inline copp_punt_policer_error_t
-copp_punt_policer_x1 (copp_punt_policer_main_t *cpm, vlib_buffer_t *b,
+copp_punt_policer_x1 (vlib_main_t *vm, copp_punt_policer_main_t *cpm, vlib_buffer_t *b,
                        u16 *next, u16 *out_ethertype, u32 *out_policer_index,
                        u32 *out_verdict, int *out_matched_idx)
 {
@@ -238,9 +238,15 @@ copp_punt_policer_x1 (copp_punt_policer_main_t *cpm, vlib_buffer_t *b,
        * underlying byte/kbps token bucket assuming every packet is 
        * exactly 256 bytes regardless of real frame size. 
        */
+      u32 metered_len = 256;
       policer_result_e verdict = vnet_police_packet (
-          policer, 256,
+          policer, metered_len,
           POLICE_CONFORM, clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT);
+
+      vlib_combined_counter_main_t *pc = policer_get_counters ();
+      if (PREDICT_TRUE (pc != 0))
+        vlib_increment_combined_counter (
+            &pc[verdict], vm->thread_index, policer_index, 1, metered_len);
 
       *out_verdict = verdict;
 
@@ -298,11 +304,11 @@ VLIB_NODE_FN (copp_punt_policer_node)
       int matched_idx = -1;
       copp_punt_policer_error_t err;
 
-      err = copp_punt_policer_x1 (cpm, b[0], &next[0], &ethertype,
+      err = copp_punt_policer_x1 (vm, cpm, b[0], &next[0], &ethertype,
                                    &policer_index, &verdict, &matched_idx);
       error_counts[err]++;
 
-      if (matched_idx >= 0)
+      if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) && matched_idx >= 0))
         copp_punt_policer_elog (vm, vnet_buffer (b[0])->sw_if_index[VLIB_RX],
                                  ethertype, matched_idx, policer_index,
                                  verdict);

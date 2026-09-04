@@ -92,6 +92,10 @@ copp_punt_policer_find_entry (copp_punt_policer_main_t *cpm, u16 ethertype)
  * trap reuses this plugin's classify+police+direct-to-TAP mechanism,
  * without policing ordinary IPv4 traffic (BGP, DHCP, ...) that also
  * carries ethertype 0x0800.
+ *
+ * Thread safety: mutates cpm->entries[]/n_entries with no lock, but the
+ * only caller in this environment is SONiC's syncd (single VAPI client,
+ * main thread only), so this is unlikely to be an issue in practice.
  */
 int
 copp_punt_policer_bind (u16 ethertype, const char *policer_name,
