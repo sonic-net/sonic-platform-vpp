@@ -1,0 +1,26 @@
+---
+name: CoPP IP2ME Policer
+maintainer: SONiC-VPP contributors
+features:
+  - Applies rate policing to IP2ME/SNMP/SSH traffic (destined to one of
+    the router's own IPv4 addresses that VPP's own dataplane does not
+    answer itself) on the ip4-punt feature arc, ahead of
+    ip4-punt-redirect. ip4-punt is only reached after ip4-lookup/
+    ip4-local have already decided a packet is host-bound, and is a
+    single global arc (not per-interface), so no per-interface or
+    per-router-interface binding bookkeeping is needed -- unlike VPP's
+    existing classify-based policer-classify feature, which only meters
+    traffic on whichever interfaces it has been explicitly bound to.
+  - Reuses VPP's existing policer objects and metering primitive
+    (vnet_police_packet()) -- no new token-bucket implementation.
+  - IPv4 addresses to track are added/removed via
+    copp_ip2me_policer_addr_add_del (API) or the "copp ip2me policer
+    addr" debug CLI; the shared policer is bound via
+    copp_ip2me_policer_bind (API) or "copp ip2me policer bind". The
+    feature is enabled once, globally, at plugin init -- no
+    per-interface enable step, ever.
+  - conform/exceed/violate packet counters are exposed via
+    copp_ip2me_policer_get_counters (API) or "show copp ip2me policer"
+    (CLI).
+description: "IP2ME/SNMP/SSH punt policing on ip4-punt, for SONiC/VPP CoPP"
+state: experimental
