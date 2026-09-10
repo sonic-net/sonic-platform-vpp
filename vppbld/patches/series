@@ -33,3 +33,7 @@
 # 17. VXLAN VNET source-independent ("decap-any") decap: match local dst+vni
 #     ignoring outer src (RIOT / secondary-VTEP VNET decap) + l2_bvi helper
 0017-sonic-vxlan-vnet-source-independent-decap.patch
+# 18. acl: match on ingress interface (in_sw_if_index) - lets a single ACL
+#     rule be scoped to specific ports, so SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS
+#     no longer has to be silently dropped by the SAI layer.
+0018-acl-match-on-ingress-interface.patch

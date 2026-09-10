@@ -1,0 +1,166 @@
+diff --git a/src/plugins/acl/acl.c b/src/plugins/acl/acl.c
+index 6724f503b..f0bdfdf28 100644
+--- a/src/plugins/acl/acl.c
++++ b/src/plugins/acl/acl.c
+@@ -177,6 +177,11 @@ acl_print_acl_x (acl_vector_print_func_t vpr, vlib_main_t * vm,
+ 	    format (out0, " tcpflags %d mask %d", r->tcp_flags_value,
+ 		    r->tcp_flags_mask);
+ 	}
++      if (r->in_sw_if_index)
++	{
++	  out0 = format (out0, " in-port %U", format_vnet_sw_if_index_name,
++			 vnet_get_main (), r->in_sw_if_index);
++	}
+       out0 = format (out0, "\n");
+       vpr (vm, out0);
+     }
+@@ -334,6 +339,13 @@ acl_add_list (u32 count, vl_api_acl_rule_t rules[],
+       if (ntohs (rules[i].dstport_or_icmpcode_first) >
+ 	  ntohs (rules[i].dstport_or_icmpcode_last))
+ 	return VNET_API_ERROR_INVALID_VALUE_2;
++      /*
++       * The 5-tuple only carries the low 16 bits of the ingress interface,
++       * so an index that does not fit would silently be matched as a
++       * different interface. Refuse it instead of matching the wrong one.
++       */
++      if (ntohl (rules[i].in_sw_if_index) > 0xffff)
++	return VNET_API_ERROR_INVALID_SW_IF_INDEX;
+     }
+ 
+   if (*acl_list_index != ~0)
+@@ -376,6 +388,7 @@ acl_add_list (u32 count, vl_api_acl_rule_t rules[],
+       r->dst_port_or_code_last = ntohs (rules[i].dstport_or_icmpcode_last);
+       r->tcp_flags_value = rules[i].tcp_flags_value;
+       r->tcp_flags_mask = rules[i].tcp_flags_mask;
++      r->in_sw_if_index = ntohl (rules[i].in_sw_if_index);
+     }
+ 
+   if (~0 == *acl_list_index)
+@@ -1912,6 +1925,7 @@ copy_acl_rule_to_api_rule (vl_api_acl_rule_t * api_rule, acl_rule_t * r)
+   api_rule->dstport_or_icmpcode_last = htons (r->dst_port_or_code_last);
+   api_rule->tcp_flags_mask = r->tcp_flags_mask;
+   api_rule->tcp_flags_value = r->tcp_flags_value;
++  api_rule->in_sw_if_index = htonl (r->in_sw_if_index);
+ }
+ 
+ static void
+@@ -2861,6 +2875,7 @@ acl_set_aclplugin_acl_fn (vlib_main_t * vm,
+   u32 port2 = 0;
+   u32 action = 0;
+   u32 tcpflags, tcpmask;
++  u32 in_sw_if_index = 0;
+   ip_prefix_t src, dst;
+   u8 *tag = 0;
+ 
+@@ -2909,6 +2924,12 @@ acl_set_aclplugin_acl_fn (vlib_main_t * vm,
+ 	  vec_validate_acl_rules (rules, rule_idx);
+ 	  ip_prefix_encode2 (&dst, &rules[rule_idx].dst_prefix);
+ 	}
++      else if (unformat (line_input, "in-port %U", unformat_vnet_sw_interface,
++			 vnet_get_main (), &in_sw_if_index))
++	{
++	  vec_validate_acl_rules (rules, rule_idx);
++	  rules[rule_idx].in_sw_if_index = htonl (in_sw_if_index);
++	}
+       else if (unformat (line_input, "sport %d-%d", &port1, &port2))
+ 	{
+ 	  vec_validate_acl_rules (rules, rule_idx);
+diff --git a/src/plugins/acl/acl_types.api b/src/plugins/acl/acl_types.api
+index b8a9482f0..a239f3795 100644
+--- a/src/plugins/acl/acl_types.api
++++ b/src/plugins/acl/acl_types.api
+@@ -69,6 +69,16 @@ typedef acl_rule
+  */
+   u8 tcp_flags_mask;
+   u8 tcp_flags_value;
++/*
++ * Match only packets received on this ingress interface.
++ * 0 => match any interface. sw_if_index 0 is local0, which is never a
++ * data-plane port, so it is used as the "any" value rather than spending
++ * a separate valid flag - the same convention proto = 0 uses for L4.
++ *
++ * Only the low 16 bits are matched, so an index that does not fit in 16
++ * bits is rejected rather than matched as a different interface.
++ */
++  u32 in_sw_if_index;
+ };
+ 
+ 
+diff --git a/src/plugins/acl/hash_lookup.c b/src/plugins/acl/hash_lookup.c
+index 3f6fce060..2ce865665 100644
+--- a/src/plugins/acl/hash_lookup.c
++++ b/src/plugins/acl/hash_lookup.c
+@@ -971,6 +971,19 @@ make_mask_and_match_from_rule(fa_5tuple_t *mask, acl_rule_t *r, hash_ace_info_t
+ 
+   mask->pkt.is_ip6 = 1;
+   hi->match.pkt.is_ip6 = r->is_ipv6;
++
++  /*
++   * Ingress interface match. lsb_of_sw_if_index is already filled from
++   * VLIB_RX for every packet on the input arc and already lives inside the
++   * hashed part of the key, so restricting a rule to an interface only
++   * requires unmasking it - no extra per-packet work.
++   */
++  if (r->in_sw_if_index != 0)
++    {
++      mask->l4.lsb_of_sw_if_index = 0xffff;
++      hi->match.l4.lsb_of_sw_if_index = r->in_sw_if_index & 0xffff;
++    }
++
+   if (r->is_ipv6) {
+     make_ip6_address_mask(&mask->ip6_addr[0], r->src_prefixlen);
+     hi->match.ip6_addr[0] = r->src.ip6;
+diff --git a/src/plugins/acl/public_inlines.h b/src/plugins/acl/public_inlines.h
+index a70e88025..2710843de 100644
+--- a/src/plugins/acl/public_inlines.h
++++ b/src/plugins/acl/public_inlines.h
+@@ -302,6 +302,16 @@ single_acl_match_5tuple (acl_main_t * am, u32 acl_index, fa_5tuple_t * pkt_5tupl
+ 	{
+ 	  continue;
+ 	}
++      /*
++       * Ingress interface match. Also checked here and not only in the hash
++       * path: non-first fragments fall back to linear matching, so a rule
++       * restricted to an interface would otherwise match on any of them.
++       */
++      if (r->in_sw_if_index != 0 &&
++	  pkt_5tuple->l4.lsb_of_sw_if_index != (r->in_sw_if_index & 0xffff))
++	{
++	  continue;
++	}
+       if (is_ip6) {
+         if (!fa_acl_match_ip6_addr
+ 	  (&pkt_5tuple->ip6_addr[1], &r->dst.ip6, r->dst_prefixlen))
+@@ -472,6 +482,19 @@ single_rule_match_5tuple (acl_rule_t * r, int is_ip6, fa_5tuple_t * pkt_5tuple)
+       return 0;
+     }
+ 
++  /*
++   * Ingress interface match. This is the collision check of the hash path, so
++   * it must not rely on the interface being part of the hash key: tuplemerge
++   * may fold this rule into an existing, less specific mask type that leaves
++   * lsb_of_sw_if_index masked off, which would let the rule match packets
++   * received on any interface.
++   */
++  if (r->in_sw_if_index != 0 &&
++      pkt_5tuple->l4.lsb_of_sw_if_index != (r->in_sw_if_index & 0xffff))
++    {
++      return 0;
++    }
++
+   if (is_ip6)
+     {
+       if (!fa_acl_match_ip6_addr
+diff --git a/src/plugins/acl/types.h b/src/plugins/acl/types.h
+index 3999ee649..92412a9dd 100644
+--- a/src/plugins/acl/types.h
++++ b/src/plugins/acl/types.h
+@@ -24,6 +24,8 @@ typedef struct
+   u16 dst_port_or_code_last;
+   u8 tcp_flags_value;
+   u8 tcp_flags_mask;
++  /* Ingress interface to match, 0 for any. See acl_types.api. */
++  u32 in_sw_if_index;
+ } acl_rule_t;
+ 
+ 
