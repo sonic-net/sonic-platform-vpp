@@ -1,0 +1,21 @@
+ARG BASE_IMAGE=docker-sai-test-vpp:base
+FROM ${BASE_IMAGE}
+
+COPY debs /tmp/vpp-debs
+
+RUN set -eux; \
+    cp /usr/sbin/sysctl /usr/sbin/sysctl.real; \
+    cp /usr/bin/true /usr/sbin/sysctl; \
+    apt-get update; \
+    apt-get install -y --reinstall --allow-downgrades --no-install-recommends \
+        /tmp/vpp-debs/*.deb; \
+    mv /usr/sbin/sysctl.real /usr/sbin/sysctl; \
+    for deb in /tmp/vpp-debs/*.deb; do \
+        package="$(dpkg-deb -f "$deb" Package)"; \
+        expected_version="$(dpkg-deb -f "$deb" Version)"; \
+        installed_version="$(dpkg-query -W -f='${Version}' "$package")"; \
+        test "$installed_version" = "$expected_version"; \
+        dpkg --verify "$package"; \
+    done; \
+    apt-get clean; \
+    rm -rf /tmp/vpp-debs /var/lib/apt/lists/*
