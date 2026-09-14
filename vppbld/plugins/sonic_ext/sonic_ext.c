@@ -22,7 +22,9 @@
 #include <vnet/l2/l2_bvi.h>
 #include <vnet/l2/l2_in_out_feat_arc.h>
 #include <vpp/app/version.h>
+#include <vlib/unix/plugin.h>
 #include <plugins/linux-cp/lcp_interface.h>
+#include <plugins/acl/acl.h>
 
 sonic_ext_main_t sonic_ext_main;
 
@@ -431,6 +433,125 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 0);
 }
 
+/*
+ * Deferred egress mirror (Everflow MIRROR_EGRESS).
+ *
+ * The ACL dataplane node stamps the mirror destination into the per-buffer
+ * sonic_ext cookie and sets MIRROR_PENDING; the sonic-ext-egress-mirror
+ * feature on interface-output does the late post-route/post-encap clone.
+ * A mirrored data packet can egress any port, so the feature is enabled on
+ * *every* interface -- but only while at least one MIRROR_EGRESS action is
+ * installed, tracked by active_egress_mirror_actions so the arc cost is
+ * paid only when the feature is in use (HLD 12.4).
+ */
+static int
+sonic_ext_egress_mirror_arc_set (int enable)
+{
+  vnet_main_t *vnm = vnet_get_main ();
+  vnet_interface_main_t *im = &vnm->interface_main;
+  vnet_sw_interface_t *sw_if;
+  u32 *changed = 0;
+  int rv = 0;
+
+  enable = !!enable;
+  if (sonic_ext_main.egress_mirror_arc_enabled == enable)
+    return 0;
+
+  pool_foreach (sw_if, im->sw_interfaces)
+    {
+      rv = vnet_feature_enable_disable ("interface-output",
+					"sonic-ext-egress-mirror",
+					sw_if->sw_if_index, enable, 0, 0);
+      if (rv)
+	goto rollback;
+      vec_add1 (changed, sw_if->sw_if_index);
+    }
+
+  sonic_ext_main.egress_mirror_arc_enabled = enable;
+  vec_free (changed);
+  return 0;
+
+rollback:
+  while (vec_len (changed) > 0)
+    {
+      u32 sw_if_index = vec_pop (changed);
+      vnet_feature_enable_disable ("interface-output",
+				   "sonic-ext-egress-mirror", sw_if_index,
+				   !enable, 0, 0);
+    }
+  vec_free (changed);
+  return rv;
+}
+
+int
+sonic_ext_egress_mirror_enable_disable (u8 enable)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+
+  if (enable)
+    {
+      if (sem->active_egress_mirror_actions++ == 0)
+	return sonic_ext_egress_mirror_arc_set (1);
+      return 0;
+    }
+
+  if (sem->active_egress_mirror_actions == 0)
+    return 0; /* balanced disable underflow guard */
+  if (--sem->active_egress_mirror_actions == 0)
+    return sonic_ext_egress_mirror_arc_set (0);
+  return 0;
+}
+
+/* New interfaces created while at least one MIRROR_EGRESS action is
+ * installed must have the feature enabled too, since the mirrored data
+ * packet could egress the new port. */
+static clib_error_t *
+sonic_ext_egress_mirror_sw_interface_add_del (vnet_main_t *vnm,
+					      u32 sw_if_index, u32 is_add)
+{
+  int rv;
+  (void) vnm;
+
+  if (!is_add || !sonic_ext_main.egress_mirror_arc_enabled)
+    return 0;
+
+  rv = vnet_feature_enable_disable ("interface-output",
+				    "sonic-ext-egress-mirror", sw_if_index, 1,
+				    0, 0);
+  if (rv)
+    return clib_error_return (
+      0, "sonic_ext: enable egress mirror on sw_if_index %u failed: %d",
+      sw_if_index, rv);
+  return 0;
+}
+
+VNET_SW_INTERFACE_ADD_DEL_FUNCTION (
+  sonic_ext_egress_mirror_sw_interface_add_del);
+
+/*
+ * Claim the ACL plugin's deferred (egress-arc) mirror clone for Everflow
+ * MIRROR_EGRESS. Resolved at runtime so sonic_ext neither links against nor
+ * requires the ACL plugin: if it is not loaded, the ACL side simply clones
+ * immediately instead.
+ */
+static void
+sonic_ext_register_acl_deferred_mirror (void)
+{
+  void (*acl_register) (acl_deferred_mirror_stamp_fn);
+
+  acl_register = vlib_get_plugin_symbol (
+    "acl_plugin.so", "acl_register_deferred_mirror_stamp");
+
+  if (acl_register == 0)
+    {
+      clib_warning ("sonic_ext: acl plugin has no deferred mirror hook; "
+		    "Everflow egress mirroring will clone on the ACL arc");
+      return;
+    }
+
+  acl_register (sonic_ext_acl_deferred_mirror_stamp);
+}
+
 static clib_error_t *
 sonic_ext_init (vlib_main_t *vm)
 {
@@ -451,6 +572,8 @@ sonic_ext_init (vlib_main_t *vm)
    * at runtime. */
   sonic_ext_set_punt_via_member (1);
   sonic_ext_set_host_xc (1);
+
+  sonic_ext_register_acl_deferred_mirror ();
 
   return 0;
 }

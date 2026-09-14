@@ -56,6 +56,16 @@ exit:
   REPLY_MACRO (VL_API_SONIC_EXT_IP2ME_ENABLE_DISABLE_REPLY);
 }
 
+static void
+vl_api_sonic_ext_egress_mirror_enable_disable_t_handler (
+  vl_api_sonic_ext_egress_mirror_enable_disable_t *mp)
+{
+  vl_api_sonic_ext_egress_mirror_enable_disable_reply_t *rmp;
+  int rv = sonic_ext_egress_mirror_enable_disable (mp->enable ? 1 : 0);
+
+  REPLY_MACRO (VL_API_SONIC_EXT_EGRESS_MIRROR_ENABLE_DISABLE_REPLY);
+}
+
 /* API definitions */
 #include <sonic_ext/sonic_ext.api.c>
 

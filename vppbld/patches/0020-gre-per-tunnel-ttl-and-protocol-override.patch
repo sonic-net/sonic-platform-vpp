@@ -1,0 +1,429 @@
+From ca2347589d58e23735f1da463427e28b6d749486 Mon Sep 17 00:00:00 2001
+From: taran9999 <tdwivedu@cisco.com>
+Date: Wed, 9 Sep 2026 13:50:03 -0700
+Subject: gre: per-tunnel outer TTL and GRE protocol override for Everflow
+ ERSPAN
+
+SONiC Everflow expects the mirrored copy on the wire as plain GRE carrying
+protocol 0x88BE over the raw mirrored L2 frame, with no sequence number,
+no ERSPAN type-II shim, and the outer TTL taken from the mirror session.
+None of that is reachable through the existing GRE tunnel API.
+
+Add a gre_tunnel_v3 API type - a copy of gre_tunnel_v2 plus gre_protocol
+and hop_limit - together with gre_tunnel_add_del_v3, gre_tunnel_dump_v3
+and gre_tunnel_details_v3. gre_tunnel_v2 is left byte-for-byte unchanged
+so existing clients are unaffected.
+
+hop_limit sets the outer IPv4 TTL / IPv6 hop-limit written into the encap
+rewrite; 0 keeps the current defaults (254 / 255). gre_protocol overrides
+the GRE protocol field; 0 keeps deriving it from the tunnel type and
+payload link type.
+
+gre_protocol additionally selects a plain-GRE mode for ERSPAN tunnels.
+When it is set, an ERSPAN tunnel emits the configured protocol with
+flags_and_version = 0 and gre_encap_inline suppresses both the sequence
+number and the 8-byte ERSPAN type-II shim, while still reusing the ERSPAN
+tunnel's working L2 delivery path. Plain ERSPAN tunnels (gre_protocol == 0)
+keep emitting GRE_PROTOCOL_erspan with the sequence bit and the type-II
+shim and are byte-for-byte unchanged.
+
+Neither field is part of the tunnel lookup key, so add/remove keying is
+unchanged.
+---
+ src/plugins/gre/gre.api     |  83 +++++++++++++++++++++++++
+ src/plugins/gre/gre.c       |  32 +++++++---
+ src/plugins/gre/gre.h       |  14 +++++
+ src/plugins/gre/gre_api.c   | 117 ++++++++++++++++++++++++++++++++++++
+ src/plugins/gre/interface.c |   2 +
+ 5 files changed, 239 insertions(+), 9 deletions(-)
+
+diff --git a/src/plugins/gre/gre.api b/src/plugins/gre/gre.api
+index 159e1ce3f..5f7e1a456 100644
+--- a/src/plugins/gre/gre.api
++++ b/src/plugins/gre/gre.api
+@@ -26,6 +26,7 @@ import "vnet/ip/ip_types.api";
+  */
+ service {
+   rpc gre_tunnel_dump_v2 returns gre_tunnel_dump_v2_reply events gre_tunnel_details_v2;
++  rpc gre_tunnel_dump_v3 returns gre_tunnel_dump_v3_reply events gre_tunnel_details_v3;
+ };
+ 
+ /** \brief A GRE tunnel type
+@@ -89,6 +90,39 @@ typedef gre_tunnel_v2
+   u32 key;
+ };
+ 
++/** \brief A composite type uniquely defining a GRE tunnel with key support
++    plus a GRE protocol/ethertype override and a configurable outer TTL.
++    @param type - tunnel type (see enum definition), 0: L3, 1: TEB, 2: ERSPAN
++    @param mode - P2P or P2MP
++    @param flags - to control encap/decap behaviour
++    @param session_id - session for ERSPAN tunnel, range 0-1023
++    @param instance - optional unique custom device instance, else ~0.
++    @param outer_table_id - Encap FIB table ID
++    @param sw_if_index - ignored on create/delete, present in details.
++    @param src - Source IP address
++    @param dst - Destination IP address, can be multicast
++    @param key - GRE key value (RFC 2890), 0 for no key
++    @param gre_protocol - override GRE protocol/ethertype in the encap header,
++                          0 to derive it from the tunnel type/payload link.
++    @param hop_limit - outer IPv4 TTL / IPv6 hop-limit to write into the encap
++                       header, 0 to use the VPP default (254 / 255).
++*/
++typedef gre_tunnel_v3
++{
++  vl_api_gre_tunnel_type_t type;
++  vl_api_tunnel_mode_t mode;
++  vl_api_tunnel_encap_decap_flags_t flags;
++  u16 session_id;
++  u32 instance;
++  u32 outer_table_id;
++  vl_api_interface_index_t sw_if_index;
++  vl_api_address_t src;
++  vl_api_address_t dst;
++  u32 key;
++  u16 gre_protocol;
++  u8 hop_limit;
++};
++
+ /** \brief Add or delete a single GRE tunnel.
+     @param client_index - opaque cookie to identify the sender.
+     @param context - sender context, to match reply w/ request.
+@@ -141,6 +175,33 @@ define gre_tunnel_add_del_v2_reply
+   vl_api_interface_index_t sw_if_index;
+ };
+ 
++/** \brief Add or delete a single GRE tunnel with key, GRE protocol override
++    and configurable outer TTL.
++    @param client_index - opaque cookie to identify the sender.
++    @param context - sender context, to match reply w/ request.
++    @param is_add - add if true, delete if false.
++    @param tunnel - tunnel definition to add or delete (v3).
++*/
++define gre_tunnel_add_del_v3
++{
++  u32 client_index;
++  u32 context;
++  bool is_add;
++  vl_api_gre_tunnel_v3_t tunnel;
++};
++
++/** \brief Add or delete a single GRE tunnel (v3).
++    @param context - sender context, to match reply w/ request.
++    @param retval - return code for the request.
++    @param sw_if_index - the interface corresponding to the affected tunnel.
++*/
++define gre_tunnel_add_del_v3_reply
++{
++  u32 context;
++  i32 retval;
++  vl_api_interface_index_t sw_if_index;
++};
++
+ /** \brief Dump details of all or just a single GRE tunnel.
+     @param client_index - opaque cookie to identify the sender.
+     @param context - sender context, to match reply w/ request.
+@@ -181,6 +242,18 @@ autoreply define gre_tunnel_dump_v2
+   vl_api_interface_index_t sw_if_index;
+ };
+ 
++/** \brief Dump details of all or just a single GRE tunnel (v3).
++    @param client_index - opaque cookie to identify the sender.
++    @param context - sender context, to match reply w/ request.
++    @param sw_if_index - filter for tunnel of this interface index, ~0 for all.
++*/
++autoreply define gre_tunnel_dump_v3
++{
++  u32 client_index;
++  u32 context;
++  vl_api_interface_index_t sw_if_index;
++};
++
+ 
+ /** \brief Details response for one of the requested GRE tunnels.
+     @param context - sender context, to match reply w/ request.
+@@ -228,6 +301,16 @@ define gre_tunnel_v2_details
+   vl_api_gre_tunnel_v2_t tunnel;
+ };
+ 
++/** \brief Details response for one of the requested GRE tunnels (v3).
++    @param context - sender context, to match reply w/ request.
++    @param tunnel - definition of the dumped tunnel (v3).
++*/
++define gre_tunnel_details_v3
++{
++  u32 context;
++  vl_api_gre_tunnel_v3_t tunnel;
++};
++
+ /*
+  * Local Variables:
+  * eval: (c-set-style "gnu")
+diff --git a/src/plugins/gre/gre.c b/src/plugins/gre/gre.c
+index dcb44010a..1f36da22e 100644
+--- a/src/plugins/gre/gre.c
++++ b/src/plugins/gre/gre.c
+@@ -229,7 +229,7 @@ gre_build_rewrite (vnet_main_t *vnm, u32 sw_if_index, vnet_link_t link_type,
+       h4 = (ip4_and_gre_header_t *) rewrite;
+       gre = &h4->gre;
+       h4->ip4.ip_version_and_header_length = 0x45;
+-      h4->ip4.ttl = 254;
++      h4->ip4.ttl = t->hop_limit ? t->hop_limit : 254;
+       h4->ip4.protocol = IP_PROTOCOL_GRE;
+       /* fixup ip4 header length and checksum after-the-fact */
+       h4->ip4.src_address.as_u32 = t->tunnel_src.ip4.as_u32;
+@@ -247,7 +247,7 @@ gre_build_rewrite (vnet_main_t *vnm, u32 sw_if_index, vnet_link_t link_type,
+       gre = &h6->gre;
+       h6->ip6.ip_version_traffic_class_and_flow_label =
+ 	clib_host_to_net_u32 (6 << 28);
+-      h6->ip6.hop_limit = 255;
++      h6->ip6.hop_limit = t->hop_limit ? t->hop_limit : 255;
+       h6->ip6.protocol = IP_PROTOCOL_GRE;
+       /* fixup ip6 header length and checksum after-the-fact */
+       h6->ip6.src_address.as_u64[0] = t->tunnel_src.ip6.as_u64[0];
+@@ -258,13 +258,27 @@ gre_build_rewrite (vnet_main_t *vnm, u32 sw_if_index, vnet_link_t link_type,
+ 
+   if (PREDICT_FALSE (t->type == GRE_TUNNEL_TYPE_ERSPAN))
+     {
+-      gre->protocol = clib_host_to_net_u16 (GRE_PROTOCOL_erspan);
+-      gre->flags_and_version = clib_host_to_net_u16 (GRE_FLAGS_SEQUENCE);
++      if (t->gre_protocol)
++	{
++	  /* SONiC Everflow "ERSPAN": emit plain GRE carrying the configured
++	   * protocol (e.g. 0x88BE) with NO sequence number. The ERSPAN
++	   * type-II shim is likewise suppressed in gre_encap_inline. This keeps
++	   * the ERSPAN tunnel's working L2 delivery path while producing a
++	   * plain-GRE-over-raw-L2 packet. */
++	  gre->protocol = clib_host_to_net_u16 (t->gre_protocol);
++	  gre->flags_and_version = 0;
++	}
++      else
++	{
++	  gre->protocol = clib_host_to_net_u16 (GRE_PROTOCOL_erspan);
++	  gre->flags_and_version = clib_host_to_net_u16 (GRE_FLAGS_SEQUENCE);
++	}
+     }
+   else
+     {
+-      gre->protocol =
+-	clib_host_to_net_u16 (gre_proto_from_vnet_link (link_type));
++      gre->protocol = clib_host_to_net_u16 (
++        t->gre_protocol ? t->gre_protocol
++                        : gre_proto_from_vnet_link (link_type));
+       gre->flags_and_version = 0; // Clear flags first
+       /* Add key only for non-ERSPAN tunnels */
+       if (gre_key_is_valid (t->gre_key))
+@@ -551,7 +565,7 @@ gre_encap_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
+       vnet_buffer (b[0])->ip.adj_index[VLIB_TX] = adj_index[0];
+       vnet_buffer (b[1])->ip.adj_index[VLIB_TX] = adj_index[1];
+ 
+-      if (type == GRE_TUNNEL_TYPE_ERSPAN)
++      if (type == GRE_TUNNEL_TYPE_ERSPAN && gt[0]->gre_protocol == 0)
+ 	{
+ 	  /* Encap GRE seq# and ERSPAN type II header */
+ 	  erspan_t2_t *h0;
+@@ -565,7 +579,7 @@ gre_encap_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
+ 	  h0->t2_u64 = hdr;
+ 	  h0->t2.cos_en_t_session |= clib_host_to_net_u16 (gt[0]->session_id);
+ 	}
+-      if (type == GRE_TUNNEL_TYPE_ERSPAN)
++      if (type == GRE_TUNNEL_TYPE_ERSPAN && gt[1]->gre_protocol == 0)
+ 	{
+ 	  /* Encap GRE seq# and ERSPAN type II header */
+ 	  erspan_t2_t *h0;
+@@ -616,7 +630,7 @@ gre_encap_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
+ 
+       vnet_buffer (b[0])->ip.adj_index[VLIB_TX] = adj_index[0];
+ 
+-      if (type == GRE_TUNNEL_TYPE_ERSPAN)
++      if (type == GRE_TUNNEL_TYPE_ERSPAN && gt[0]->gre_protocol == 0)
+ 	{
+ 	  /* Encap GRE seq# and ERSPAN type II header */
+ 	  erspan_t2_t *h0;
+diff --git a/src/plugins/gre/gre.h b/src/plugins/gre/gre.h
+index 4b71f0fe4..80926ff25 100644
+--- a/src/plugins/gre/gre.h
++++ b/src/plugins/gre/gre.h
+@@ -234,6 +234,18 @@ typedef struct
+ 
+   u32 dev_instance;  /* Real device instance in tunnel vector */
+   u32 user_instance; /* Instance name being shown to user */
++
++  /**
++   * Override GRE protocol/ethertype written into the encap header. 0 means
++   * derive it from the tunnel type / payload link type (default behaviour).
++   */
++  u16 gre_protocol;
++
++  /**
++   * Outer IPv4 TTL / IPv6 hop-limit written into the encap header. 0 means
++   * use the VPP default (254 for IPv4, 255 for IPv6).
++   */
++  u8 hop_limit;
+ } gre_tunnel_t;
+ 
+ typedef struct
+@@ -374,6 +386,8 @@ typedef struct
+   u16 session_id;
+   gre_key_t gre_key;
+   tunnel_encap_decap_flags_t flags;
++  u16 gre_protocol;
++  u8 hop_limit;
+ } vnet_gre_tunnel_add_del_args_t;
+ 
+ extern int vnet_gre_tunnel_add_del (vnet_gre_tunnel_add_del_args_t *a,
+diff --git a/src/plugins/gre/gre_api.c b/src/plugins/gre/gre_api.c
+index df8db48e4..8d9a69ba6 100644
+--- a/src/plugins/gre/gre_api.c
++++ b/src/plugins/gre/gre_api.c
+@@ -167,6 +167,63 @@ out:
+ 		({ rmp->sw_if_index = ntohl (sw_if_index); }));
+ }
+ 
++static void
++vl_api_gre_tunnel_add_del_v3_t_handler (vl_api_gre_tunnel_add_del_v3_t *mp)
++{
++  vnet_gre_tunnel_add_del_args_t _a = {}, *a = &_a;
++  vl_api_gre_tunnel_add_del_v3_reply_t *rmp;
++  tunnel_encap_decap_flags_t flags;
++  u32 sw_if_index = ~0;
++  ip46_type_t itype[2];
++  int rv = 0;
++
++  itype[0] = ip_address_decode (&mp->tunnel.src, &a->src);
++  itype[1] = ip_address_decode (&mp->tunnel.dst, &a->dst);
++
++  if (itype[0] != itype[1])
++    {
++      rv = VNET_API_ERROR_INVALID_PROTOCOL;
++      goto out;
++    }
++
++  if (ip46_address_is_equal (&a->src, &a->dst))
++    {
++      rv = VNET_API_ERROR_SAME_SRC_DST;
++      goto out;
++    }
++
++  rv = gre_tunnel_type_decode (mp->tunnel.type, &a->type);
++
++  if (rv)
++    goto out;
++
++  rv = tunnel_mode_decode (mp->tunnel.mode, &a->mode);
++
++  if (rv)
++    goto out;
++
++  rv = tunnel_encap_decap_flags_decode (mp->tunnel.flags, &flags);
++
++  if (rv)
++    goto out;
++
++  a->is_add = mp->is_add;
++  a->is_ipv6 = (itype[0] == IP46_TYPE_IP6);
++  a->instance = ntohl (mp->tunnel.instance);
++  a->session_id = ntohs (mp->tunnel.session_id);
++  a->outer_table_id = ntohl (mp->tunnel.outer_table_id);
++  a->flags = flags;
++  a->gre_key = ntohl (mp->tunnel.key); // Key field present in v3 API
++  a->gre_protocol = ntohs (mp->tunnel.gre_protocol);
++  a->hop_limit = mp->tunnel.hop_limit;
++
++  rv = vnet_gre_tunnel_add_del (a, &sw_if_index);
++
++out:
++  REPLY_MACRO2 (VL_API_GRE_TUNNEL_ADD_DEL_V3_REPLY,
++		({ rmp->sw_if_index = ntohl (sw_if_index); }));
++}
++
+ static void
+ send_gre_tunnel_details (gre_tunnel_t *t, vl_api_gre_tunnel_dump_t *mp)
+ {
+@@ -240,6 +297,32 @@ send_gre_tunnel_v2_details (gre_tunnel_t *t, vl_api_gre_tunnel_v2_dump_t *mp)
+     }));
+ }
+ 
++static void
++send_gre_tunnel_details_v3 (gre_tunnel_t *t, vl_api_gre_tunnel_dump_v3_t *mp)
++{
++  vl_api_gre_tunnel_details_v3_t *rmp;
++
++  REPLY_MACRO_DETAILS2 (
++    VL_API_GRE_TUNNEL_DETAILS_V3, ({
++      ip_address_encode (&t->tunnel_src, IP46_TYPE_ANY, &rmp->tunnel.src);
++      ip_address_encode (&t->tunnel_dst.fp_addr, IP46_TYPE_ANY,
++			 &rmp->tunnel.dst);
++
++      rmp->tunnel.outer_table_id = htonl (
++	fib_table_get_table_id (t->outer_fib_index, t->tunnel_dst.fp_proto));
++
++      rmp->tunnel.type = gre_tunnel_type_encode (t->type);
++      rmp->tunnel.mode = tunnel_mode_encode (t->mode);
++      rmp->tunnel.flags = tunnel_encap_decap_flags_encode (t->flags);
++      rmp->tunnel.instance = htonl (t->user_instance);
++      rmp->tunnel.sw_if_index = htonl (t->sw_if_index);
++      rmp->tunnel.session_id = htons (t->session_id);
++      rmp->tunnel.key = htonl (t->gre_key);
++      rmp->tunnel.gre_protocol = htons (t->gre_protocol);
++      rmp->tunnel.hop_limit = t->hop_limit;
++    }));
++}
++
+ static void
+ vl_api_gre_tunnel_dump_t_handler (vl_api_gre_tunnel_dump_t *mp)
+ {
+@@ -344,6 +427,40 @@ vl_api_gre_tunnel_v2_dump_t_handler (vl_api_gre_tunnel_v2_dump_t *mp)
+     }
+ }
+ 
++static void
++vl_api_gre_tunnel_dump_v3_t_handler (vl_api_gre_tunnel_dump_v3_t *mp)
++{
++  vl_api_registration_t *reg;
++  gre_main_t *gm = &gre_main;
++  gre_tunnel_t *t;
++  u32 sw_if_index;
++
++  reg = vl_api_client_index_to_registration (mp->client_index);
++  if (!reg)
++    return;
++
++  sw_if_index = ntohl (mp->sw_if_index);
++
++  if (~0 == sw_if_index)
++    {
++      pool_foreach (t, gm->tunnels)
++	{
++	  send_gre_tunnel_details_v3 (t, mp);
++	}
++    }
++
++  else
++    {
++      if ((sw_if_index >= vec_len (gm->tunnel_index_by_sw_if_index)) ||
++	  (~0 == gm->tunnel_index_by_sw_if_index[sw_if_index]))
++	{
++	  return;
++	}
++      t = &gm->tunnels[gm->tunnel_index_by_sw_if_index[sw_if_index]];
++      send_gre_tunnel_details_v3 (t, mp);
++    }
++}
++
+ /*
+  * gre_api_hookup
+  * Add vpe's API message handlers to the table.
+diff --git a/src/plugins/gre/interface.c b/src/plugins/gre/interface.c
+index d7c86e526..4947462dc 100644
+--- a/src/plugins/gre/interface.c
++++ b/src/plugins/gre/interface.c
+@@ -403,6 +403,8 @@ vnet_gre_tunnel_add (vnet_gre_tunnel_add_del_args_t *a, u32 outer_fib_index,
+   t->type = a->type;
+   t->mode = a->mode;
+   t->flags = a->flags;
++  t->gre_protocol = a->gre_protocol;
++  t->hop_limit = a->hop_limit;
+   if (t->type == GRE_TUNNEL_TYPE_ERSPAN)
+     t->session_id = a->session_id;
+ 

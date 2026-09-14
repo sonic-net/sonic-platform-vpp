@@ -1,0 +1,313 @@
+From 2974f89529bf57019ce59a8f96b6911339fac8f2 Mon Sep 17 00:00:00 2001
+From: taran9999 <tdwivedu@cisco.com>
+Date: Thu, 10 Sep 2026 11:08:28 -0700
+Subject: acl: add PERMIT_MIRROR action for SONiC Everflow
+
+Add a fourth ACL action, ACL_ACTION_API_PERMIT_MIRROR (3), which permits
+the packet and additionally sends a copy to a mirror destination. This is
+the dataplane half of SONiC Everflow (ACL-based mirroring): the SAI layer
+maps SAI_ACL_ENTRY_ATTR_ACTION_MIRROR_INGRESS / _MIRROR_EGRESS onto it.
+
+The destination is carried in a new packed u32 mirror_action, appended to
+acl_rule: bits 27:0 hold the mirror destination sw_if_index and bits 31:28
+hold action flags. The only flag defined today is ACL_MIRROR_F_DEFERRED,
+set for SAI MIRROR_EGRESS. A mirror_action of 0 means no mirror
+destination, since sw_if_index 0 is local0 and is never a mirror target.
+
+Two clone behaviours are selected by that flag:
+
+  - Immediate (MIRROR_INGRESS, or any match on an output arc): clone in
+    this node. The ACL feature runs on the ip4/ip6-unicast arc, so
+    current_data points at the L3 header while the original L2 frame sits
+    in the headroom; rewind to l2_hdr_offset before vlib_buffer_copy() so
+    the clone carries the full L2 frame the ERSPAN/GRE tunnel expects,
+    then restore the original position.
+
+  - Deferred (MIRROR_EGRESS matched on an ingress arc): the copy has to be
+    taken on the egress arc to reflect the post-route/post-encap wire
+    form, and this plugin owns no egress node. Rather than reach into
+    another plugin's per-packet metadata, export
+    acl_register_deferred_mirror_stamp() so a platform plugin can claim
+    the handoff; it records the destination however it likes and performs
+    the late clone. The hook is resolved with vlib_get_plugin_symbol(), so
+    neither plugin gains a link-time dependency on the other, and the ACL
+    plugin still builds and runs standalone. When no stamper is registered
+    the deferred rule simply clones immediately, so mirroring degrades
+    rather than silently disappearing.
+
+Scoping a mirror rule to specific ingress ports
+(SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS, used by Everflow per-interface
+mirroring) needs no new field here: the preceding in_sw_if_index patch
+already matches a rule on its ingress interface, and the SAI layer emits
+one rule per port.
+
+Two dataplane guards are folded in because both are required for the
+clone to be safe:
+
+  - A buffer that is already a mirror clone is never mirrored again. The
+    injected encapped copy can re-enter this node and match again,
+    stacking another outer encap on every pass until the buffer headroom
+    is exhausted and the real mirror is dropped. vnet SPAN has the same
+    check; the packet is still permitted and forwarded.
+
+  - mirror_sw_if_index is baked into the rule at program time and is
+    mutated by the control plane (re-pointing a mirror session deletes and
+    recreates its GRE tunnel), so a data packet can match while the index
+    is stale or the tunnel is not yet admin-up.
+    vnet_get_frame_to_sw_interface() does no validity check of its own and
+    would dereference freed per-interface state, so the clone is gated on
+    the interface being a live pool slot and admin-up first.
+---
+ src/plugins/acl/acl.c            | 17 ++++++
+ src/plugins/acl/acl.h            | 22 ++++++++
+ src/plugins/acl/acl_types.api    | 13 +++++
+ src/plugins/acl/dataplane_node.c | 96 ++++++++++++++++++++++++++++++++
+ src/plugins/acl/types.h          |  8 +++
+ 5 files changed, 156 insertions(+)
+
+diff --git a/src/plugins/acl/acl.c b/src/plugins/acl/acl.c
+index f0bdfdf28..e5cf3b5aa 100644
+--- a/src/plugins/acl/acl.c
++++ b/src/plugins/acl/acl.c
+@@ -305,6 +305,17 @@ acl_api_invalid_prefix (const vl_api_prefix_t * prefix)
+   return (!valid_af) || ip_prefix_decode2 (prefix, &ip_prefix);
+ }
+ 
++/*
++ * Exported so a platform plugin can claim the deferred (egress-arc)
++ * mirror clone. Looked up with vlib_get_plugin_symbol (), so the caller
++ * needs no link-time dependency on this plugin. Pass 0 to unregister.
++ */
++__clib_export void
++acl_register_deferred_mirror_stamp (acl_deferred_mirror_stamp_fn fn)
++{
++  acl_main.deferred_mirror_stamp = fn;
++}
++
+ static int
+ acl_add_list (u32 count, vl_api_acl_rule_t rules[],
+ 	      u32 * acl_list_index, u8 * tag)
+@@ -346,6 +357,10 @@ acl_add_list (u32 count, vl_api_acl_rule_t rules[],
+        */
+       if (ntohl (rules[i].in_sw_if_index) > 0xffff)
+ 	return VNET_API_ERROR_INVALID_SW_IF_INDEX;
++      if (rules[i].is_permit == 3 &&
++	  ((ntohl (rules[i].mirror_action) >> ACL_MIRROR_FLAGS_SHIFT) &
++	   ~ACL_MIRROR_F_DEFERRED))
++	return VNET_API_ERROR_INVALID_VALUE;
+     }
+ 
+   if (*acl_list_index != ~0)
+@@ -389,6 +404,8 @@ acl_add_list (u32 count, vl_api_acl_rule_t rules[],
+       r->tcp_flags_value = rules[i].tcp_flags_value;
+       r->tcp_flags_mask = rules[i].tcp_flags_mask;
+       r->in_sw_if_index = ntohl (rules[i].in_sw_if_index);
++      r->mirror_action =
++	(rules[i].is_permit == 3) ? ntohl (rules[i].mirror_action) : 0;
+     }
+ 
+   if (~0 == *acl_list_index)
+diff --git a/src/plugins/acl/acl.h b/src/plugins/acl/acl.h
+index 98ed735ef..1bf07c6f0 100644
+--- a/src/plugins/acl/acl.h
++++ b/src/plugins/acl/acl.h
+@@ -25,6 +25,25 @@
+ #include "hash_lookup_types.h"
+ #include "lookup_context.h"
+ 
++/**
++ * Deferred mirror handoff for the PERMIT_MIRROR action.
++ *
++ * A rule carrying ACL_MIRROR_F_DEFERRED wants its clone taken later, on
++ * the egress arc, so the copy reflects the post-route/post-encap wire
++ * form. The ACL plugin owns no egress node, so a platform plugin
++ * registers a stamper that records the destination in its own per-buffer
++ * metadata and performs the late clone itself.
++ *
++ * Returns non-zero if the stamper took ownership of the mirror. When no
++ * stamper is registered, or it declines, the ACL node falls back to
++ * cloning immediately, so a deferred rule still mirrors.
++ */
++typedef int (*acl_deferred_mirror_stamp_fn) (vlib_buffer_t *b,
++					     u32 rx_sw_if_index,
++					     u32 mirror_sw_if_index);
++
++void acl_register_deferred_mirror_stamp (acl_deferred_mirror_stamp_fn fn);
++
+ #define  ACL_PLUGIN_VERSION_MAJOR 1
+ #define  ACL_PLUGIN_VERSION_MINOR 4
+ 
+@@ -292,6 +311,9 @@ typedef struct {
+   vlib_combined_counter_main_t *combined_acl_counters;
+   /* enable/disable ACL counters for interface processing */
+   u32 interface_acl_counters_enabled;
++
++  /* deferred mirror stamper, NULL when no platform plugin registered */
++  acl_deferred_mirror_stamp_fn deferred_mirror_stamp;
+ } acl_main_t;
+ 
+ #define acl_log_err(...) \
+diff --git a/src/plugins/acl/acl_types.api b/src/plugins/acl/acl_types.api
+index a239f3795..d93f5833a 100644
+--- a/src/plugins/acl/acl_types.api
++++ b/src/plugins/acl/acl_types.api
+@@ -24,6 +24,7 @@ enum acl_action : u8
+   ACL_ACTION_API_DENY = 0,
+   ACL_ACTION_API_PERMIT = 1,
+   ACL_ACTION_API_PERMIT_REFLECT = 2,
++  ACL_ACTION_API_PERMIT_MIRROR = 3,
+ };
+ 
+ /** \brief Access List Rule entry
+@@ -79,6 +80,18 @@ typedef acl_rule
+  * bits is rejected rather than matched as a different interface.
+  */
+   u32 in_sw_if_index;
++/*
++ * For is_permit == PERMIT_MIRROR (3) only: the mirror destination
++ * sw_if_index in bits 27:0 and mirror action flags in bits 31:28.
++ * ACL_MIRROR_F_DEFERRED asks for the clone to be taken later, on the
++ * egress arc, by whichever platform plugin registered a deferred mirror
++ * stamper; otherwise the clone is taken in the ACL node itself.
++ *
++ * 0 => no mirror destination. sw_if_index 0 is local0, which is never a
++ * mirror target, so it doubles as the "none" value. Ignored for every
++ * other action.
++ */
++  u32 mirror_action;
+ };
+ 
+ 
+diff --git a/src/plugins/acl/dataplane_node.c b/src/plugins/acl/dataplane_node.c
+index 471228726..bb71860f9 100644
+--- a/src/plugins/acl/dataplane_node.c
++++ b/src/plugins/acl/dataplane_node.c
+@@ -550,6 +550,102 @@ acl_fa_inner_node_fn (vlib_main_t * vm,
+ 	    next[0] = action ? next[0] : 0;
+ 	  }
+ 
++	  if (PREDICT_FALSE (action == 3))
++	    {
++	      vnet_main_t *vnm = vnet_get_main ();
++	      acl_rule_t *mir_rule =
++		&am->acls[match_acl_in_index].rules[match_rule_index];
++	      u32 mirror_sw_if_index =
++		mir_rule->mirror_action & ACL_MIRROR_SW_IF_INDEX_MASK;
++	      u32 mirror_flags =
++		mir_rule->mirror_action >> ACL_MIRROR_FLAGS_SHIFT;
++
++	      pkts_acl_permit++;
++
++	      /* Never mirror a packet that is itself a mirror clone: the
++	       * injected ERSPAN/GRE-encapped copy can re-enter this node and
++	       * match again, stacking another outer encap on every pass until
++	       * the buffer headroom is exhausted and the real mirror is
++	       * dropped. vnet SPAN has the same check. The packet is still
++	       * permitted and forwarded.
++	       *
++	       * mirror_sw_if_index is baked into the rule at program time and
++	       * is mutated by the control plane (re-pointing a mirror session
++	       * deletes and recreates its GRE tunnel), so it can be stale or
++	       * not yet admin-up when a packet matches during that window.
++	       * vnet_get_frame_to_sw_interface () does no validity check of
++	       * its own and would dereference freed per-interface state, so
++	       * require a live, admin-up interface first;
++	       * vnet_sw_interface_is_valid () never dereferences, and the
++	       * short-circuit && keeps vnet_sw_interface_is_admin_up () off a
++	       * stale index. */
++	      if (mirror_sw_if_index != 0 &&
++		  !(b[0]->flags & VNET_BUFFER_F_SPAN_CLONE) &&
++		  vnet_sw_interface_is_valid (vnm, mirror_sw_if_index) &&
++		  vnet_sw_interface_is_admin_up (vnm, mirror_sw_if_index))
++		{
++		  int deferred = 0;
++
++		  /* A deferred rule matched on an ingress arc wants the clone
++		   * taken on the egress arc instead, so it reflects the
++		   * post-route/post-encap wire form. Hand it to the registered
++		   * platform stamper; clone here if there is none. */
++		  if ((mirror_flags & ACL_MIRROR_F_DEFERRED) && is_input &&
++		      am->deferred_mirror_stamp)
++		    deferred = am->deferred_mirror_stamp (
++		      b[0], sw_if_index[0], mirror_sw_if_index);
++
++		  if (!deferred)
++		    {
++		      /* The ACL feature runs on the ip4/ip6-unicast arc, so
++		       * current_data points at the L3 header while the
++		       * original L2 frame sits in the headroom.
++		       * vlib_buffer_copy () only copies from current_data
++		       * forward, so rewind to l2_hdr_offset first to capture
++		       * the full L2 frame the ERSPAN/GRE tunnel expects, then
++		       * restore the original position. */
++		      word l2_rewind = 0;
++		      vlib_buffer_t *clone;
++
++		      if (PREDICT_TRUE (b[0]->flags &
++					VNET_BUFFER_F_L2_HDR_OFFSET_VALID))
++			{
++			  l2_rewind = (word) b[0]->current_data -
++				      vnet_buffer (b[0])->l2_hdr_offset;
++			  if (l2_rewind > 0)
++			    vlib_buffer_advance (b[0], -l2_rewind);
++			  else
++			    l2_rewind = 0;
++			}
++
++		      clone = vlib_buffer_copy (vm, b[0]);
++
++		      if (l2_rewind > 0)
++			vlib_buffer_advance (b[0], l2_rewind);
++
++		      if (PREDICT_TRUE (clone != 0))
++			{
++			  vlib_frame_t *f;
++			  u32 *to_next;
++
++			  vnet_buffer (clone)->sw_if_index[VLIB_TX] =
++			    mirror_sw_if_index;
++			  clone->flags |= VNET_BUFFER_F_SPAN_CLONE;
++
++			  f = vnet_get_frame_to_sw_interface (
++			    vnm, mirror_sw_if_index);
++			  to_next = vlib_frame_vector_args (f);
++			  to_next += f->n_vectors;
++			  to_next[0] = vlib_get_buffer_index (vm, clone);
++			  f->n_vectors++;
++			  vnet_put_frame_to_sw_interface (vnm,
++							  mirror_sw_if_index,
++							  f);
++			}
++		    }
++		}
++	    }
++
+ 	  if (node_trace_on)	// PREDICT_FALSE (node->flags & VLIB_NODE_FLAG_TRACE))
+ 	    {
+ 	      maybe_trace_buffer (vm, node, b[0], sw_if_index[0], lc_index0,
+diff --git a/src/plugins/acl/types.h b/src/plugins/acl/types.h
+index 92412a9dd..dee23aada 100644
+--- a/src/plugins/acl/types.h
++++ b/src/plugins/acl/types.h
+@@ -9,6 +9,12 @@
+ #include <vnet/vnet.h>
+ #include <vnet/ip/ip.h>
+ 
++/* PERMIT_MIRROR action: mirror destination sw_if_index in bits 27:0,
++ * mirror action flags in bits 31:28. */
++#define ACL_MIRROR_SW_IF_INDEX_MASK 0x0fffffffU
++#define ACL_MIRROR_FLAGS_SHIFT 28
++#define ACL_MIRROR_F_DEFERRED (1U << 0)
++
+ typedef struct
+ {
+   u8 is_permit;
+@@ -26,6 +32,8 @@ typedef struct
+   u8 tcp_flags_mask;
+   /* Ingress interface to match, 0 for any. See acl_types.api. */
+   u32 in_sw_if_index;
++  /* PERMIT_MIRROR only, 0 for no mirror. See acl_types.api. */
++  u32 mirror_action;
+ } acl_rule_t;
+ 
+ 

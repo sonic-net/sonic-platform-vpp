@@ -23,6 +23,7 @@ add_vpp_plugin(sonic_ext
   l2_vlan_filter_node.c
   ip2me_node.c
   cli.c
+  egress_mirror_node.c
 
   API_FILES
   sonic_ext.api
