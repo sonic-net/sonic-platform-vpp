@@ -39,3 +39,7 @@
 #     rule be scoped to specific ports, so SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS
 #     no longer has to be silently dropped by the SAI layer.
 0018-acl-match-on-ingress-interface.patch
+# 19. ip4/ip6-local: exempt tunnel decap (VXLAN UDP:4789 + IP-in-IP proto 4/41)
+#     from the local-source checks (spoofed-local + src-lookup-miss/uRPF) so
+#     source-independent decap to a local VTEP reaches the decap node (v4+v6)
+0019-ip-local-exempt-tunnel-decap-from-source-checks.patch
