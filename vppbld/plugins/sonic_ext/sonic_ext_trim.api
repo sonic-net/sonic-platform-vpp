@@ -1,0 +1,100 @@
+/*
+ * Copyright (c) 2026 SONiC-VPP contributors
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at:
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/** \file
+    \brief SONiC-VPP packet-trimming (SAI DROP_AND_TRIM) control API.
+
+    SAI-VPP (sonic-sairedis vslib/vpp) programs the trim policy, the
+    DSCP->queue resolution, and the per-(port,queue) software admission
+    parameters through these messages, and reads back the trim counters
+    for SAI switch/port/queue statistics.
+*/
+
+option version = "1.0.0";
+
+import "vnet/interface_types.api";
+
+/** \brief Program or clear the global packet-trim policy.
+    @param is_enable - false clears/disables trimming globally
+    @param trim_size - maximum bytes retained in a trimmed copy
+    @param dscp_mode - 0 = symmetric (dscp_value), 1 = from_tc (tc_value)
+    @param dscp_value - symmetric DSCP applied to the trimmed copy (0..63)
+    @param tc_value - traffic class used for the from_tc egress-map lookup
+    @param trim_queue - static egress queue used for the trimmed copy (0..7)
+*/
+autoreply define sonic_ext_trim_global_set
+{
+  u32 client_index;
+  u32 context;
+  bool is_enable;
+  u16 trim_size;
+  u8 dscp_mode;
+  u8 dscp_value;
+  u8 tc_value;
+  u8 trim_queue;
+};
+
+/** \brief Push the composed DSCP(0..63) -> egress queue(0..7) table.
+
+    This is the composition of the SONiC DSCP_TO_TC and TC_TO_QUEUE maps,
+    supplied by SAI-VPP so the plugin does not replicate both maps.  The
+    admission shim uses it to classify a packet to its original queue.
+    @param dscp_to_queue - 64-entry table, indexed by DSCP, value 0..7
+*/
+autoreply define sonic_ext_trim_dscp_map_set
+{
+  u32 client_index;
+  u32 context;
+  u8 dscp_to_queue[64];
+};
+
+/** \brief Program (or clear) one egress (port, queue) admission slot.
+    @param sw_if_index - egress interface (physical port / LAG member)
+    @param queue - egress queue index (0..7)
+    @param eligible - queue's buffer profile uses DROP_AND_TRIM
+    @param rate_bytes_per_sec - SONiC scheduler PIR in bytes/s (0 => block)
+    @param capacity_bytes - software token-bucket depth (buffer capacity)
+*/
+autoreply define sonic_ext_trim_queue_set
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u8 queue;
+  bool eligible;
+  u64 rate_bytes_per_sec;
+  u64 capacity_bytes;
+};
+
+/** \brief Read back global trim counters (for SAI switch/port/queue stats).
+    @param trim_sent - truncated copies transmitted
+    @param trim_drop - eligible packets dropped because the trim queue was
+                       also congested
+    @param trim_admit_fail - original-queue admission failures observed
+*/
+define sonic_ext_trim_counters_get
+{
+  u32 client_index;
+  u32 context;
+};
+
+define sonic_ext_trim_counters_get_reply
+{
+  u32 context;
+  i32 retval;
+  u64 trim_sent;
+  u64 trim_drop;
+  u64 trim_admit_fail;
+};

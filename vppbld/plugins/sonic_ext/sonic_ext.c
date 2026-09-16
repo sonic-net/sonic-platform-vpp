@@ -28,7 +28,7 @@ sonic_ext_main_t sonic_ext_main;
 
 VLIB_PLUGIN_REGISTER () = {
   .version = SONIC_EXT_PLUGIN_BUILD_VER,
-  .description = "SONiC VPP extensions: punt-via-member, host-xc",
+  .description = "SONiC VPP extensions: punt-via-member, host-xc, packet-trim",
 };
 
 /*
@@ -451,6 +451,13 @@ sonic_ext_init (vlib_main_t *vm)
    * at runtime. */
   sonic_ext_set_punt_via_member (1);
   sonic_ext_set_host_xc (1);
+
+  /* Register the packet-trim binary API (sets trim_msg_id_base). */
+  {
+    clib_error_t *error = sonic_ext_trim_api_hookup (vm);
+    if (error)
+      return error;
+  }
 
   return 0;
 }

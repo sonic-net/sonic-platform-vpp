@@ -11,6 +11,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+include_directories(${CMAKE_SOURCE_DIR})
+
+# for generated API headers (sonic_ext_trim.api.*):
+include_directories(${CMAKE_BINARY_DIR})
+
 add_vpp_plugin(sonic_ext
   SOURCES
   sonic_ext.c
@@ -24,6 +29,13 @@ add_vpp_plugin(sonic_ext
   ip2me_node.c
   drop_member_stats_node.c
   cli.c
+  trim_admission_node.c
+  trim_node.c
+  trim_api.c
+  trim_cli.c
+
+  API_FILES
+  sonic_ext_trim.api
 
   API_FILES
   sonic_ext.api
