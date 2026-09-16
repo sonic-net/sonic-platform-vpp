@@ -11,8 +11,6 @@
 0005-version-support-custom-version-override.patch
 # 6. Fix curl conflicting -o and -O output options
 0006-fix-curl-conflicting-output-options.patch
-# 7. Track drop stats against original bond member interface
-0008-bond-drop-stats-track-original-member-interface.patch
 # 9. Add ipip mp2p tunnel
 0009-ipip-add-mp2p-ipip-tunnel.patch
 # 10. ip: add no-class-e-drop startup config option to suppress class E drop route
