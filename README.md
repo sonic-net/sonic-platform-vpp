@@ -1,15 +1,15 @@
 # Description
-SONiC-VPP is a platform under SONIC that supports VPP data plane. For more details about VPP see [What is VPP](https://s3-docs.fd.io/vpp/23.06/) 
+SONiC-VPP is a platform under SONIC that supports VPP data plane. For more details about VPP see [What is VPP](https://s3-docs.fd.io/vpp/23.06/)
 
 This repo contains  scripts, Makefiles, configuration file, Docker files etc to build a SONIC-VPP image. It also pulls some extra git repos and makes these repos part of SONiC build. In this process it will prompt for user/password while cloning. There are some VPP platform specific Makefile, config files which are applied to the sonic-buildimage repo to facilitate the successful build of the SONiC-VPP image.
 
 > Note: The first build takes good amount of time. The SONiC image build has two parts to it, [backend and frontend](https://github.com/sonic-net/sonic-buildimage/blob/master/README.buildsystem.md). The backend consumes a lot of time when the build is done first time. The follow on builds only do the frontend.
 
-**Caveat**- *The documentation for this project is a work in progress and a bit terse. We hope to address this in coming weeks.* 
+**Caveat**- *The documentation for this project is a work in progress and a bit terse. We hope to address this in coming weeks.*
 
 # Prerequisites
  * Linux host machine running Debian 12 ("Bookwork)", Ubuntu 18.x or later distribution (Ubuntu 20.x is preferred).
- * Install the following packages 
+ * Install the following packages
 
 ```
 sudo apt-get install -y make automake autoconf
@@ -56,18 +56,33 @@ sudo modprobe ip_tables iptable_nat iptable_filter
 
 ### Testing the single container image
 
-Refer to the [Getting started](docs/README.getting-started.md) document in docs directory for details. 
+Refer to the [Getting started](docs/README.getting-started.md) document in docs directory for details.
+NOTE:
+Unlike KVM image that goes through sonic-mgmt tests, there is no sanity test for container image.
 
-
-## Building a KVM VM image 
+## Building a KVM VM image
 1. git clone --recurse-submodules https://github.com/sonic-net/sonic-buildimage.git
 2. make init
 3. NOBULLSEYE=1 NOBUSTER=1 make configure PLATFORM=vpp
 4. NOBULLSEYE=1 NOBUSTER=1 make SONIC_BUILD_JOBS=4 target/sonic-vpp.img.gz
 ### Testing the qemu VM image
 
-Refer to the [document](docs/README.sonic_vm.md) in docs directory for details. 
+Refer to the [document](docs/README.sonic_vm.md) in docs directory for details.
 
+## How to run CI pipeline manually
+CI pipeline runs vpp build and test. Below is the procedure to manually run the steps in the CI pipeline
+```bash
+NOBULLSEYE=1 NOBUSTER=1 NOBOOKWORM=1 make sonic-slave-bash
+cd platform/vpp/vppbld
+make ci-build; make ci-test
+```
+
+Or run some specific tests after ci-build
+```bash
+NOBULLSEYE=1 NOBUSTER=1 NOBOOKWORM=1 make sonic-slave-bash
+cd platform/vpp/vppbld/repo
+make test PLATFORM=vpp TEST=vxlan6.TestVxlan6.test_mcast_rcv*
+```
 
 # Troubleshooting
 
