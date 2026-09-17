@@ -26,9 +26,18 @@
 
 sonic_ext_main_t sonic_ext_main;
 
+/*
+ * Default-disabled, like linux_cp_plugin.so which this plugin depends on:
+ * sonic-ext nodes name linux-cp nodes directly in their next-node arcs
+ * (e.g. sonic-ext-l2-trap-fixup -> "linux-cp-punt"), so loading sonic-ext
+ * without linux-cp makes vlib_node_main_init() fail to resolve them and
+ * aborts VPP startup.  Both SONiC startup.conf templates enable this
+ * plugin explicitly.
+ */
 VLIB_PLUGIN_REGISTER () = {
   .version = SONIC_EXT_PLUGIN_BUILD_VER,
   .description = "SONiC VPP extensions: punt-via-member, host-xc",
+  .default_disabled = 1,
 };
 
 /*
