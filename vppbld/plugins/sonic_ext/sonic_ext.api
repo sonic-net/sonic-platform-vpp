@@ -72,3 +72,155 @@ autoreply define sonic_ext_mirror_encap_fixup_enable_disable
   u8 hop_limit;
   bool enable;
 };
+
+/** \brief Bind (or unbind) an Ethernet ethertype to an existing VPP
+    policer object, enforced on the interface-output arc of every
+    linux-cp host TAP -- i.e. after linux-cp has already decided a
+    packet is CPU-bound and redirected it to the TAP, so this only
+    ever meters traffic already known to be punted (ARP/LACP/LLDP/
+    UDLD/TTL_ERROR), never ordinary forwarded traffic.
+
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param ethertype - the Ethernet ethertype to match (host byte
+           order, e.g. 0x0806 for ARP, 0x8809 for LACP, 0x88cc for
+           LLDP, or 0x0800 for match_ip4_ttl_expiring below)
+    @param policer_name - name of an existing VPP policer object
+           (created via policer_add, e.g. "copp-policer-0x<oid>")
+    @param is_bind - 1 to add/replace the binding, 0 to remove it
+    @param match_ip4_ttl_expiring - when true (only meaningful with
+           ethertype 0x0800), additionally requires the IPv4 header's
+           TTL to be <= 1 for a packet to match this entry -- this is
+           how CoPP's TTL_ERROR trap is implemented.
+*/
+define sonic_ext_copp_ifout_bind
+{
+  u32 client_index;
+  u32 context;
+  u16 ethertype;
+  string policer_name[64];
+  bool is_bind;
+  bool match_ip4_ttl_expiring;
+};
+
+define sonic_ext_copp_ifout_bind_reply
+{
+  u32 context;
+  i32 retval;
+};
+
+/** \brief Read back this feature's own conform/exceed/violate packet
+    counters for one bound ethertype.
+
+    @param ethertype - the ethertype to query counters for
+*/
+define sonic_ext_copp_ifout_get_counters
+{
+  u32 client_index;
+  u32 context;
+  u16 ethertype;
+};
+
+define sonic_ext_copp_ifout_get_counters_reply
+{
+  u32 context;
+  i32 retval;
+  u64 conform_packets;
+  u64 exceed_packets;
+  u64 violate_packets;
+};
+
+/** \brief Add or remove one IPv4 address from the IP2ME set enforced on
+    the ip4-punt feature arc (device-agnostic -- addresses are checked
+    regardless of which interface the packet arrived on, since ip4-punt
+    only runs after routing has already decided the packet is destined
+    to one of the router's own addresses).
+
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param addr - the IPv4 address (network byte order) to add/remove
+    @param is_add - 1 to add, 0 to remove
+*/
+define sonic_ext_copp_ip2me_addr_add_del
+{
+  u32 client_index;
+  u32 context;
+  u32 addr;
+  bool is_add;
+};
+
+define sonic_ext_copp_ip2me_addr_add_del_reply
+{
+  u32 context;
+  i32 retval;
+};
+
+/** \brief Bind (or unbind) the shared IP2ME policer used to meter all
+    currently-registered IP2ME addresses (SSH/SNMP/IP2ME all map to the
+    same SAI ip2me trap and therefore the same policer).
+
+    @param policer_name - name of an existing VPP policer object
+           (created via policer_add), looked up once via policer_main's
+           policer_index_by_name hash
+    @param is_bind - 1 to bind, 0 to unbind
+*/
+define sonic_ext_copp_ip2me_bind
+{
+  u32 client_index;
+  u32 context;
+  string policer_name[64];
+  bool is_bind;
+};
+
+define sonic_ext_copp_ip2me_bind_reply
+{
+  u32 context;
+  i32 retval;
+};
+
+/** \brief Bind (or unbind) an INDEPENDENT policer slot for BGP/BGPV6
+    traffic, matched by TCP destination port 179 rather than IP2ME's
+    destination-address set. BGP/BGPV6 are their own distinct SAI trap
+    types with their own trap group/policer (queue4_group1, separate
+    from ip2me's queue1_group1) -- this bind is looked up/cleared
+    strictly by policer_name, so installing or removing the bgp trap
+    can never disturb sonic_ext_copp_ip2me_bind()'s separate IP2ME/
+    SNMP/SSH slot, or vice versa.
+
+    @param policer_name - name of an existing VPP policer object
+           (created via policer_add), looked up once via policer_main's
+           policer_index_by_name hash
+    @param is_bind - 1 to bind, 0 to unbind
+*/
+define sonic_ext_copp_ip2me_bind_bgp
+{
+  u32 client_index;
+  u32 context;
+  string policer_name[64];
+  bool is_bind;
+};
+
+define sonic_ext_copp_ip2me_bind_bgp_reply
+{
+  u32 context;
+  i32 retval;
+};
+
+/** \brief Read back this feature's own conform/exceed/violate packet
+    counters.
+*/
+define sonic_ext_copp_ip2me_get_counters
+{
+  u32 client_index;
+  u32 context;
+};
+
+define sonic_ext_copp_ip2me_get_counters_reply
+{
+  u32 context;
+  i32 retval;
+  u64 conform_packets;
+  u64 exceed_packets;
+  u64 violate_packets;
+};
+

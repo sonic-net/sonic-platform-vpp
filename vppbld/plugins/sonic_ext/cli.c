@@ -16,6 +16,7 @@
 
 #include <vlib/vlib.h>
 #include <vppinfra/format.h>
+#include <vnet/ip/format.h>
 
 static clib_error_t *
 sonic_ext_punt_via_member_command_fn (vlib_main_t *vm,
@@ -145,6 +146,146 @@ VLIB_CLI_COMMAND (sonic_ext_ip2me_command, static) = {
   .path = "sonic-ext ip2me",
   .short_help = "sonic-ext ip2me <interface> <on|enable|off|disable>",
   .function = sonic_ext_ip2me_command_fn,
+};
+
+static clib_error_t *
+sonic_ext_copp_ifout_bind_command_fn (vlib_main_t *vm,
+				      unformat_input_t *input,
+				      vlib_cli_command_t *cmd)
+{
+  u32 ethertype = 0;
+  u8 *policer_name = 0;
+  int is_bind = 1;
+  int match_ip4_ttl_expiring = 0;
+  clib_error_t *error = 0;
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (input, "ethertype 0x%x", &ethertype))
+	;
+      else if (unformat (input, "ethertype %d", &ethertype))
+	;
+      else if (unformat (input, "policer %s", &policer_name))
+	;
+      else if (unformat (input, "match-ip4-ttl-expiring"))
+	match_ip4_ttl_expiring = 1;
+      else if (unformat (input, "del"))
+	is_bind = 0;
+      else
+	{
+	  error = clib_error_return (0, "unknown input `%U'",
+				    format_unformat_error, input);
+	  goto done;
+	}
+    }
+
+  if (ethertype == 0 || (is_bind && !policer_name))
+    {
+      error = clib_error_return (0, "usage: sonic-ext copp-ifout bind "
+				    "ethertype <0xNNNN> policer <name> "
+				    "[match-ip4-ttl-expiring] [del]");
+      goto done;
+    }
+
+  {
+    int rv = sonic_ext_copp_ifout_bind (
+      (u16) ethertype, policer_name ? (char *) policer_name : "", is_bind,
+      match_ip4_ttl_expiring);
+    if (rv)
+      error = clib_error_return (0, "bind failed: rv %d", rv);
+  }
+
+done:
+  vec_free (policer_name);
+  return error;
+}
+
+VLIB_CLI_COMMAND (sonic_ext_copp_ifout_bind_command, static) = {
+  .path = "sonic-ext copp-ifout bind",
+  .short_help = "sonic-ext copp-ifout bind ethertype <0xNNNN> policer <name> "
+		"[match-ip4-ttl-expiring] [del]",
+  .function = sonic_ext_copp_ifout_bind_command_fn,
+};
+
+static clib_error_t *
+show_sonic_ext_copp_ifout_command_fn (vlib_main_t *vm,
+				      unformat_input_t *input,
+				      vlib_cli_command_t *cmd)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+
+  vlib_cli_output (vm, "%-8s %-40s %-12s %10s %10s %10s %s",
+		   "ethtype", "policer-name", "vpp-idx",
+		   "conform", "exceed", "violate", "match");
+  for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
+    {
+      if (!sem->copp_ifout_entries[i].in_use)
+	continue;
+      vlib_cli_output (vm, "0x%04x   %-40s %-12d %10llu %10llu %10llu %s",
+		       sem->copp_ifout_entries[i].ethertype,
+		       sem->copp_ifout_entries[i].name,
+		       (i32) sem->copp_ifout_entries[i].policer_index,
+		       sem->copp_ifout_conform_packets[i],
+		       sem->copp_ifout_exceed_packets[i],
+		       sem->copp_ifout_violate_packets[i],
+		       sem->copp_ifout_entries[i].match_ip4_ttl_expiring ?
+			 "ip4-ttl<=1" : "-");
+    }
+
+  return 0;
+}
+
+VLIB_CLI_COMMAND (show_sonic_ext_copp_ifout_command, static) = {
+  .path = "show sonic-ext copp-ifout",
+  .short_help = "show sonic-ext copp-ifout",
+  .function = show_sonic_ext_copp_ifout_command_fn,
+};
+
+static clib_error_t *
+show_sonic_ext_copp_ip2me_command_fn (vlib_main_t *vm, unformat_input_t *input,
+				      vlib_cli_command_t *cmd)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+
+  vlib_cli_output (vm, "%-30s %-8s %-7s %-9s %10s %10s %10s", "policer",
+		   "vpp-idx", "kind", "match", "conform", "exceed", "violate");
+  for (u32 i = 0; i < sem->copp_ip2me_n_policers; i++)
+    {
+      sonic_ext_copp_ip2me_policer_t *pol = &sem->copp_ip2me_policers[i];
+
+      if (!pol->in_use)
+	continue;
+
+      if (pol->match_kind == SONIC_EXT_COPP_IP2ME_MATCH_ADDR)
+	vlib_cli_output (vm, "%-30s %-8d %-7s %-9s %10llu %10llu %10llu",
+			 pol->name, (i32) pol->policer_index, "addr", "-",
+			 pol->conform_packets, pol->exceed_packets,
+			 pol->violate_packets);
+      else
+	vlib_cli_output (vm, "%-30s %-8d %-7s tcp/%-5d %10llu %10llu %10llu",
+			 pol->name, (i32) pol->policer_index, "tcp-dport",
+			 pol->match_tcp_dport, pol->conform_packets,
+			 pol->exceed_packets, pol->violate_packets);
+    }
+
+  vlib_cli_output (vm, "%-8s addresses (legacy shared IP2ME/SNMP/SSH slot "
+		   "only):", "count");
+  vlib_cli_output (vm, "%u", sem->copp_ip2me_n_addrs);
+  for (u32 i = 0; i < sem->copp_ip2me_n_addrs; i++)
+    {
+      if (!sem->copp_ip2me_addrs[i].in_use)
+	continue;
+      vlib_cli_output (vm, "  %U", format_ip4_address,
+		       &sem->copp_ip2me_addrs[i].addr);
+    }
+
+  return 0;
+}
+
+VLIB_CLI_COMMAND (show_sonic_ext_copp_ip2me_command, static) = {
+  .path = "show sonic-ext copp-ip2me",
+  .short_help = "show sonic-ext copp-ip2me",
+  .function = show_sonic_ext_copp_ip2me_command_fn,
 };
 
 static clib_error_t *

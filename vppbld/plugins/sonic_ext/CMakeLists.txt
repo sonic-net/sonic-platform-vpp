@@ -23,6 +23,9 @@ add_vpp_plugin(sonic_ext
   l2_vlan_filter_node.c
   ip2me_node.c
   drop_member_stats_node.c
+  copp_ifout_node.c
+  copp_ip2me_node.c
+  copp_udld_node.c
   cli.c
   egress_mirror_node.c
   mirror_encap_fixup_node.c
