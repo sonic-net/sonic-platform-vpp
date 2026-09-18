@@ -89,30 +89,13 @@
  * VLAN before re-entering interface-output on the member tap, so
  * Linux observes the same wire frame on the right netdev.
  */
-/*
- * copp_ifout_entry_idx: index into sonic_ext_main_t.copp_ifout_entries[],
- * pre-resolved by a producer node that has already identified the packet's
- * CoPP class through real protocol dispatch (not a positional byte read).
- * ~0 means "no pre-resolved entry -- fall back to the ethertype/length-byte
- * match". Set by sonic-ext-copp-udld: UDLD is not Ethernet-II (its 14th/15th
- * wire bytes are an 802.3 *length* field, not an EtherType, and that length
- * varies with the real TLV payload a UDLD frame carries), so matching it by
- * byte value in sonic-ext-copp-ifout the way ARP/LACP/LLDP/TTL_ERROR's real
- * EtherTypes are matched cannot work in general -- only a specific test
- * packet of exactly one length would ever match. sonic-ext-copp-udld reaches
- * this packet via VPP's real LLC-null / LLC+SNAP+Cisco-UDLD-OUI dispatch
- * (genuine protocol identification, not a length guess), so it looks up the
- * right copp_ifout_entries[] slot itself and tags it here; sonic-ext-copp-
- * ifout then polices using the tag directly instead of re-deriving (and
- * getting wrong) a match from wire bytes.
- */
 typedef struct
 {
   u32 magic;
   u32 orig_rx_sw_if_index;
   u32 orig_vlan_tag;
   u32 mirror_sw_if_index; /* deferred egress mirror dst; ~0 = none */
-  u32 copp_ifout_entry_idx;
+  u32 copp_ifout_entry_idx; /*  index into sonic_ext_main_t.copp_ifout_entries[] */
 } sonic_ext_buffer_opaque_t;
 
 STATIC_ASSERT (sizeof (sonic_ext_buffer_opaque_t) <=
@@ -136,8 +119,7 @@ typedef struct
 
 /*
  * sonic-ext-copp-ifout: interface-output CoPP policer for
- * ARP/LACP/LLDP/UDLD/TTL_ERROR. See copp_ifout_node.c for the full
- * design rationale (why interface-output, not device-input).
+ * ARP/LACP/LLDP/UDLD/TTL_ERROR.
  */
 #define SONIC_EXT_COPP_IFOUT_MAX_ENTRIES 16
 #define SONIC_EXT_COPP_IFOUT_NAME_LEN 64
@@ -151,12 +133,6 @@ typedef struct
   u8 match_ip4_ttl_expiring; /* TTL_ERROR trap */
 } sonic_ext_copp_ifout_entry_t;
 
-/*
- * sonic-ext-copp-ip2me: IPv4 destination addresses considered "IP2ME"
- * (traffic destined to one of the router's own addresses reaching
- * ip4-punt) plus the shared policer binding for IP2ME/SNMP/SSH. See
- * copp_ip2me_node.c for the full design rationale.
- */
 #define SONIC_EXT_COPP_IP2ME_MAX_ADDRS 256
 
 typedef struct
@@ -166,20 +142,8 @@ typedef struct
 } sonic_ext_copp_ip2me_addr_t;
 
 /*
- * sonic-ext-copp-ip2me now supports more than one independently
- * bound policer on the ip4-punt arc, keyed by SAI trap group (one
- * VPP policer object per trap group, named "copp-policer-0x<oid>").
- * IP2ME/SNMP/SSH share a single SAI trap type/policer and use table
- * slot kind ADDR (matched by destination IPv4 address, the
- * pre-existing behavior). BGP/BGPV6 are a genuinely distinct SAI
- * trap type/trap-group/policer and are matched by TCP destination
- * port 179 instead -- BGP has no address set of its own (it rides on
- * whichever router-interface IP the peer dials, same as IP2ME
- * addresses, but keyed by port rather than address so its own
- * install/uninstall never disturbs IP2ME/SNMP/SSH's binding or vice
- * versa). Each slot is independently bound/unbound so disabling one
- * SAI trap only ever removes its own slot -- see
- * sonic_ext_copp_ip2me_bind_keyed() in copp_ip2me_node.c.
+ * sonic-ext-copp-ip2me supports more than one independently bound
+ * policer on the ip4-punt arc, keyed by SAI trap group
  */
 #define SONIC_EXT_COPP_IP2ME_MAX_POLICERS 8
 
@@ -245,9 +209,6 @@ typedef struct
   u64 copp_ifout_exceed_packets[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
   u64 copp_ifout_violate_packets[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
 
-  /* sonic-ext-copp-ip2me: IP2ME/SNMP/SSH/BGP/BGPV6 policing on
-   * ip4-punt, keyed per SAI trap group -- see
-   * sonic_ext_copp_ip2me_policer_t above. */
   sonic_ext_copp_ip2me_addr_t copp_ip2me_addrs[SONIC_EXT_COPP_IP2ME_MAX_ADDRS];
   u32 copp_ip2me_n_addrs;
   sonic_ext_copp_ip2me_policer_t copp_ip2me_policers[SONIC_EXT_COPP_IP2ME_MAX_POLICERS];
@@ -350,43 +311,22 @@ int sonic_ext_acl_deferred_mirror_stamp (vlib_buffer_t *b, u32 rx_sw_if_index,
 					 u32 mirror_sw_if_index);
 
 /*
- * sonic-ext-copp-ifout: enable/disable the interface-output CoPP
- * policer feature on a given TAP sw_if_index. Driven from the LCP
- * pair add/del callback -- see sonic_ext.c.
+ * enable/disable the interface-output CoPP policer feature on a given
+ * TAP sw_if_index.
  */
 void sonic_ext_copp_ifout_enable_disable (u32 sw_if_index, int enable);
 
 /*
- * sonic-ext-copp-ifout: look up an entry by wire ethertype/length value.
- * Exposed so sonic-ext-copp-udld can pre-resolve UDLD's entry via real
- * protocol dispatch (LLC-null / LLC+SNAP+Cisco-UDLD) and tag the buffer
- * with the result -- see sonic_ext_buffer_opaque_t.copp_ifout_entry_idx.
+ * look up an entry by wire ethertype/length value.
  * Returns -1 if no matching in-use entry exists.
  */
 int sonic_ext_copp_ifout_find_entry (sonic_ext_main_t *sem, u16 ethertype);
 
 /*
- * sonic-ext-copp-ifout: bind (or unbind) an ethertype -> policer-name
- * entry consulted by the interface-output node above. See
- * copp_ifout_node.c for the full semantics (mirrors the predecessor
- * copp_punt_policer plugin's copp_punt_policer_bind()).
+ * bind (or unbind) an ethertype -> policer-name
  */
 int sonic_ext_copp_ifout_bind (u16 ethertype, const char *policer_name,
 			       int is_bind, int match_ip4_ttl_expiring);
-
-/*
- * sonic-ext-copp-ip2me: add/remove an IP2ME address (used by
- * IP2ME/SNMP/SSH's address-match slot only -- BGP/BGPV6 do not use
- * an address set, see sonic_ext_copp_ip2me_match_kind_t above), and
- * bind/unbind a policer for a specific SAI trap group's traffic
- * class. sonic_ext_copp_ip2me_bind() is the legacy shared
- * IP2ME/SNMP/SSH address-match slot; sonic_ext_copp_ip2me_bind_bgp()
- * binds/unbinds a SEPARATE slot matched by TCP dst port 179, so BGP's
- * own install/uninstall never disturbs IP2ME/SNMP/SSH's binding (and
- * vice versa) -- each SAI trap's classify call must pass its own
- * trap group's unique "copp-policer-0x<oid>" policer_name. See
- * copp_ip2me_node.c.
- */
 int sonic_ext_copp_ip2me_addr_add_del (u32 addr, int is_add);
 int sonic_ext_copp_ip2me_bind (const char *policer_name, int is_bind);
 int sonic_ext_copp_ip2me_bind_bgp (const char *policer_name, int is_bind);

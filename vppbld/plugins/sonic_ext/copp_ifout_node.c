@@ -16,7 +16,6 @@
  *
  * CoPP per-ethertype rate policing for ARP/LACP/LLDP/UDLD/TTL_ERROR,
  * enforced on the `interface-output` arc of each linux-cp-paired TAP
- * -- NOT on `device-input` (see history below).
  *
  * BACKGROUND (sonic-net/sonic-buildimage#25801, SONiC-on-VPP CoPP HLD):
  * VPP's existing classify-based policer feature (policer-classify)
@@ -25,45 +24,6 @@
  * any of those arcs -- ethernet-input dispatches it directly to
  * arp-input / linux-cp-punt-xc, which punt straight to the TAP with
  * no policer consulted at all.
- *
- * REVISION HISTORY: the first implementation of this policer
- * (`copp_punt_policer`, a standalone plugin) registered its
- * classify+police node on `device-input`, running unconditionally on
- * every packet on every physical interface. Review feedback
- * (sonic-net/SONiC#2539, yue-fred-gao) correctly flagged that this
- * pays a per-packet tax (measured ~50ns/pkt) on the ~100% of ordinary
- * forwarded traffic that never matches, and asked whether the policer
- * could instead run on the punt path itself. Confirmed by reading
- * linux-cp/lcp_node.c: linux-cp-punt / linux-cp-punt-xc (the ARP/
- * LACP/LLDP/UDLD/TTL_ERROR path) and lcp_arp_phy_node all set
- * VLIB_TX = the phy's paired TAP and dispatch straight to
- * `interface-output`, rewinding the buffer back to an intact,
- * unmodified Ethernet frame first -- so by the time ANY of these
- * protocols reaches interface-output on the TAP, the frame layout is
- * exactly what device-input classification was already parsing. This
- * node moved the same classify+meter logic there: it now only ever
- * sees traffic VPP has ALREADY decided is CPU-bound, not the 100% of
- * ordinary transit traffic device-input classification paid a tax on
- * regardless of match.
- *
- * Also per reviewer feedback (yue-fred-gao, sonic-net/SONiC#2539,
- * 2026-09-14), this was folded into the existing sonic_ext plugin
- * (rather than a new standalone plugin) to avoid growing the plugin
- * count for closely related SONiC-on-VPP dataplane features.
- *
- * NOT covered here: BGPV6 / IPv6 ND. Those already worked via VPP's
- * own ip6-unicast classify-policer arc before this project.
- *
- * Delivery: a conforming/unmatched packet simply continues the
- * interface-output arc unchanged (falls through to TX) -- linux-cp
- * already set VLIB_TX before this node runs, so there is no manual
- * TAP-redirect step. Exceed/violate go to error-drop.
- *
- * Per-TAP feature binding is driven by the LCP pair add/del callback
- * (see sonic_ext.c's sonic_ext_lcp_pair_add_cb/_del_cb), the same
- * mechanism sonic-ext-aggr-tap-redirect already uses -- this survives
- * `config reload` (unlike a manual CLI bind, which does not), since
- * the callback re-fires for every LCP pair recreated during reload.
  */
 
 #include <sonic_ext/sonic_ext.h>
@@ -177,13 +137,8 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
   ethertype = clib_net_to_host_u16 (eth->type);
   *out_ethertype = ethertype;
 
-  /* Pre-resolved match wins over the byte-match loop below. Set only by
-   * sonic-ext-copp-udld, which reaches this packet via VPP's real LLC-null /
-   * LLC+SNAP+Cisco-UDLD-OUI dispatch -- genuine protocol identification.
-   * UDLD's wire bytes at this offset are an 802.3 *length* field, not an
-   * EtherType, and that length varies with the frame's actual TLV payload,
-   * so it cannot be matched here the way ARP/LACP/LLDP/TTL_ERROR's real
-   * EtherTypes are. See sonic_ext_buffer_opaque_t.copp_ifout_entry_idx. */
+  /* Pre-resolved match wins over the byte-match loop below.
+   * Set by sonic-ext-copp-udld */
   {
     sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b);
 
@@ -379,16 +334,10 @@ VLIB_REGISTER_NODE (sonic_ext_copp_ifout_node) = {
 };
 
 /*
- * Feature binding is per-TAP (the LCP host tap of every real phy --
+ * Feature binding for every LCP host tap of every real phy --
  * not aggregate/BVI/bond taps, which have no CoPP-punted ARP/LACP/
  * LLDP/UDLD/TTL_ERROR traffic of their own; those protocols are
- * always punted to the *member* phy's own tap, never the aggregate's).
- * Driven from the LCP pair add/del callback in sonic_ext.c, exactly
- * like sonic-ext-aggr-tap-redirect and sonic-ext-host-xc already are
- * -- this is what makes the binding survive `config reload` (a plain
- * per-run manual CLI bind would not: LCP pairs, and hence their
- * taps, are recreated on every reload, but the callback re-fires for
- * each one as it comes back).
+ * always punted to the member phy's own tap, never the aggregate's).
  */
 void
 sonic_ext_copp_ifout_enable_disable (u32 sw_if_index, int enable)

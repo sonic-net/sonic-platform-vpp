@@ -191,11 +191,6 @@ vl_api_sonic_ext_copp_ip2me_get_counters_t_handler (
   int rv = 0;
   u64 conform = 0, exceed = 0, violate = 0;
 
-  /* Aggregate across every bound policer slot (legacy address-match
-   * IP2ME/SNMP/SSH slot plus any TCP-dst-port slots such as BGP/
-   * BGPV6) -- this API predates the multi-slot design and callers
-   * only ever used it for the single shared IP2ME counter, so summing
-   * preserves that behavior for anyone still calling it that way. */
   for (u32 i = 0; i < sem->copp_ip2me_n_policers; i++)
     {
       if (!sem->copp_ip2me_policers[i].in_use)
@@ -215,7 +210,6 @@ vl_api_sonic_ext_copp_ip2me_get_counters_t_handler (
 
 /* API definitions */
 #include <sonic_ext/sonic_ext.api.c>
-
 
 static clib_error_t *
 sonic_ext_api_init (vlib_main_t *vm)

@@ -15,39 +15,8 @@
  * sonic-ext-copp-ip2me: CoPP enforcement for IP2ME/SNMP/SSH traffic --
  * traffic destined to one of the router's own IPv4 addresses that VPP's
  * dataplane does not answer itself (see sonic-net/sonic-buildimage#25801,
- * SONiC-on-VPP CoPP HLD). Folded into sonic_ext (formerly the standalone
- * copp_ip2me_policer plugin) alongside sonic-ext-copp-ifout, per the
- * same reviewer feedback (yue-fred-gao, sonic-net/SONiC#2539) to avoid
- * growing the plugin count for closely related SONiC-on-VPP dataplane
- * features.
+ * SONiC-on-VPP CoPP HLD). 
  *
- * BACKGROUND: VPP's built-in classify-based policer feature
- * (ip4-policer-classify, on the ip4-unicast arc) only meters traffic on
- * whichever interface it has been explicitly bound to. Since the
- * classify table matches purely on destination IP, IP2ME traffic
- * destined to router-interface A's address can legitimately arrive on
- * router-interface B -- if B never had the feature bound, that traffic
- * skips policing entirely and reaches VPP's ip4-punt-redirect mechanism
- * completely unpoliced. Binding to every possible L3 ingress interface
- * is the fix VPP's own classify feature requires, but it needs lazy,
- * per-RIF VAPI calls (deferred to avoid syncd's SAI-call watchdog) and
- * has proven fragile in practice.
- *
- * This node avoids the whole binding-scope problem by living on
- * ip4-punt instead: a single, always-on, global feature arc that every
- * packet reaching this point has already been routed through
- * (ip4-lookup -> ip4-local -> ip4-punt), regardless of which interface
- * it arrived on. No per-interface binding is needed -- ip4-punt is
- * reached the same way no matter the ingress interface, once VPP's own
- * dataplane has already concluded "nothing here handles this packet, it
- * needs the host." That is exactly SAI's IP2ME semantics, so this
- * node only needs to answer one question (is the destination address
- * one we're tracking?) and apply the existing SAI-created policer
- * object, then let the packet continue unchanged to ip4-punt-redirect
- * (conform) or drop it (exceed/violate) -- it never needs to redirect
- * to a TAP itself, unlike sonic-ext-copp-ifout's interface-output node,
- * since ip4-punt-redirect already does that for every packet that
- * reaches it.
  */
 
 #include <sonic_ext/sonic_ext.h>
@@ -395,12 +364,7 @@ VLIB_REGISTER_NODE (sonic_ext_copp_ip2me_node) = {
 };
 
 /*
- * ip4-punt is a global feature arc, not per-interface -- enable this
- * feature on it ONCE at init, unconditionally, the same way
- * ip4-punt-redirect itself is always enabled. No per-interface
- * enable/disable call is needed or ever made (unlike sonic-ext-copp-
- * ifout, which has to do this per-TAP because interface-output is a
- * per-interface arc; ip4-punt is not).
+ * ip4-punt is a global feature arc, not per-interface
  */
 VNET_FEATURE_INIT (sonic_ext_copp_ip2me_feat, static) = {
   .arc_name = "ip4-punt",
@@ -535,10 +499,7 @@ sonic_ext_copp_ip2me_bind (const char *policer_name, int is_bind)
 int
 sonic_ext_copp_ip2me_bind_bgp (const char *policer_name, int is_bind)
 {
-  /* BGP/BGPV6 both use TCP dst port 179 on the wire; matched
-   * independently of the address set (see sonic_ext_copp_ip2me_x1())
-   * so BGP's own install/uninstall never disturbs IP2ME/SNMP/SSH's
-   * address-match slot, and vice versa. */
+  /* BGP/BGPV6 both use TCP dst port 179 on the wire */
   return sonic_ext_copp_ip2me_bind_slot (policer_name, is_bind,
 					 SONIC_EXT_COPP_IP2ME_MATCH_TCP_DPORT,
 					 179);

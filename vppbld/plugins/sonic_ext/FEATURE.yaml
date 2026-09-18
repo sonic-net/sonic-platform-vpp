@@ -3,12 +3,9 @@ maintainer: SONiC-VPP contributors
 features:
   - punt-via-member: redirect punted unicast/ARP over aggregated interface (BVI, Bond) to the original member tap
   - host-xc: bypass ethernet-input for packets injected from the linux-cp host tap
-  - copp-ifout: per-ethertype CoPP rate policing (ARP, LACP, LLDP, UDLD,
-    TTL_ERROR) on the interface-output arc of every linux-cp host TAP --
-    only meters traffic already decided to be punted, never ordinary
-    forwarded traffic
-  - copp-ip2me: CoPP rate policing for IP2ME/SNMP/SSH traffic on the
-    global ip4-punt arc, ahead of ip4-punt-redirect
+  - copp-ifout: per-ethertype CoPP rate policing of punted traffic (ARP/LACP/LLDP/UDLD/TTL_ERROR) at linux-cp TAP egress
+  - copp-ip2me: CoPP identifier IP2ME/SNMP/SSH traffic on the ip4-punt arc
+  - copp-udld: CoPP identifier for UDLD via real LLC/SNAP dispatch
 description: "VPP extensions for SONiC features"
 state: experimental
 properties: [API, CLI]

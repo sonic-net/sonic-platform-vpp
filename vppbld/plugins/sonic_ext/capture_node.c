@@ -113,11 +113,7 @@ VLIB_NODE_FN (sonic_ext_capture_node)
 
       seb->magic = SONIC_EXT_BUFFER_MAGIC;
 
-      /* No pre-resolved copp-ifout entry yet -- sonic-ext-copp-udld sets
-       * this to a real index for the one class of traffic (UDLD) that
-       * cannot be matched by sonic-ext-copp-ifout's own ethertype/length
-       * byte read. Every other packet leaves this as ~0 and copp-ifout
-       * falls back to its normal byte-match path unchanged. */
+      /* sonic-ext-copp-udld sets this to a real index for UDLD traffic */
       seb->copp_ifout_entry_idx = ~0;
       n_captured++;
 

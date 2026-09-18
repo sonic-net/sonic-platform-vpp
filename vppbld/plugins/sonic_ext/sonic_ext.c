@@ -425,18 +425,6 @@ sonic_ext_lcp_pair_add_cb (lcp_itf_pair_t *lip)
     sonic_ext_host_xc_enable_disable (lip->lip_host_sw_if_index, 1);
   if (sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 1);
-  /* sonic-ext-copp-ifout: bind ONLY on a direct/member phy's own host
-   * tap, never on an aggregate's (bond/BVI) own host tap. For a bond
-   * member, ARP/LACP/LLDP/UDLD/TTL_ERROR is first punted to the
-   * *aggregate's* tap (see sonic-ext-aggr-tap-redirect's header
-   * comment), which redirects it onward to the member's own tap and
-   * re-enters interface-output there. If this policer were also
-   * bound on the aggregate tap, that single physical packet would be
-   * policed twice (once per interface-output pass) against the same
-   * shared CIR budget -- confirmed live: policer hit-count ran ~3x
-   * the actual packets sent, starving real delivery. Binding only on
-   * non-aggregate taps polices each packet exactly once, on its
-   * final (member) tap. */
   if (!sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 1);
 }
@@ -458,14 +446,6 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
     sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 0);
 }
 
-
-/*
- * lcp_itf_pair_walk callback: enable sonic-ext-copp-ifout on this
- * pair's host tap. Used at plugin-init time to catch pairs created
- * before the plugin's own VLIB_INIT_FUNCTION ran (shouldn't normally
- * happen given plugin init ordering, but mirrors the same
- * belt-and-suspenders pattern host-xc/aggr-tap-redirect already use).
- */
 static walk_rc_t
 sonic_ext_copp_ifout_walk_enable_cb (index_t lipi, void *ctx)
 {
@@ -681,32 +661,10 @@ sonic_ext_init (vlib_main_t *vm)
 
   sonic_ext_register_acl_deferred_mirror ();
 
-  /* sonic-ext-copp-ifout has no on/off toggle -- it always binds, and
-   * relies on its own (initially empty) bind table to no-op until
-   * something is actually bound via sonic_ext_copp_ifout_bind(). Walk
-   * any pre-existing pairs for the same belt-and-suspenders reason as
-   * above; going forward the LCP pair add/del callback keeps it in
-   * sync, including across `config reload`. */
   lcp_itf_pair_walk (sonic_ext_copp_ifout_walk_enable_cb, NULL);
-
-  /* sonic-ext-copp-ip2me is a single global feature on the ip4-punt
-   * arc (dispatched with sw_if_index 0, same as glean-redirect on
-   * ip4-drop/ip6-drop above) -- enable it once, unconditionally, at
-   * init. No per-interface binding is needed or ever done: the node
-   * self-scopes via its own (initially empty) tracked-address table
-   * and no-ops until addresses are added via
-   * sonic_ext_copp_ip2me_addr_add_del() / bound via
-   * sonic_ext_copp_ip2me_bind(). Without this call the node is only
-   * registered in the ip4-punt arc's graph (which is why `show
-   * sonic-ext copp-ip2me` reports it as bound with addresses) but
-   * never actually visited by any packet, silently letting all IP2ME/
-   * SNMP/SSH/BGP traffic through completely unpoliced. */
-  vnet_feature_enable_disable ("ip4-punt", "sonic-ext-copp-ip2me", 0, 1, 0,
-			       0);
+  vnet_feature_enable_disable ("ip4-punt", "sonic-ext-copp-ip2me", 0, 1, 0, 0);
 
   return 0;
 }
 
 VLIB_INIT_FUNCTION (sonic_ext_init);
-
-

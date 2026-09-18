@@ -14,21 +14,10 @@
  *
  * sonic-ext-copp-udld
  *
- * CoPP punt+policer path for UDLD -- a protocol sonic-ext-copp-ifout
- * (see its own file header) CANNOT see, for a reason specific to
- * UDLD alone among ARP/LACP/LLDP/UDLD/TTL_ERROR: UDLD is not
- * Ethernet-II. Its 14th/15th wire bytes (0x0067 = 103) are BELOW
- * 0x0600, so per 802.3 they are a *length* field, not an EtherType.
+ * CoPP punt+policer path for UDLD. UDLD is not Ethernet-II. 
  * VPP's ethernet-input hard-codes this threshold
  * (eth_input_next_by_type(): "etype < 0x600 ? LLC : ...") and always
- * routes such frames to `llc-input` -- there is no configuration
- * knob to send a sub-0x600 frame down the normal EtherType-classify
- * path sonic-ext-copp-ifout hooks. Confirmed live via `vppctl show
- * trace` + `show error`: a UDLD frame sent to the DUT produces
- * `llc-input: unknown llc ssap/dsap` and is dropped inside VPP core,
- * before sonic-ext-copp-ifout's feature node on interface-output
- * ever runs.
- *
+ * routes such frames to `llc-input`
  * Two wire encodings of UDLD both dead-end the same way and both
  * need a registered handler here:
  *
@@ -79,12 +68,6 @@
  *      because nothing ever reached it) does the actual policing,
  *      counting, and conform/exceed/violate accounting, with no
  *      duplicated logic here.
- *
- * If no LCP pair exists for the ingress phy (e.g. UDLD received on
- * an interface VPP doesn't manage as an LCP pair), the packet is
- * dropped -- there is no sane TAP to deliver it to, and silently
- * falling through to interface-output on whatever left-over VLIB_TX
- * happened to be set would misdeliver it.
  */
 
 #include <sonic_ext/sonic_ext.h>
@@ -148,18 +131,6 @@ typedef enum
   SONIC_EXT_COPP_UDLD_N_NEXT,
 } sonic_ext_copp_udld_next_t;
 
-/* Cached "interface-output" feature-arc index. sonic-ext-copp-ifout is a
- * feature node on that arc; reaching it via a direct graph next-node jump
- * (as this node does, from an LLC/SNAP dead end rather than the real
- * interface-output dispatch) leaves b->current_config_index holding
- * whatever stale value was set by the arc this packet last actually went
- * through (e.g. device-input) -- sonic-ext-copp-ifout's own
- * vnet_feature_next() call then reads that garbage and computes a bogus
- * next-next index. vnet_feature_arc_start() below re-initializes it
- * correctly for interface-output on the TAP we are about to redirect to,
- * exactly as if the packet had entered this arc normally. Resolved lazily
- * on first use since vnet_get_feature_arc_index() needs the feature
- * subsystem to have finished its own init first. */
 static u8 sonic_ext_copp_udld_ifout_arc_index = (u8) ~0;
 
 VLIB_NODE_FN (sonic_ext_copp_udld_node)
@@ -183,21 +154,6 @@ VLIB_NODE_FN (sonic_ext_copp_udld_node)
 
   while (n_left_from > 0)
     {
-      /* On a LAG member port, VPP's bond plugin (vnet/bonding/node.c)
-       * rewrites sw_if_index[VLIB_RX] from the physical member to the
-       * bond aggregate for any ethertype it does not itself special-case
-       * (LACP/CDP/LLDP are let through unrewritten -- that is specifically
-       * why those protocols' CoPP punts land on the right member tap while
-       * UDLD, an ordinary ethertype from the bond plugin's point of view,
-       * does not). Before doing so it saves the true member interface into
-       * vnet_buffer2(b)->orig_rx_sw_if_index (left 0 -- never a valid
-       * sw_if_index -- when no rewrite happened). Prefer that saved value
-       * so a LAG-member UDLD punt resolves to the member's own LCP tap,
-       * not the bond's, matching LACP/LLDP's behavior. Confirmed live via
-       * `vppctl show trace`: without this, UDLD on a bond member landed on
-       * the bond's own tap (e.g. tap4134/be120) instead of the member's
-       * (e.g. tap4109/Ethernet48), so a listener on the member's tap never
-       * saw it even though CoPP policing itself was correct. */
       u32 orig_rx0 = vnet_buffer2 (b[0])->orig_rx_sw_if_index;
       u32 rx0 = orig_rx0 ? orig_rx0 : vnet_buffer (b[0])->sw_if_index[VLIB_RX];
       u32 tx0 = ~0;
@@ -215,11 +171,8 @@ VLIB_NODE_FN (sonic_ext_copp_udld_node)
 	{
 	  const lcp_itf_pair_t *lip = lcp_itf_pair_get (lipi);
 
-	  /* Rewind past whatever llc-input (and, for the real-SNAP
-	   * path, snap-input too) already consumed so
-	   * sonic-ext-copp-ifout sees an intact Ethernet header, the
-	   * same way sonic_ext_redirect_to_ingress_tap() restores
-	   * to l2_hdr_offset for the aggregate-tap redirect path. */
+	  /* Rewind past whatever llc-input already consumed so
+	   * sonic-ext-copp-ifout sees an intact Ethernet header */
 	  i32 adv = (i32) vnet_buffer (b[0])->l2_hdr_offset -
 		    (i32) b[0]->current_data;
 	  if (adv)
@@ -230,16 +183,7 @@ VLIB_NODE_FN (sonic_ext_copp_udld_node)
 
 	  /* Pre-resolve the copp-ifout entry for UDLD via the key SAI bound
 	   * it under (SwitchVppHostifTrap.cpp's SONIC_EXT_COPP_UDLD_ETHERTYPE),
-	   * and tag the buffer with it. Real protocol dispatch got us here
-	   * (LLC-null or LLC+SNAP+Cisco-UDLD-OUI), unlike copp-ifout's own
-	   * fallback match, which reads a fixed wire-byte offset that for
-	   * UDLD holds an 802.3 *length* field (varies with the frame's
-	   * actual TLV payload) rather than a stable EtherType -- that byte
-	   * match can never reliably identify UDLD in general. Leaving the
-	   * tag unset (sonic-ext-capture's ~0 default) if the entry isn't
-	   * bound yet is fine: copp-ifout's fallback path then finds nothing
-	   * either and passes the packet through unpoliced, same as today
-	   * before this trap is configured. */
+	   * and tag the buffer with it. */
 	  {
 	    sonic_ext_main_t *sem = &sonic_ext_main;
 	    int ifout_idx = sonic_ext_copp_ifout_find_entry (
@@ -253,13 +197,7 @@ VLIB_NODE_FN (sonic_ext_copp_udld_node)
 	  }
 
 	  /* Re-initialize the interface-output feature-arc position for
-	   * this buffer on the TAP we're redirecting to -- see comment
-	   * on sonic_ext_copp_udld_ifout_arc_index above. Without this,
-	   * sonic-ext-copp-ifout's vnet_feature_next() reads whatever
-	   * stale current_config_index this buffer had from the arc it
-	   * actually traversed (e.g. device-input), producing a bogus
-	   * next node -- observed live: conforming UDLD packets landed
-	   * in ip4-drop instead of ever reaching the TAP. */
+	   * this buffer on the TAP we're redirecting to */
 	  {
 	    u32 dummy_next;
 	    vnet_feature_arc_start (sonic_ext_copp_udld_ifout_arc_index, tx0,
@@ -319,50 +257,15 @@ VLIB_REGISTER_NODE (sonic_ext_copp_udld_node) = {
 };
 
 /*
- * Register with both LLC dead ends UDLD can arrive at -- see file
- * header for why both are needed. Run from a VLIB_INIT_FUNCTION (not
- * the plugin's main VLIB_PLUGIN_REGISTER-time init) so this runs
- * once, after llc-input/snap-input's own node-graph init functions
- * (llc_input_init / snap_input_init) have already run and registered
- * the node graph edges these calls extend -- both
- * llc_register_input_protocol() and snap_register_input_protocol()
- * internally call vlib_call_init_function() on their respective
- * *_input_init first if needed, so ordering here is self-managing.
+ * Register with both LLC dead ends UDLD can arrive at
  */
-/* sonic-mgmt's own PTF UDLDTest (copp/test_copp.py's construct_packet, via
- * ptf.testutils.simple_eth_packet with no explicit payload) sends the
- * minimal frame described in case 2 above, but its payload filler is NOT
- * null bytes -- ptf.testutils.simple_eth_packet pads with the ASCII
- * character '0' (pkt / ("0" * (pktlen - len(pkt))), confirmed in the
- * vendored ptf/testutils.py). That puts LLC dsap=ssap=0x30 (ASCII '0'), not
- * 0x00/LLC_PROTOCOL_null, on the wire for every packet this specific test
- * tool generates. Confirmed live via `vppctl show trace`: with only
- * LLC_PROTOCOL_null (0x00) registered, this exact traffic hits
- * llc-input's own "unknown llc ssap/dsap" drop and never reaches this
- * node at all.
- *
- * llc_register_input_protocol() cannot be called with 0x30 -- it looks up
- * llc_protocol_info_t via llc_get_protocol_info(), which only resolves the
- * ~20 SAP values VPP's own vnet/llc/llc.h foreach_llc_protocol table lists
- * (0x30 is not one), and unconditionally dereferences a NULL result --
- * confirmed by crash: SIGSEGV in llc_register_input_protocol when called
- * with 0x30. The actual dispatch llc-input's node reads at runtime is a
- * much simpler public array, llc_main.input_next_by_protocol[256], indexed
- * directly by the wire dsap byte (see vnet/llc/node.c); the crash-prone
- * llc_get_protocol_info() bookkeeping exists only for named-protocol CLI
- * introspection this plugin does not need. sonic_ext_copp_udld_register_llc_sap()
- * below writes that array directly for 0x30, via the same vlib_node_add_next()
- * primitive llc_register_input_protocol() itself uses, without touching the
- * SAP-name hash table at all. */
 static void
 sonic_ext_copp_udld_register_llc_sap (vlib_main_t *vm, u8 sap, u32 node_index)
 {
   llc_main_t *lm = &llc_main;
   u32 next_index;
 
-  /* Ensure llc-input's own init (which resets input_next_by_protocol[] to
-   * all-DROP) has already run, exactly as llc_register_input_protocol()
-   * itself guarantees before touching the table. */
+  /* Ensure llc-input's own init has already run */
   {
     clib_error_t *error = vlib_call_init_function (vm, llc_input_init);
     if (error)
