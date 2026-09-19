@@ -154,7 +154,9 @@ VLIB_NODE_FN (sonic_ext_copp_udld_node)
 
   while (n_left_from > 0)
     {
-      u32 orig_rx0 = vnet_buffer2 (b[0])->orig_rx_sw_if_index;
+      sonic_ext_buffer_opaque_t *seb0 = sonic_ext_buffer (b[0]);
+      u32 orig_rx0 = (seb0->magic == SONIC_EXT_BUFFER_MAGIC) ?
+	 seb0->orig_rx_sw_if_index : 0;
       u32 rx0 = orig_rx0 ? orig_rx0 : vnet_buffer (b[0])->sw_if_index[VLIB_RX];
       u32 tx0 = ~0;
       u32 phy_sw = rx0;
