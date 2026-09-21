@@ -105,12 +105,14 @@ typedef struct
   /* Global feature toggles. */
   u8 punt_via_member;
   u8 host_xc;
+  u8 drop_member_stats;
 
   /* Set once capture/host-xc have been enabled on all existing
    * interfaces, so that toggling on/off is idempotent. */
   u8 capture_enabled;
   u8 host_xc_enabled;
   u8 glean_redirect_enabled;
+  u8 aggr_tap_redirect_enabled;
 
   /* Counters (per-feature, per-thread accounting kept in node
    * registrations; these are summary counters for `show sonic-ext`). */
@@ -170,6 +172,11 @@ void sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable);
 /* Toggle accessors used by CLI and node fast paths. */
 void sonic_ext_set_punt_via_member (u8 is_enable);
 void sonic_ext_set_host_xc (u8 is_enable);
+
+/* Enable sonic-ext-capture on every existing LCP pair's wire phy.  Capture
+ * has no toggle of its own: it is enabled whenever one of the features that
+ * consumes its per-buffer cookie is. */
+void sonic_ext_capture_enable_all (void);
 
 /* Returns non-zero if phy_sw_if_index is an "aggregate" parent whose
  * LCP host tap should have the aggr-tap-redirect feature enabled --

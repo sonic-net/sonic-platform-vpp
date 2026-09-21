@@ -259,6 +259,23 @@ plugins {
 	# plugin acl_plugin.so { disable }
 }
 
+## sonic-ext plugin feature selection.  Every feature defaults to on, so a
+## keyword is only needed to turn one off.  A disabled feature's node is never
+## attached to its feature arc.  Changing this requires a VPP restart.
+##
+## Keywords: punt-via-member, host-xc, drop-member-stats -- each on|off.
+## sonic-ext-capture has no keyword: it produces the per-buffer cookie that
+## punt-via-member and drop-member-stats consume, so it follows them.
+##
+## Generated at runtime by vpp_init.sh from $SONIC_EXT_CONFIG, which is given as
+## comma-separated key=value pairs -- SONIC_EXT_CONFIG=host-xc=off -- and which
+## a platform sets in /etc/sonic/vpp/syncd_vpp_env.
+sonic-ext {
+    punt-via-member off
+    host-xc off
+    drop-member-stats off
+}
+
 ## Statistics Segment
 # statseg {
     # socket-name <filename>, name of the stats segment socket
