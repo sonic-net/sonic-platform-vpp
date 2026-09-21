@@ -663,6 +663,7 @@ sonic_ext_init (vlib_main_t *vm)
 
   lcp_itf_pair_walk (sonic_ext_copp_ifout_walk_enable_cb, NULL);
   vnet_feature_enable_disable ("ip4-punt", "sonic-ext-copp-ip2me", 0, 1, 0, 0);
+  vnet_feature_enable_disable ("ip6-punt", "sonic-ext-copp-ip2me-ip6", 0, 1, 0, 0);
 
   return 0;
 }
