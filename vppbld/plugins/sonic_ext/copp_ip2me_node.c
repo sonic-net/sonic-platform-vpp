@@ -15,13 +15,9 @@
  * sonic-ext-copp-ip2me: CoPP enforcement for IP2ME/SNMP/SSH traffic --
  * traffic destined to one of the router's own IPv4 addresses that VPP's
  * dataplane does not answer itself (see sonic-net/sonic-buildimage#25801,
- * SONiC-on-VPP CoPP HLD). Also includes an IPv6 punt-path node
- * ("sonic-ext-copp-ip2me-ip6", registered on the "ip6-punt" arc) that
- * polices BGPv6 (TCP/179) traffic using the same TCP-dst-port policer slot
- * BGP uses -- see sonic-net/sonic-buildimage#29662: BGPv6 was previously
- * accepted by SAI but never actually enforced by the VPP dataplane, since
- * this file only ever parsed ip4_header_t and registered on "ip4-punt".
- *
+ * SONiC-on-VPP CoPP HLD). Also includes an IPv6 punt-path node registered
+ * on the "ip6-punt" arc) that polices BGPv6 (TCP/179) traffic using the
+ * same TCP-dst-port policer slot BGP uses.
  */
 
 #include <sonic_ext/sonic_ext.h>
