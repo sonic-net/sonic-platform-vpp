@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: taran9999 <tdwivedu@cisco.com>
+Date: Wed, 17 Sep 2026 00:00:00 -0700
+Subject: adj: honour ethernet-output features on L2 (VNET_LINK_ETHERNET)
+ adjacencies
+
+adj_l2_rewrite_inline() already dispatches the ethernet-output feature
+arc for an L2 rewrite/midchain, but only when the adjacency carries
+VNET_REWRITE_HAS_FEATURES. Nothing ever sets that flag for a
+VNET_LINK_ETHERNET adjacency: both the creation-time evaluator
+(adj_nbr_evaluate_feature) and the feature-toggle walk
+(adj_feature_update_walk_cb) only map the ip4/ip6/mpls output arcs onto
+their matching link types and bail on everything else.
+
+As a result an ethernet-output feature enabled on an L2 interface (e.g.
+a GRE TEB tunnel used by SONiC Everflow, whose midchain adjacency is
+VNET_LINK_ETHERNET and stacks on the IPv4 underlay) is listed by
+"show interface features" yet never runs, because the tunnel's adjacency
+takes the plain rewrite_header.next_index path and skips the arc.
+
+Add the ethernet-output arc / VNET_LINK_ETHERNET case to both places so
+the flag tracks ethernet-output features the same way it already tracks
+the L3 arcs. The flag is still only set when feature_count > 0, so
+interfaces with no ethernet-output feature are unaffected.
+---
+ src/vnet/adj/adj.c     | 5 ++++-
+ src/vnet/adj/adj_nbr.c | 5 +++++
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/vnet/adj/adj.c b/src/vnet/adj/adj.c
+index 37ad4654f..2dd0922d5 100644
+--- a/src/vnet/adj/adj.c
++++ b/src/vnet/adj/adj.c
+@@ -11,6 +11,7 @@
+ #include <vnet/adj/adj_delegate.h>
+ #include <vnet/fib/fib_node_list.h>
+ #include <vnet/fib/fib_walk.h>
++#include <vnet/ethernet/ethernet.h>
+ 
+ /* Adjacency packet/byte counters indexed by adjacency index. */
+ vlib_combined_counter_main_t adjacency_counters = {
+@@ -420,7 +421,9 @@ adj_feature_update_walk_cb (adj_index_t ai,
+         ((ctx->arc == ip4_main.lookup_main.output_feature_arc_index) &&
+          (VNET_LINK_IP4 == adj->ia_link)) ||
+         ((ctx->arc == mpls_main.output_feature_arc_index) &&
+-         (VNET_LINK_MPLS == adj->ia_link)))
++         (VNET_LINK_MPLS == adj->ia_link)) ||
++        ((ctx->arc == ethernet_main.output_feature_arc_index) &&
++         (VNET_LINK_ETHERNET == adj->ia_link)))
+     {
+         vnet_feature_main_t *fm = &feature_main;
+         vnet_feature_config_main_t *cm;
+diff --git a/src/vnet/adj/adj_nbr.c b/src/vnet/adj/adj_nbr.c
+index df33ec504..f508cd70d 100644
+--- a/src/vnet/adj/adj_nbr.c
++++ b/src/vnet/adj/adj_nbr.c
+@@ -200,6 +200,11 @@ adj_nbr_evaluate_feature (adj_index_t ai)
+     case VNET_LINK_MPLS:
+         arc_index = mpls_main.output_feature_arc_index;
+         break;
++    case VNET_LINK_ETHERNET:
++        /* L2 (e.g. GRE TEB) midchain rewrite dispatches the ethernet-output
++         * arc in adj_l2_rewrite_inline() but only honours HAS_FEATURES. */
++        arc_index = ethernet_main.output_feature_arc_index;
++        break;
+     default:
+         return;
+     }

@@ -107,6 +107,15 @@ sonic_ext_buffer (vlib_buffer_t *b)
   return (sonic_ext_buffer_opaque_t *) vnet_buffer2 (b)->unused;
 }
 
+/* Per-interface Everflow mirror encap fixup config, indexed by the mirror
+ * GRE tunnel sw_if_index. */
+typedef struct
+{
+  u16 gre_protocol; /* GRE ethertype to stamp on the wire (host order) */
+  u8 ttl;	    /* exact outer IPv4 TTL to stamp */
+  u8 enabled;
+} sonic_ext_mirror_encap_cfg_t;
+
 typedef struct
 {
   /* API message ID base */
@@ -129,6 +138,11 @@ typedef struct
   u8 egress_mirror_arc_enabled;
   u32 active_egress_mirror_actions;
 
+  /* Everflow mirror encap fixup: per-interface (mirror GRE tunnel
+   * sw_if_index) outer TTL + GRE protocol override, applied on the
+   * ethernet-output arc after GRE encap.  vec indexed by sw_if_index. */
+  sonic_ext_mirror_encap_cfg_t *mirror_encap_cfg;
+
   /* Counters (per-feature, per-thread accounting kept in node
    * registrations; these are summary counters for `show sonic-ext`). */
   u64 captures;
@@ -137,6 +151,7 @@ typedef struct
   u64 host_xc_direct;
   u64 l2_trap_fixups;
   u64 ip2me_hits;
+  u64 mirror_encap_fixups;
 } sonic_ext_main_t;
 
 extern sonic_ext_main_t sonic_ext_main;
@@ -150,6 +165,7 @@ extern vlib_node_registration_t sonic_ext_l2_vlan_filter_node;
 extern vlib_node_registration_t sonic_ext_ip2me_ip4_node;
 extern vlib_node_registration_t sonic_ext_ip2me_ip6_node;
 extern vlib_node_registration_t sonic_ext_egress_mirror_node;
+extern vlib_node_registration_t sonic_ext_mirror_encap_fixup_node;
 
 /* Enable / disable sonic-ext-capture on a given interface.  No-op if
  * the capture sidecar is not yet initialized. */
@@ -213,6 +229,16 @@ int sonic_ext_phy_is_bond (u32 phy_sw_if_index);
  * (disabling on the 1->0 transition).  Driven from the SAI-VPP layer per
  * Everflow egress mirror session. */
 int sonic_ext_egress_mirror_enable_disable (u8 enable);
+
+/* Enable / disable the Everflow mirror encap fixup on a mirror GRE tunnel
+ * sw_if_index.  enable=1 records {gre_protocol, ttl} and turns on the
+ * sonic-ext-mirror-encap-fixup feature on that interface's ethernet-output
+ * arc; calling it again while enabled just updates the values; enable=0
+ * removes the feature.  Driven from the SAI-VPP layer per Everflow ERSPAN
+ * session. */
+int sonic_ext_mirror_encap_fixup_enable_disable (u32 sw_if_index,
+						 u16 gre_protocol, u8 ttl,
+						 int enable);
 
 /* Registered with the ACL plugin as its deferred mirror stamper: records the
  * mirror destination in the sonic_ext cookie for the late interface-output

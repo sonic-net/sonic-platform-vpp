@@ -24,6 +24,7 @@ add_vpp_plugin(sonic_ext
   ip2me_node.c
   cli.c
   egress_mirror_node.c
+  mirror_encap_fixup_node.c
 
   API_FILES
   sonic_ext.api

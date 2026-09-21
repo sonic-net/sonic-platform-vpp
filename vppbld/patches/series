@@ -48,13 +48,11 @@
 #     SPAN_CLONE re-mirror guard and the mirror-interface liveness guard.
 #     Per-port scoping reuses in_sw_if_index from patch 0018.
 0019-acl-add-permit-mirror-action-for-everflow.patch
-# 20. gre: gre_tunnel_v3 API adding a per-tunnel outer TTL (hop_limit) and a
-#     GRE protocol override. gre_protocol also selects a plain-GRE mode for
-#     ERSPAN tunnels (no sequence number, no type-II shim) so Everflow emits
-#     GRE 0x88BE over the raw mirrored L2 frame. gre_tunnel_v2 unchanged.
-0020-gre-per-tunnel-ttl-and-protocol-override.patch
-# 21. vnet: guard interface_drop_punt against a stale RX sw_if_index and the
-#     adj L2 midchain against a NULL fixup_func. Everflow re-points a mirror
-#     session by deleting/recreating its GRE tunnel, so both paths can be
-#     reached with interface state that has just been freed.
-0021-vnet-guard-stale-interface-state-on-teardown.patch
+# 20. adj: honour ethernet-output features on L2 (VNET_LINK_ETHERNET)
+#     adjacencies. adj_l2_rewrite_inline() already dispatches the
+#     ethernet-output arc for an L2/midchain rewrite but only when the
+#     adjacency has VNET_REWRITE_HAS_FEATURES; nothing set that flag for an
+#     ETHERNET-link adjacency. Lets the sonic_ext mirror-encap-fixup node run
+#     on a GRE TEB tunnel (stock gre_tunnel_add_del_v2) so Everflow can stamp
+#     the ERSPAN GRE protocol / TTL without a custom GRE API.
+0020-adj-honour-ethernet-output-features-on-l2-adjacencies.patch

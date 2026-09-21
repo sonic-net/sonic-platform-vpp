@@ -529,6 +529,57 @@ VNET_SW_INTERFACE_ADD_DEL_FUNCTION (
   sonic_ext_egress_mirror_sw_interface_add_del);
 
 /*
+ * Everflow mirror encap fixup.
+ *
+ * A stock TEB GRE mirror tunnel does not carry the mirror ethertype and
+ * lets the underlay decrement the outer TTL.  This records the desired
+ * {gre_protocol, ttl} for the tunnel's sw_if_index and enables the
+ * sonic-ext-mirror-encap-fixup feature on its ethernet-output arc, which
+ * rewrites the encapped copy.  Re-calling with enable=1 while already
+ * enabled only refreshes the values (used on a SAI SET), so it never
+ * re-toggles the feature arc.
+ */
+int
+sonic_ext_mirror_encap_fixup_enable_disable (u32 sw_if_index, u16 gre_protocol,
+					     u8 ttl, int enable)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  int rv;
+
+  if (enable)
+    {
+      u8 was_enabled;
+
+      vec_validate (sem->mirror_encap_cfg, sw_if_index);
+      was_enabled = sem->mirror_encap_cfg[sw_if_index].enabled;
+      sem->mirror_encap_cfg[sw_if_index].gre_protocol = gre_protocol;
+      sem->mirror_encap_cfg[sw_if_index].ttl = ttl;
+      sem->mirror_encap_cfg[sw_if_index].enabled = 1;
+
+      if (was_enabled)
+	return 0;
+
+      rv = vnet_feature_enable_disable ("ethernet-output",
+					"sonic-ext-mirror-encap-fixup",
+					sw_if_index, 1, 0, 0);
+      if (rv)
+	sem->mirror_encap_cfg[sw_if_index].enabled = 0;
+      return rv;
+    }
+
+  rv = vnet_feature_enable_disable ("ethernet-output",
+				    "sonic-ext-mirror-encap-fixup", sw_if_index,
+				    0, 0, 0);
+  if (sw_if_index < vec_len (sem->mirror_encap_cfg))
+    {
+      sem->mirror_encap_cfg[sw_if_index].enabled = 0;
+      sem->mirror_encap_cfg[sw_if_index].gre_protocol = 0;
+      sem->mirror_encap_cfg[sw_if_index].ttl = 0;
+    }
+  return rv;
+}
+
+/*
  * Claim the ACL plugin's deferred (egress-arc) mirror clone for Everflow
  * MIRROR_EGRESS. Resolved at runtime so sonic_ext neither links against nor
  * requires the ACL plugin: if it is not loaded, the ACL side simply clones

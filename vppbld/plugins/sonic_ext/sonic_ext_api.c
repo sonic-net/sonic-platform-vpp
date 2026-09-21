@@ -66,6 +66,29 @@ vl_api_sonic_ext_egress_mirror_enable_disable_t_handler (
   REPLY_MACRO (VL_API_SONIC_EXT_EGRESS_MIRROR_ENABLE_DISABLE_REPLY);
 }
 
+static void
+vl_api_sonic_ext_mirror_encap_fixup_enable_disable_t_handler (
+  vl_api_sonic_ext_mirror_encap_fixup_enable_disable_t *mp)
+{
+  vnet_interface_main_t *im = &vnet_get_main ()->interface_main;
+  vl_api_sonic_ext_mirror_encap_fixup_enable_disable_reply_t *rmp;
+  u32 sw_if_index = ntohl (mp->sw_if_index);
+  int rv = 0;
+
+  if (pool_is_free_index (im->sw_interfaces, sw_if_index))
+    {
+      rv = VNET_API_ERROR_INVALID_SW_IF_INDEX;
+      goto exit;
+    }
+
+  rv = sonic_ext_mirror_encap_fixup_enable_disable (
+    sw_if_index, ntohs (mp->gre_protocol), mp->hop_limit,
+    mp->enable ? 1 : 0);
+
+exit:
+  REPLY_MACRO (VL_API_SONIC_EXT_MIRROR_ENCAP_FIXUP_ENABLE_DISABLE_REPLY);
+}
+
 /* API definitions */
 #include <sonic_ext/sonic_ext.api.c>
 
