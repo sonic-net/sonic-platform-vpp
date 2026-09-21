@@ -67,7 +67,7 @@ build_locally: repo_clone
 CONFIGURED_ARCH ?= amd64
 CI_DEST ?= $(CURDIR)/artifacts
 CI_BUILD_STAMP = $(CURDIR)/.ci-build.stamp
-CI_TEST_JOBS ?= 4
+CI_TEST_JOBS ?= 2
 
 # Anything that changes what gets built must invalidate the stamp.
 CI_BUILD_INPUTS = vpp_version patches/series $(wildcard patches/*.patch) \
