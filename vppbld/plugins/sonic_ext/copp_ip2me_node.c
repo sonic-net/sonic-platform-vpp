@@ -15,7 +15,12 @@
  * sonic-ext-copp-ip2me: CoPP enforcement for IP2ME/SNMP/SSH traffic --
  * traffic destined to one of the router's own IPv4 addresses that VPP's
  * dataplane does not answer itself (see sonic-net/sonic-buildimage#25801,
- * SONiC-on-VPP CoPP HLD). 
+ * SONiC-on-VPP CoPP HLD). Also includes an IPv6 punt-path node
+ * ("sonic-ext-copp-ip2me-ip6", registered on the "ip6-punt" arc) that
+ * polices BGPv6 (TCP/179) traffic using the same TCP-dst-port policer slot
+ * BGP uses -- see sonic-net/sonic-buildimage#29662: BGPv6 was previously
+ * accepted by SAI but never actually enforced by the VPP dataplane, since
+ * this file only ever parsed ip4_header_t and registered on "ip4-punt".
  *
  */
 
@@ -25,6 +30,7 @@
 #include <vnet/vnet.h>
 #include <vnet/feature/feature.h>
 #include <vnet/ip/ip4_packet.h>
+#include <vnet/ip/ip6_packet.h>
 #include <vnet/ip/format.h>
 #include <vnet/tcp/tcp_packet.h>
 #include <policer/policer.h>
@@ -370,6 +376,252 @@ VNET_FEATURE_INIT (sonic_ext_copp_ip2me_feat, static) = {
   .arc_name = "ip4-punt",
   .node_name = "sonic-ext-copp-ip2me",
   .runs_before = VNET_FEATURES ("ip4-punt-redirect"),
+};
+
+/*
+ * --- IPv6 counterpart (BGPv6 CoPP enforcement, sonic-buildimage#29662) ---
+ *
+ * Mirrors sonic_ext_copp_ip2me_x1()/sonic_ext_copp_ip2me_node() above, but
+ * parses ip6_header_t and registers on VPP's "ip6-punt" arc (stock VPP,
+ * src/vnet/ip/ip6_punt_drop.c) instead of "ip4-punt". IP2ME/SNMP/SSH are
+ * IPv4-only concepts here, so this node only ever matches the TCP-dst-port
+ * (BGP/BGPV6) policer slot -- it calls sonic_ext_copp_ip2me_find_policer()
+ * with dst_addr=0, which can never satisfy an address-match slot.
+ *
+ * Assumption (documented per the fix plan): BGP/BGPv6 sessions do not use
+ * IPv6 extension headers (HBH/routing/fragment) before TCP in practice, so
+ * the TCP header is read directly at (ip6 + 1) rather than walking an
+ * extension-header chain. This matches the scope the SAI/HLD design for
+ * this trap already assumes.
+ */
+
+typedef struct
+{
+  u32 sw_if_index;
+  u32 next_index;
+  u16 dst_port;
+  u32 policer_index;
+  u32 verdict; /* policer_result_e */
+} sonic_ext_copp_ip2me_ip6_trace_t;
+
+extern vlib_node_registration_t sonic_ext_copp_ip2me_ip6_node;
+
+static u8 *
+format_sonic_ext_copp_ip2me_ip6_trace (u8 *s, va_list *args)
+{
+  CLIB_UNUSED (vlib_main_t * vm) = va_arg (*args, vlib_main_t *);
+  CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
+  sonic_ext_copp_ip2me_ip6_trace_t *t =
+    va_arg (*args, sonic_ext_copp_ip2me_ip6_trace_t *);
+
+  s = format (s,
+	      "SONIC-EXT-COPP-IP2ME-IP6: sw_if_index %d next %d "
+	      "dst_port %d policer_index %d verdict %d",
+	      t->sw_if_index, t->next_index, t->dst_port, t->policer_index,
+	      t->verdict);
+  return s;
+}
+
+typedef enum
+{
+  SONIC_EXT_COPP_IP2ME_IP6_NEXT_DROP,
+  SONIC_EXT_COPP_IP2ME_IP6_N_NEXT,
+} sonic_ext_copp_ip2me_ip6_next_t;
+
+static_always_inline sonic_ext_copp_ip2me_error_t
+sonic_ext_copp_ip2me_ip6_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
+			      vlib_buffer_t *b, u16 *next, u16 *out_dst_port,
+			      u32 *out_policer_index, u32 *out_verdict,
+			      sonic_ext_copp_ip2me_policer_t **out_pol)
+{
+  ip6_header_t *ip6;
+  u32 feat_next;
+  u16 dst_port = 0;
+  int has_tcp_dport = 0;
+
+  vnet_feature_next (&feat_next, b);
+  *next = (u16) feat_next;
+  *out_pol = 0;
+
+  if (PREDICT_FALSE (sem->copp_ip2me_n_policers == 0 ||
+		      b->current_length < sizeof (ip6_header_t)))
+    {
+      *out_dst_port = 0;
+      *out_policer_index = ~0;
+      *out_verdict = POLICE_CONFORM;
+      return SONIC_EXT_COPP_IP2ME_ERROR_PASS;
+    }
+
+  ip6 = vlib_buffer_get_current (b);
+
+  /* BGP/BGPv6 sessions don't carry IPv6 extension headers before TCP in
+   * practice (no HBH/routing/fragment) -- same scope-limiting assumption
+   * CoPP's SAI/HLD design already makes for BGPv6; protocol field is read
+   * directly rather than walking an extension-header chain. */
+  if (ip6->protocol == IP_PROTOCOL_TCP &&
+      b->current_length >= sizeof (ip6_header_t) + sizeof (tcp_header_t))
+    {
+      tcp_header_t *tcp = (tcp_header_t *) (ip6 + 1);
+      dst_port = clib_net_to_host_u16 (tcp->dst_port);
+      has_tcp_dport = 1;
+    }
+  *out_dst_port = dst_port;
+
+  /* dst_addr = 0: IPv6 has no address-matched slot here (IP2ME/SNMP/SSH
+   * are IPv4-only), so only TCP-dport slots (BGP/BGPv6) can ever match. */
+  sonic_ext_copp_ip2me_policer_t *pol =
+    sonic_ext_copp_ip2me_find_policer (sem, 0, has_tcp_dport, dst_port);
+
+  if (!pol)
+    {
+      *out_policer_index = ~0;
+      *out_verdict = POLICE_CONFORM;
+      return SONIC_EXT_COPP_IP2ME_ERROR_PASS;
+    }
+
+  *out_pol = pol;
+
+  {
+    u32 policer_index = sonic_ext_copp_ip2me_resolve_index (pol);
+    *out_policer_index = policer_index;
+
+    if (PREDICT_FALSE (policer_index == ~0))
+      {
+	*out_verdict = POLICE_VIOLATE;
+	*next = SONIC_EXT_COPP_IP2ME_IP6_NEXT_DROP;
+	return SONIC_EXT_COPP_IP2ME_ERROR_DROP_UNRESOLVED;
+      }
+
+    {
+      policer_main_t *pm = policer_get_main ();
+
+      if (PREDICT_FALSE (pm == 0))
+	{
+	  *out_verdict = POLICE_VIOLATE;
+	  *next = SONIC_EXT_COPP_IP2ME_IP6_NEXT_DROP;
+	  return SONIC_EXT_COPP_IP2ME_ERROR_DROP_UNRESOLVED;
+	}
+
+      policer_t *policer = pool_elt_at_index (pm->policers, policer_index);
+      u32 metered_len = 256;
+      policer_result_e verdict = vnet_police_packet (
+	policer, metered_len, POLICE_CONFORM,
+	clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT);
+
+      vlib_combined_counter_main_t *pc = policer_get_counters ();
+      if (PREDICT_TRUE (pc != 0))
+	vlib_increment_combined_counter (&pc[verdict], vm->thread_index,
+					  policer_index, 1, metered_len);
+
+      *out_verdict = verdict;
+
+      if (PREDICT_FALSE (verdict != POLICE_CONFORM))
+	{
+	  *next = SONIC_EXT_COPP_IP2ME_IP6_NEXT_DROP;
+	  return SONIC_EXT_COPP_IP2ME_ERROR_DROP_EXCEED;
+	}
+    }
+  }
+
+  /* Conform: leave *next as the feature-arc's own "continue" next index
+   * (already set via vnet_feature_next() above) -- i.e. proceed to
+   * ip6-punt-redirect exactly as if this feature were never enabled. */
+  return SONIC_EXT_COPP_IP2ME_ERROR_PASS;
+}
+
+VLIB_NODE_FN (sonic_ext_copp_ip2me_ip6_node)
+(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  u32 n_left_from, *from;
+  vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b;
+  u16 nexts[VLIB_FRAME_SIZE], *next;
+  u32 error_counts[SONIC_EXT_COPP_IP2ME_N_ERROR] = { 0 };
+
+  from = vlib_frame_vector_args (frame);
+  n_left_from = frame->n_vectors;
+
+  vlib_get_buffers (vm, from, bufs, n_left_from);
+  b = bufs;
+  next = nexts;
+
+  while (n_left_from)
+    {
+      u16 dst_port = 0;
+      u32 policer_index = ~0;
+      u32 verdict = POLICE_CONFORM;
+      sonic_ext_copp_ip2me_policer_t *pol = 0;
+      sonic_ext_copp_ip2me_error_t err;
+
+      err = sonic_ext_copp_ip2me_ip6_x1 (vm, sem, b[0], &next[0], &dst_port,
+					  &policer_index, &verdict, &pol);
+      error_counts[err]++;
+
+      if (pol)
+	{
+	  switch ((policer_result_e) verdict)
+	    {
+	    case POLICE_CONFORM:
+	      pol->conform_packets++;
+	      break;
+	    case POLICE_EXCEED:
+	      pol->exceed_packets++;
+	      break;
+	    case POLICE_VIOLATE:
+	      pol->violate_packets++;
+	      break;
+	    }
+	}
+
+      if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
+			  (b[0]->flags & VLIB_BUFFER_IS_TRACED)))
+	{
+	  sonic_ext_copp_ip2me_ip6_trace_t *t =
+	    vlib_add_trace (vm, node, b[0], sizeof (*t));
+	  t->sw_if_index = vnet_buffer (b[0])->sw_if_index[VLIB_RX];
+	  t->next_index = next[0];
+	  t->dst_port = dst_port;
+	  t->policer_index = policer_index;
+	  t->verdict = verdict;
+	}
+
+      b += 1;
+      next += 1;
+      n_left_from -= 1;
+    }
+
+  vlib_buffer_enqueue_to_next (vm, node, from, nexts, frame->n_vectors);
+
+  for (int i = 0; i < SONIC_EXT_COPP_IP2ME_N_ERROR; i++)
+    {
+      if (error_counts[i])
+	vlib_node_increment_counter (vm, sonic_ext_copp_ip2me_ip6_node.index,
+				      i, error_counts[i]);
+    }
+
+  return frame->n_vectors;
+}
+
+VLIB_REGISTER_NODE (sonic_ext_copp_ip2me_ip6_node) = {
+  .name = "sonic-ext-copp-ip2me-ip6",
+  .vector_size = sizeof (u32),
+  .format_trace = format_sonic_ext_copp_ip2me_ip6_trace,
+  .type = VLIB_NODE_TYPE_INTERNAL,
+  .n_errors = ARRAY_LEN (sonic_ext_copp_ip2me_error_strings),
+  .error_strings = sonic_ext_copp_ip2me_error_strings,
+  .n_next_nodes = SONIC_EXT_COPP_IP2ME_IP6_N_NEXT,
+  .next_nodes = {
+    [SONIC_EXT_COPP_IP2ME_IP6_NEXT_DROP] = "ip6-drop",
+  },
+};
+
+/*
+ * ip6-punt is a global feature arc, not per-interface
+ */
+VNET_FEATURE_INIT (sonic_ext_copp_ip2me_ip6_feat, static) = {
+  .arc_name = "ip6-punt",
+  .node_name = "sonic-ext-copp-ip2me-ip6",
+  .runs_before = VNET_FEATURES ("ip6-punt-redirect"),
 };
 
 static int
