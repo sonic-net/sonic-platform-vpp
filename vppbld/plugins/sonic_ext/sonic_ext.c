@@ -488,17 +488,30 @@ sonic_ext_egress_mirror_enable_disable (u8 enable)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
 
+  /* Commit the refcount only after the arc transition succeeds. If the
+   * feature enable/disable fails, leaving the count unchanged lets a later
+   * retry re-attempt the transition instead of returning a false success. */
   if (enable)
     {
-      if (sem->active_egress_mirror_actions++ == 0)
-	return sonic_ext_egress_mirror_arc_set (1);
+      if (sem->active_egress_mirror_actions == 0)
+	{
+	  int rv = sonic_ext_egress_mirror_arc_set (1);
+	  if (rv)
+	    return rv;
+	}
+      sem->active_egress_mirror_actions++;
       return 0;
     }
 
   if (sem->active_egress_mirror_actions == 0)
     return 0; /* balanced disable underflow guard */
-  if (--sem->active_egress_mirror_actions == 0)
-    return sonic_ext_egress_mirror_arc_set (0);
+  if (sem->active_egress_mirror_actions == 1)
+    {
+      int rv = sonic_ext_egress_mirror_arc_set (0);
+      if (rv)
+	return rv;
+    }
+  sem->active_egress_mirror_actions--;
   return 0;
 }
 

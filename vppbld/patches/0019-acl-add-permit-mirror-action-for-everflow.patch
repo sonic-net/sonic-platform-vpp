@@ -179,14 +179,20 @@ index a239f3795..d93f5833a 100644
  
  
 diff --git a/src/plugins/acl/dataplane_node.c b/src/plugins/acl/dataplane_node.c
-index 471228726..bb71860f9 100644
+index 471228726..850da67a7 100644
 --- a/src/plugins/acl/dataplane_node.c
 +++ b/src/plugins/acl/dataplane_node.c
-@@ -550,6 +550,102 @@ acl_fa_inner_node_fn (vlib_main_t * vm,
+@@ -550,6 +550,113 @@ acl_fa_inner_node_fn (vlib_main_t * vm,
  	    next[0] = action ? next[0] : 0;
  	  }
  
-+	  if (PREDICT_FALSE (action == 3))
++	  /* action == 3 is also returned by acl_fa_track_session () for any
++	   * established stateful session, which takes the fast path above
++	   * without a rule lookup and leaves the match indices at ~0. Only a
++	   * completed ACL lookup that matched a PERMIT_MIRROR rule sets valid
++	   * indices, so require both before dereferencing the rule. */
++	  if (PREDICT_FALSE (action == 3 && match_acl_in_index != ~0 &&
++			     match_rule_index != ~0))
 +	    {
 +	      vnet_main_t *vnm = vnet_get_main ();
 +	      acl_rule_t *mir_rule =
@@ -239,11 +245,16 @@ index 471228726..bb71860f9 100644
 +		       * vlib_buffer_copy () only copies from current_data
 +		       * forward, so rewind to l2_hdr_offset first to capture
 +		       * the full L2 frame the ERSPAN/GRE tunnel expects, then
-+		       * restore the original position. */
++		       * restore the original position. Only the input arc has the
++		       * original L2 frame in the headroom; on the output arc
++		       * current_data already points at the egress L2 rewrite while
++		       * l2_hdr_offset still describes the ingress frame, so a
++		       * rewind there would prepend stale bytes to the clone. */
 +		      word l2_rewind = 0;
 +		      vlib_buffer_t *clone;
 +
-+		      if (PREDICT_TRUE (b[0]->flags &
++		      if (is_input &&
++			  PREDICT_TRUE (b[0]->flags &
 +					VNET_BUFFER_F_L2_HDR_OFFSET_VALID))
 +			{
 +			  l2_rewind = (word) b[0]->current_data -
