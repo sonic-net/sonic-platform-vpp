@@ -37,3 +37,20 @@
 #     rule be scoped to specific ports, so SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS
 #     no longer has to be silently dropped by the SAI layer.
 0018-acl-match-on-ingress-interface.patch
+# 19. acl: PERMIT_MIRROR action (is_permit == 3) for SONiC Everflow. Packed
+#     mirror_action carries the destination sw_if_index in bits 27:0 and
+#     action flags in bits 31:28; ACL_MIRROR_F_DEFERRED hands the clone to a
+#     platform plugin registered via acl_register_deferred_mirror_stamp()
+#     (resolved with vlib_get_plugin_symbol, so no link dependency either
+#     way), otherwise the clone is taken in the ACL node. Includes the
+#     SPAN_CLONE re-mirror guard and the mirror-interface liveness guard.
+#     Per-port scoping reuses in_sw_if_index from patch 0018.
+0019-acl-add-permit-mirror-action-for-everflow.patch
+# 20. adj: honour ethernet-output features on L2 (VNET_LINK_ETHERNET)
+#     adjacencies. adj_l2_rewrite_inline() already dispatches the
+#     ethernet-output arc for an L2/midchain rewrite but only when the
+#     adjacency has VNET_REWRITE_HAS_FEATURES; nothing set that flag for an
+#     ETHERNET-link adjacency. Lets the sonic_ext mirror-encap-fixup node run
+#     on a GRE TEB tunnel (stock gre_tunnel_add_del_v2) so Everflow can stamp
+#     the ERSPAN GRE protocol / TTL without a custom GRE API.
+0020-adj-honour-ethernet-output-features-on-l2-adjacencies.patch

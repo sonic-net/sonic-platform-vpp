@@ -56,6 +56,15 @@
  */
 #define SONIC_EXT_BUFFER_MAGIC 0x534e4358u  /* 'SNCX' */
 
+/* --- Deferred egress mirror (Everflow MIRROR_EGRESS) extension ----------- *
+ * mirror_sw_if_index carries the ERSPAN/GRE tunnel the deferred clone is
+ * sent to; the ACL dataplane node stamps it into the cookie alongside the
+ * magic when a matched rule has ACL_MIRROR_F_DEFERRED set. */
+#define SONIC_EXT_INVALID_SW_IF_INDEX ~0U
+#define SONIC_EXT_INVALID_VLAN_TAG ~0U
+/* Buffer flag: a deferred egress-mirror clone is pending on this packet. */
+#define SONIC_EXT_BUFFER_F_MIRROR_PENDING VNET_BUFFER_F_AVAIL1
+
 /*
  * orig_vlan_tag: outermost 802.1Q (or 802.1ad) tag observed on the
  * wire frame at sonic-ext-capture time, stored as raw 4 bytes in
@@ -85,6 +94,7 @@ typedef struct
   u32 magic;
   u32 orig_rx_sw_if_index;
   u32 orig_vlan_tag;
+  u32 mirror_sw_if_index; /* deferred egress mirror dst; ~0 = none */
 } sonic_ext_buffer_opaque_t;
 
 STATIC_ASSERT (sizeof (sonic_ext_buffer_opaque_t) <=
@@ -96,6 +106,15 @@ sonic_ext_buffer (vlib_buffer_t *b)
 {
   return (sonic_ext_buffer_opaque_t *) vnet_buffer2 (b)->unused;
 }
+
+/* Per-interface Everflow mirror encap fixup config, indexed by the mirror
+ * GRE tunnel sw_if_index. */
+typedef struct
+{
+  u16 gre_protocol; /* GRE ethertype to stamp on the wire (host order) */
+  u8 ttl;	    /* exact outer IPv4 TTL to stamp */
+  u8 enabled;
+} sonic_ext_mirror_encap_cfg_t;
 
 typedef struct
 {
@@ -112,6 +131,18 @@ typedef struct
   u8 host_xc_enabled;
   u8 glean_redirect_enabled;
 
+  /* Deferred egress mirror: set once the sonic-ext-egress-mirror feature
+   * has been enabled on all interface-output arcs; gated by a refcount of
+   * installed MIRROR_EGRESS actions so the arc cost is only paid while the
+   * feature is in use (HLD 12.4). */
+  u8 egress_mirror_arc_enabled;
+  u32 active_egress_mirror_actions;
+
+  /* Everflow mirror encap fixup: per-interface (mirror GRE tunnel
+   * sw_if_index) outer TTL + GRE protocol override, applied on the
+   * ethernet-output arc after GRE encap.  vec indexed by sw_if_index. */
+  sonic_ext_mirror_encap_cfg_t *mirror_encap_cfg;
+
   /* Counters (per-feature, per-thread accounting kept in node
    * registrations; these are summary counters for `show sonic-ext`). */
   u64 captures;
@@ -120,6 +151,7 @@ typedef struct
   u64 host_xc_direct;
   u64 l2_trap_fixups;
   u64 ip2me_hits;
+  u64 mirror_encap_fixups;
 } sonic_ext_main_t;
 
 extern sonic_ext_main_t sonic_ext_main;
@@ -132,6 +164,8 @@ extern vlib_node_registration_t sonic_ext_l2_trap_fixup_node;
 extern vlib_node_registration_t sonic_ext_l2_vlan_filter_node;
 extern vlib_node_registration_t sonic_ext_ip2me_ip4_node;
 extern vlib_node_registration_t sonic_ext_ip2me_ip6_node;
+extern vlib_node_registration_t sonic_ext_egress_mirror_node;
+extern vlib_node_registration_t sonic_ext_mirror_encap_fixup_node;
 
 /* Enable / disable sonic-ext-capture on a given interface.  No-op if
  * the capture sidecar is not yet initialized. */
@@ -188,5 +222,28 @@ int sonic_ext_phy_is_bvi (u32 phy_sw_if_index);
  * port-channel aggregates and to funnel tap-less bonded sub-interface
  * punts to the bond master host tap. */
 int sonic_ext_phy_is_bond (u32 phy_sw_if_index);
+
+/* Deferred egress mirror refcount toggle.  enable=1 installs a
+ * MIRROR_EGRESS action (enabling sonic-ext-egress-mirror on every
+ * interface-output arc on the 0->1 transition); enable=0 removes one
+ * (disabling on the 1->0 transition).  Driven from the SAI-VPP layer per
+ * Everflow egress mirror session. */
+int sonic_ext_egress_mirror_enable_disable (u8 enable);
+
+/* Enable / disable the Everflow mirror encap fixup on a mirror GRE tunnel
+ * sw_if_index.  enable=1 records {gre_protocol, ttl} and turns on the
+ * sonic-ext-mirror-encap-fixup feature on that interface's ethernet-output
+ * arc; calling it again while enabled just updates the values; enable=0
+ * removes the feature.  Driven from the SAI-VPP layer per Everflow ERSPAN
+ * session. */
+int sonic_ext_mirror_encap_fixup_enable_disable (u32 sw_if_index,
+						 u16 gre_protocol, u8 ttl,
+						 int enable);
+
+/* Registered with the ACL plugin as its deferred mirror stamper: records the
+ * mirror destination in the sonic_ext cookie for the late interface-output
+ * clone.  Always accepts, so returns 1. */
+int sonic_ext_acl_deferred_mirror_stamp (vlib_buffer_t *b, u32 rx_sw_if_index,
+					 u32 mirror_sw_if_index);
 
 #endif /* __included_sonic_ext_h__ */
