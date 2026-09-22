@@ -33,3 +33,42 @@ autoreply define sonic_ext_ip2me_enable_disable
   vl_api_interface_index_t sw_if_index;
   bool enable;
 };
+
+/** \brief Install / remove a deferred egress-mirror (Everflow MIRROR_EGRESS)
+    action.  Refcounted: enable=1 on the first action enables the
+    sonic-ext-egress-mirror feature on every interface-output arc; enable=0
+    on the last removes it.  The mirror destination itself is carried per
+    packet by the ACL dataplane node, not by this message.
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param enable - 1 to install an action, 0 to remove one
+*/
+autoreply define sonic_ext_egress_mirror_enable_disable
+{
+  u32 client_index;
+  u32 context;
+  bool enable;
+};
+
+/** \brief Enable / disable the Everflow mirror encap fixup on a mirror GRE
+    tunnel.  Registers sonic-ext-mirror-encap-fixup on that interface's
+    ethernet-output arc, which stamps the exact outer IPv4 TTL and the GRE
+    protocol (ethertype) on the encapped copy after GRE encap.  enable=1
+    installs/updates the {gre_protocol, hop_limit} values; enable=0 removes
+    the fixup.
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param sw_if_index - the mirror GRE tunnel to enable/disable the fixup on
+    @param gre_protocol - GRE ethertype to stamp (e.g. 0x88BE for Everflow)
+    @param hop_limit - exact outer IPv4 TTL to stamp (must be non-zero)
+    @param enable - 1 to install/update, 0 to remove
+*/
+autoreply define sonic_ext_mirror_encap_fixup_enable_disable
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u16 gre_protocol;
+  u8 hop_limit;
+  bool enable;
+};

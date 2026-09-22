@@ -176,3 +176,33 @@ VLIB_CLI_COMMAND (show_sonic_ext_command, static) = {
   .short_help = "show sonic-ext",
   .function = show_sonic_ext_command_fn,
 };
+
+static clib_error_t *
+show_sonic_ext_mirror_encap_command_fn (vlib_main_t *vm,
+					unformat_input_t *input,
+					vlib_cli_command_t *cmd)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  vnet_main_t *vnm = vnet_get_main ();
+  u32 i;
+
+  vlib_cli_output (vm, "sonic-ext mirror-encap fixups: %llu",
+		   sem->mirror_encap_fixups);
+  for (i = 0; i < vec_len (sem->mirror_encap_cfg); i++)
+    {
+      sonic_ext_mirror_encap_cfg_t *c =
+	vec_elt_at_index (sem->mirror_encap_cfg, i);
+      if (!c->enabled)
+	continue;
+      vlib_cli_output (vm, "  %U: gre-protocol 0x%04x ttl %u",
+		       format_vnet_sw_if_index_name, vnm, i, c->gre_protocol,
+		       c->ttl);
+    }
+  return 0;
+}
+
+VLIB_CLI_COMMAND (show_sonic_ext_mirror_encap_command, static) = {
+  .path = "show sonic-ext mirror-encap",
+  .short_help = "show sonic-ext mirror-encap",
+  .function = show_sonic_ext_mirror_encap_command_fn,
+};
