@@ -22,10 +22,21 @@ Add the ethernet-output arc / VNET_LINK_ETHERNET case to both places so
 the flag tracks ethernet-output features the same way it already tracks
 the L3 arcs. The flag is still only set when feature_count > 0, so
 interfaces with no ethernet-output feature are unaffected.
+
+Also register adj-l2-rewrite as a start node of the ethernet-output arc.
+adj_l2_rewrite_inline() is shared by adj-l2-midchain and adj-l2-rewrite
+and starts the arc from either one, but only adj-l2-midchain was declared
+as a start node, so vnet_config add_next() never created the edge from
+adj-l2-rewrite to the first feature node and adj-l2-rewrite (registered
+with n_next_nodes = 1) would enqueue to an out-of-range next index. Before
+this patch nothing set HAS_FEATURES on an ETHERNET adjacency so that path
+was unreachable; a plain (non-midchain) L2 adjacency uses adj-l2-rewrite
+per adj_get_rewrite_node(), so the arc must start there too.
 ---
- src/vnet/adj/adj.c     | 5 ++++-
- src/vnet/adj/adj_nbr.c | 5 +++++
- 2 files changed, 9 insertions(+), 1 deletion(-)
+ src/vnet/adj/adj.c        | 5 ++++-
+ src/vnet/adj/adj_nbr.c    | 5 +++++
+ src/vnet/ethernet/init.c  | 2 +-
+ 3 files changed, 10 insertions(+), 2 deletions(-)
 
 diff --git a/src/vnet/adj/adj.c b/src/vnet/adj/adj.c
 index 37ad4654f..2dd0922d5 100644
@@ -66,3 +77,16 @@ index df33ec504..f508cd70d 100644
      default:
          return;
      }
+diff --git a/src/vnet/ethernet/init.c b/src/vnet/ethernet/init.c
+index 000000000..000000000 100644
+--- a/src/vnet/ethernet/init.c
++++ b/src/vnet/ethernet/init.c
+@@ -34,7 +34,7 @@ VNET_FEATURE_ARC_INIT (ethernet_output, static) =
+ {
+   .arc_name  = "ethernet-output",
+   .last_in_arc = "error-drop",
+-  .start_nodes = VNET_FEATURES ("adj-l2-midchain"),
++  .start_nodes = VNET_FEATURES ("adj-l2-midchain", "adj-l2-rewrite"),
+   .arc_index_ptr = &ethernet_main.output_feature_arc_index,
+ };
+ 
