@@ -126,6 +126,12 @@ typedef struct
   u8 host_xc;
   u8 drop_member_stats;
 
+  /* Toggles for the features saivpp wires, not us.  VPP stores them and
+   * answers sonic_ext_feature_get(); nothing here acts on them. */
+  u8 ip2me;
+  u8 l2_trap_fixup;
+  u8 l2_vlan_filter;
+
   /* Set once capture/host-xc have been enabled on all existing
    * interfaces, so that toggling on/off is idempotent. */
   u8 capture_enabled;

@@ -162,6 +162,15 @@ show_sonic_ext_command_fn (vlib_main_t *vm, unformat_input_t *input,
   /* Derived from the two cookie consumers above, so report the latch. */
   vlib_cli_output (vm, "  capture (derived) : %s",
 		   sem->capture_enabled ? "on" : "off");
+  /* Stored for saivpp, which wires these; arc membership does not reflect them. */
+  vlib_cli_output (vm, "  -- saivpp-wired --");
+  vlib_cli_output (vm, "  ip2me             : %s",
+		   sem->ip2me ? "on" : "off");
+  vlib_cli_output (vm, "  l2-trap-fixup     : %s",
+		   sem->l2_trap_fixup ? "on" : "off");
+  vlib_cli_output (vm, "  l2-vlan-filter    : %s",
+		   sem->l2_vlan_filter ? "on" : "off");
+  vlib_cli_output (vm, "  -- counters --");
   vlib_cli_output (vm, "  captures          : %llu", sem->captures);
   vlib_cli_output (vm, "  aggr-tap redir    : %llu", sem->aggr_tap_redirects);
   vlib_cli_output (vm, "  glean redirect    : %llu", sem->glean_redirects);

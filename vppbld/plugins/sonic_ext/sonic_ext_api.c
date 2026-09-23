@@ -20,6 +20,9 @@
  * (sonic-sairedis) can enable the "receive-DPO check before ACL" feature
  * on exactly the L2 ports where an ingress drop ACL that could discard
  * ip2me traffic is bound.
+ *
+ * Exposes sonic_ext_feature_get so the same layer can read the startup.conf
+ * selection for the features it wires itself, and skip installing them.
  */
 
 #include <vnet/vnet.h>
@@ -87,6 +90,44 @@ vl_api_sonic_ext_mirror_encap_fixup_enable_disable_t_handler (
 
 exit:
   REPLY_MACRO (VL_API_SONIC_EXT_MIRROR_ENCAP_FIXUP_ENABLE_DISABLE_REPLY);
+}
+
+static void
+vl_api_sonic_ext_feature_get_t_handler (vl_api_sonic_ext_feature_get_t *mp)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  vl_api_sonic_ext_feature_get_reply_t *rmp;
+  /* Fixed-width field: a caller that fills all 64 bytes leaves no NUL, so copy
+   * out and terminate rather than trusting the wire to be a C string. */
+  char name[sizeof (mp->feature) + 1];
+  /* Unknown keyword answers "enabled": an older VPP must not silently turn a
+   * feature off for a saivpp that knows about it. */
+  u8 enabled = 1;
+  int rv = 0;
+
+  clib_memcpy (name, mp->feature, sizeof (mp->feature));
+  name[sizeof (mp->feature)] = 0;
+
+  if (!strcmp (name, "ip2me"))
+    enabled = sem->ip2me;
+  else if (!strcmp (name, "l2-trap-fixup"))
+    enabled = sem->l2_trap_fixup;
+  else if (!strcmp (name, "l2-vlan-filter"))
+    enabled = sem->l2_vlan_filter;
+  /* Wired by VPP, so nothing queries these; they answer only so that a
+   * disabled feature is not reported enabled by the unknown-keyword default.
+   * As in "show sonic-ext" this is the toggle, not arc membership. */
+  else if (!strcmp (name, "punt-via-member"))
+    enabled = sem->punt_via_member;
+  else if (!strcmp (name, "host-xc"))
+    enabled = sem->host_xc;
+  else if (!strcmp (name, "drop-member-stats"))
+    enabled = sem->drop_member_stats;
+  else if (!strcmp (name, "capture"))
+    enabled = sem->capture_enabled;
+
+  REPLY_MACRO2 (VL_API_SONIC_EXT_FEATURE_GET_REPLY,
+		({ rmp->enabled = enabled; }));
 }
 
 /* API definitions */

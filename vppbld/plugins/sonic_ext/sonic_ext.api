@@ -72,3 +72,32 @@ autoreply define sonic_ext_mirror_encap_fixup_enable_disable
   u8 hop_limit;
   bool enable;
 };
+
+/** \brief Ask whether a sonic-ext feature is enabled in startup.conf.
+
+    For the features saivpp wires itself -- ip2me, l2-trap-fixup,
+    l2-vlan-filter -- VPP only stores the operator's choice; it has no hook
+    of its own to skip.  saivpp calls this before deciding to install the
+    ACL hook or the classify sessions, so the decision is never made rather
+    than made and then refused.
+
+    An unrecognised name replies enabled, so a newer saivpp against an older
+    VPP keeps today's behaviour.
+
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param feature - keyword as spelled in the sonic-ext stanza
+*/
+define sonic_ext_feature_get
+{
+  u32 client_index;
+  u32 context;
+  string feature[64];
+};
+
+define sonic_ext_feature_get_reply
+{
+  u32 context;
+  i32 retval;
+  bool enabled;
+};

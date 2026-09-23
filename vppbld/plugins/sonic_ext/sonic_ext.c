@@ -476,6 +476,9 @@ unformat_sonic_ext_onoff (unformat_input_t *input, va_list *args)
  * "sonic-ext { ... }" in startup.conf.  Records the choice only;
  * sonic_ext_apply_config() does the wiring.  Assigning rather than acting is
  * also what lets a second stanza merge with the first, per keyword.
+ *
+ * ip2me, l2-trap-fixup and l2-vlan-filter are stored but never acted on here:
+ * saivpp wires those, and asks for them over sonic_ext_feature_get().
  */
 static clib_error_t *
 sonic_ext_config (vlib_main_t *vm, unformat_input_t *input)
@@ -495,6 +498,15 @@ sonic_ext_config (vlib_main_t *vm, unformat_input_t *input)
       else if (unformat (input, "drop-member-stats %U",
 			 unformat_sonic_ext_onoff, &enable))
 	sem->drop_member_stats = enable;
+      else if (unformat (input, "ip2me %U", unformat_sonic_ext_onoff,
+			 &enable))
+	sem->ip2me = enable;
+      else if (unformat (input, "l2-trap-fixup %U", unformat_sonic_ext_onoff,
+			 &enable))
+	sem->l2_trap_fixup = enable;
+      else if (unformat (input, "l2-vlan-filter %U", unformat_sonic_ext_onoff,
+			 &enable))
+	sem->l2_vlan_filter = enable;
       else
 	return clib_error_return (0, "unknown sonic-ext setting `%U'",
 				  format_unformat_error, input);
@@ -704,6 +716,9 @@ sonic_ext_init (vlib_main_t *vm)
   sem->punt_via_member = 1;
   sem->host_xc = 1;
   sem->drop_member_stats = 1;
+  sem->ip2me = 1;
+  sem->l2_trap_fixup = 1;
+  sem->l2_vlan_filter = 1;
 
   sonic_ext_register_acl_deferred_mirror ();
 
@@ -732,6 +747,15 @@ sonic_ext_apply_config (vlib_main_t *vm)
 
   if (sem->host_xc)
     sonic_ext_set_host_xc (1);
+
+  /* Nothing to wire for these -- saivpp does it, once it has asked.  Logged
+   * so an old saivpp that never asks does not make the setting look applied. */
+  if (!sem->ip2me || !sem->l2_trap_fixup || !sem->l2_vlan_filter)
+    clib_warning ("sonic-ext: awaiting saivpp query: ip2me %s, "
+		  "l2-trap-fixup %s, l2-vlan-filter %s",
+		  sem->ip2me ? "on" : "off",
+		  sem->l2_trap_fixup ? "on" : "off",
+		  sem->l2_vlan_filter ? "on" : "off");
 
   return 0;
 }
