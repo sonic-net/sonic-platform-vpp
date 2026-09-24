@@ -52,5 +52,8 @@
 #     adjacency has VNET_REWRITE_HAS_FEATURES; nothing set that flag for an
 #     ETHERNET-link adjacency. Lets the sonic_ext mirror-encap-fixup node run
 #     on a GRE TEB tunnel (stock gre_tunnel_add_del_v2) so Everflow can stamp
-#     the ERSPAN GRE protocol / TTL without a custom GRE API.
+#     the ERSPAN GRE protocol / TTL without a custom GRE API. Also declares
+#     adj-l2-rewrite as an ethernet-output arc start node, since
+#     adj_l2_rewrite_inline() starts the arc from both adj-l2-midchain and
+#     adj-l2-rewrite but only the former had the arc edges built.
 0020-adj-honour-ethernet-output-features-on-l2-adjacencies.patch
