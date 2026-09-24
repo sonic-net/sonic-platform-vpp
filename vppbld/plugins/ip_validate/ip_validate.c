@@ -25,9 +25,19 @@
 #define REPLY_MSG_ID_BASE sm->msg_id_base
 #include <vlibapi/api_helper_macros.h>
 
+/*
+ * Default-disabled: this plugin is not passive once loaded.  Its
+ * VNET_SW_INTERFACE_ADD_DEL_FUNCTION enables ip4-validate/ip6-validate on
+ * every interface as it is created, which puts a dropping feature in front
+ * of ip4-lookup/ip6-lookup for anyone who merely has the .so on the plugin
+ * path -- including VPP's own "make test", where it makes unrelated suites
+ * fail with "No packets captured".  Both SONiC startup.conf templates enable
+ * this plugin explicitly, so production behaviour is unchanged.
+ */
 VLIB_PLUGIN_REGISTER () = {
   .version = IP_VALIDATE_PLUGIN_BUILD_VER,
   .description = "IP Packet Validation Plugin",
+  .default_disabled = 1,
 };
 
 ip_validate_main_t ip_validate_main;

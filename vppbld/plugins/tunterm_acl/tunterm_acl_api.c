@@ -40,9 +40,15 @@
 
 #include "tunterm_acl_redirect.h"
 
+/*
+ * Default-disabled, like the other SONiC plugins: keep the ip4-unicast arc
+ * untouched unless SONiC asks for this plugin.  Both SONiC startup.conf
+ * templates enable it explicitly, so production behaviour is unchanged.
+ */
 VLIB_PLUGIN_REGISTER () = {
   .version = TUNTERM_ACL_PLUGIN_BUILD_VER,
   .description = "Tunnel Terminated ACL Plugin",
+  .default_disabled = 1,
 };
 
 tunterm_acl_main_t tunterm_acl_main;

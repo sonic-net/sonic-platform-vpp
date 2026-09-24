@@ -66,9 +66,22 @@ build_locally: repo_clone
 
 CONFIGURED_ARCH ?= amd64
 CI_DEST ?= $(CURDIR)/artifacts
+CI_BUILD_STAMP = $(CURDIR)/.ci-build.stamp
+CI_TEST_JOBS ?= 2
+
+# Anything that changes what gets built must invalidate the stamp.
+CI_BUILD_INPUTS = vpp_version patches/series $(wildcard patches/*.patch) \
+                  $(shell find $(VPP_CUSTOM_PLUGINS_DIR) -type f 2>/dev/null)
 
 .PHONY: ci-build
-ci-build: repo_clone
+ci-build: $(CI_BUILD_STAMP)
+
+# Stamped so that a second invocation (e.g. from ci-test, which runs as a
+# separate CI step) does not re-clone the repo and rebuild from scratch.
+# Remove the stamp with "make ci-clean" to force a full rebuild.
+$(CI_BUILD_STAMP): $(CI_BUILD_INPUTS)
+	rm -f $(CI_BUILD_STAMP)
+	$(MAKE) -f Makefile repo_clone
 	mkdir -p $(CI_DEST)
 	pushd $(VPP_REPO_DIR)
 	make UNATTENDED=y PLATFORM=vpp DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n install-dep && \
@@ -80,5 +93,55 @@ ci-build: repo_clone
 	done
 	popd
 	popd
+	touch $(CI_BUILD_STAMP)
 
-$(addprefix $(DEST)/, $(DERIVED_TARGETS)): $(DEST)/% : $(DEST)/$(MAIN_TARGET)
+# Dependencies needed only by "make test". tshark is deliberately dropped from
+# VPP's DEB_DEPENDS by patches/0001-remove-libnl-and-tshark-dependencies.patch
+# so that it is not pulled into the regular build, so install it here instead.
+CI_TEST_DEPS ?= tshark
+
+# Apt state is container state, not workspace state: ci-build may have been
+# satisfied by the stamp from an earlier container (or an earlier CI step),
+# in which case install-dep never ran here and the toolchain is missing.
+# Always re-assert the build deps before testing; apt is a no-op when they
+# are already present.
+.PHONY: ci-test-deps
+ci-test-deps: ci-build
+	# Preseed so the wireshark-common postinst does not prompt.
+	echo "wireshark-common wireshark-common/install-setuid boolean false" | \
+		sudo debconf-set-selections
+	sudo -E DEBIAN_FRONTEND=noninteractive apt-get update
+	sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $(CI_TEST_DEPS)
+	pushd $(VPP_REPO_DIR)
+	make UNATTENDED=y PLATFORM=vpp DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n install-dep
+	make PLATFORM=vpp DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n install-ext-deps
+	popd
+
+# Where to leave logs from failed test cases so that CI can publish them.
+#
+# "make test" drops each failing test case's tempdir (log.txt, vpp_stderr.txt
+# and the kept pcaps) into FAILED_DIR, but the entries there are symlinks into
+# /tmp/vpp-unittest-*, which an artifact upload cannot follow.  Setting
+# COMPRESS_FAILED_TEST_LOGS=yes together with WORKSPACE makes VPP's
+# test/scripts/compress_failed.sh gzip those files and copy real (non-symlink)
+# copies into $(WORKSPACE)/archives, which is publishable.  Both happen inside
+# the "test" recipe itself, before it propagates the failure, so the logs
+# survive even though .SHELLFLAGS has -e.
+CI_TEST_LOGS ?= $(CURDIR)/test-logs
+
+.PHONY: ci-test
+ci-test: ci-build ci-test-deps
+	# Start clean so a passing run cannot republish a previous run's failures.
+	rm -rf $(CI_TEST_LOGS)
+	mkdir -p $(CI_TEST_LOGS)
+	pushd $(VPP_REPO_DIR)
+	env WORKSPACE=$(CI_TEST_LOGS) \
+		make UNATTENDED=y PLATFORM=vpp TEST_JOBS=$(CI_TEST_JOBS) \
+		     COMPRESS_FAILED_TEST_LOGS=yes test
+	popd
+
+.PHONY: ci-clean
+ci-clean:
+	rm -f $(CI_BUILD_STAMP)
+	rm -rf $(CI_DEST)
+	rm -rf $(CI_TEST_LOGS)

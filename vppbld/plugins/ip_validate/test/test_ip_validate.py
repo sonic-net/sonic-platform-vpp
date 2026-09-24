@@ -21,6 +21,16 @@ from scapy.packet import Raw
 class TestIpValidate(VppTestCase):
     """IP Packet Validation Test Case"""
 
+    # The plugin is .default_disabled, so ask for it explicitly rather than
+    # relying on VPP auto-loading every .so it finds on the plugin path.
+    extra_vpp_plugin_config = [
+        "plugin",
+        "ip_validate_plugin.so",
+        "{",
+        "enable",
+        "}",
+    ]
+
     @classmethod
     def setUpClass(cls):
         super(TestIpValidate, cls).setUpClass()
