@@ -153,23 +153,21 @@ show_sonic_ext_command_fn (vlib_main_t *vm, unformat_input_t *input,
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
   vlib_cli_output (vm, "sonic-ext state:");
-  vlib_cli_output (vm, "  punt-via-member   : %s",
-		   sem->punt_via_member ? "on" : "off");
-  vlib_cli_output (vm, "  host-xc           : %s",
-		   sem->host_xc ? "on" : "off");
-  vlib_cli_output (vm, "  drop-member-stats : %s",
-		   sem->drop_member_stats ? "on" : "off");
+#define _(symbol, field, name, default_enabled, owner)                        \
+  if (SONIC_EXT_OWNER_##owner == SONIC_EXT_OWNER_VPP)                         \
+    vlib_cli_output (vm, "  %-17s : %s", name, sem->field ? "on" : "off");
+  foreach_sonic_ext_feature
+#undef _
   /* Derived from the two cookie consumers above, so report the latch. */
   vlib_cli_output (vm, "  capture (derived) : %s",
 		   sem->capture_enabled ? "on" : "off");
   /* Stored for saivpp, which wires these; arc membership does not reflect them. */
   vlib_cli_output (vm, "  -- saivpp-wired --");
-  vlib_cli_output (vm, "  ip2me             : %s",
-		   sem->ip2me ? "on" : "off");
-  vlib_cli_output (vm, "  l2-trap-fixup     : %s",
-		   sem->l2_trap_fixup ? "on" : "off");
-  vlib_cli_output (vm, "  l2-vlan-filter    : %s",
-		   sem->l2_vlan_filter ? "on" : "off");
+#define _(symbol, field, name, default_enabled, owner)                        \
+  if (SONIC_EXT_OWNER_##owner == SONIC_EXT_OWNER_SAIVPP)                      \
+    vlib_cli_output (vm, "  %-17s : %s", name, sem->field ? "on" : "off");
+  foreach_sonic_ext_feature
+#undef _
   vlib_cli_output (vm, "  -- counters --");
   vlib_cli_output (vm, "  captures          : %llu", sem->captures);
   vlib_cli_output (vm, "  aggr-tap redir    : %llu", sem->aggr_tap_redirects);

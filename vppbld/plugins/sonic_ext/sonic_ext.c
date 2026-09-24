@@ -498,27 +498,17 @@ sonic_ext_config (vlib_main_t *vm, unformat_input_t *input)
     {
       u8 enable;
 
-      if (unformat (input, "punt-via-member %U", unformat_sonic_ext_onoff,
-		    &enable))
-	sem->punt_via_member = enable;
-      else if (unformat (input, "host-xc %U", unformat_sonic_ext_onoff,
-			 &enable))
-	sem->host_xc = enable;
-      else if (unformat (input, "drop-member-stats %U",
-			 unformat_sonic_ext_onoff, &enable))
-	sem->drop_member_stats = enable;
-      else if (unformat (input, "ip2me %U", unformat_sonic_ext_onoff,
-			 &enable))
-	sem->ip2me = enable;
-      else if (unformat (input, "l2-trap-fixup %U", unformat_sonic_ext_onoff,
-			 &enable))
-	sem->l2_trap_fixup = enable;
-      else if (unformat (input, "l2-vlan-filter %U", unformat_sonic_ext_onoff,
-			 &enable))
-	sem->l2_vlan_filter = enable;
-      else
-	return clib_error_return (0, "unknown sonic-ext setting `%U'",
-				  format_unformat_error, input);
+#define _(symbol, field, name, default_enabled, owner)                        \
+  if (unformat (input, name " %U", unformat_sonic_ext_onoff, &enable))        \
+    {                                                                         \
+      sem->field = enable;                                                    \
+      continue;                                                               \
+    }
+      foreach_sonic_ext_feature
+#undef _
+
+      return clib_error_return (0, "unknown sonic-ext setting `%U'",
+				format_unformat_error, input);
     }
 
   return 0;
@@ -722,12 +712,10 @@ sonic_ext_init (vlib_main_t *vm)
 
   /* Defaults only -- no arcs are touched here, so a "sonic-ext { }" stanza
    * parsed after this point can still keep a feature off them entirely. */
-  sem->punt_via_member = 1;
-  sem->host_xc = 1;
-  sem->drop_member_stats = 1;
-  sem->ip2me = 1;
-  sem->l2_trap_fixup = 1;
-  sem->l2_vlan_filter = 1;
+#define _(symbol, field, name, default_enabled, owner)                        \
+  sem->field = default_enabled;
+  foreach_sonic_ext_feature
+#undef _
 
   sonic_ext_register_acl_deferred_mirror ();
 
@@ -759,12 +747,11 @@ sonic_ext_apply_config (vlib_main_t *vm)
 
   /* Nothing to wire for these -- saivpp does it, once it has asked.  Logged
    * so an old saivpp that never asks does not make the setting look applied. */
-  if (!sem->ip2me || !sem->l2_trap_fixup || !sem->l2_vlan_filter)
-    clib_warning ("sonic-ext: awaiting saivpp query: ip2me %s, "
-		  "l2-trap-fixup %s, l2-vlan-filter %s",
-		  sem->ip2me ? "on" : "off",
-		  sem->l2_trap_fixup ? "on" : "off",
-		  sem->l2_vlan_filter ? "on" : "off");
+#define _(symbol, field, name, default_enabled, owner)                        \
+  if (SONIC_EXT_OWNER_##owner == SONIC_EXT_OWNER_SAIVPP && !sem->field)       \
+    clib_warning ("sonic-ext: %s off, awaiting saivpp query", name);
+  foreach_sonic_ext_feature
+#undef _
 
   return 0;
 }

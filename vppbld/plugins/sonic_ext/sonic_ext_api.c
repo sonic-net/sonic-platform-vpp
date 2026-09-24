@@ -107,22 +107,13 @@ vl_api_sonic_ext_feature_get_t_handler (vl_api_sonic_ext_feature_get_t *mp)
   clib_memcpy (name, mp->feature, sizeof (mp->feature));
   name[sizeof (mp->feature)] = 0;
 
-  if (!strcmp (name, "ip2me"))
-    enabled = sem->ip2me;
-  else if (!strcmp (name, "l2-trap-fixup"))
-    enabled = sem->l2_trap_fixup;
-  else if (!strcmp (name, "l2-vlan-filter"))
-    enabled = sem->l2_vlan_filter;
-
-  /* The following is wired by VPP and is not queried.
-   * Answer for completeness/correctness */
-  else if (!strcmp (name, "punt-via-member"))
-    enabled = sem->punt_via_member;
-  else if (!strcmp (name, "host-xc"))
-    enabled = sem->host_xc;
-  else if (!strcmp (name, "drop-member-stats"))
-    enabled = sem->drop_member_stats;
-  else if (!strcmp (name, "capture"))
+#define _(symbol, field, str, default_enabled, owner)                         \
+  if (!strcmp (name, str))                                                    \
+    enabled = sem->field;                                                     \
+  else
+  foreach_sonic_ext_feature
+#undef _
+  if (!strcmp (name, "capture"))
     enabled = sem->capture_enabled;
 
   REPLY_MACRO2 (VL_API_SONIC_EXT_FEATURE_GET_REPLY,
