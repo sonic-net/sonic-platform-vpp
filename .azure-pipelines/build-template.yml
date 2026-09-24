@@ -46,6 +46,26 @@ jobs:
         cd $(System.DefaultWorkingDirectory)/vppbld
         make ci-build CONFIGURED_ARCH=${{ parameters.arch }} CI_DEST=$(System.DefaultWorkingDirectory)/vppbld/artifacts
       displayName: "Build VPP packages from source"
+    - script: |
+        set -ex
+        cd $(System.DefaultWorkingDirectory)/vppbld
+        make ci-test CONFIGURED_ARCH=${{ parameters.arch }} \
+          CI_DEST=$(System.DefaultWorkingDirectory)/vppbld/artifacts \
+          CI_TEST_LOGS=$(System.DefaultWorkingDirectory)/vppbld/test-logs
+      displayName: "Run VPP make test"
+    # Logs of failing test cases (gzipped log.txt / vpp_stderr.txt / pcaps).
+    # The directory is created unconditionally so the publish below cannot
+    # fail when an earlier step, rather than the tests, is what broke.
+    - script: |
+        set -ex
+        mkdir -p $(System.DefaultWorkingDirectory)/vppbld/test-logs
+        ls -lR $(System.DefaultWorkingDirectory)/vppbld/test-logs || true
+      displayName: "Collect failed VPP test logs"
+      condition: failed()
+    - publish: $(System.DefaultWorkingDirectory)/vppbld/test-logs
+      artifact: vpp-test-logs-${{ parameters.debian_version }}
+      displayName: "Archive failed VPP test logs"
+      condition: failed()
     - publish: $(System.DefaultWorkingDirectory)/vppbld/artifacts
       artifact: vpp-${{ parameters.debian_version }}
       displayName: "Archive vpp debian packages"

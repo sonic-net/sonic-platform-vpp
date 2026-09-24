@@ -1,34 +1,5 @@
-From 696f83b12114d02c4c8a225678aac8b77dffe177 Mon Sep 17 00:00:00 2001
-From: Longxiang Lyu <lolv@microsoft.com>
-Date: Fri, 1 May 2026 04:33:32 +0000
-Subject: [PATCH] ipip: add mp2p ipip tunnel
-
-Introduce a new multipoint-to-point (MP2P) tunnel mode for IPIP. An
-MP2P tunnel decapsulates traffic from many remote peers arriving at a
-single local source, but does not encapsulate towards any peer; it is
-effectively a decap-only sibling of the existing P2MP mode.
-
-This is for the SONiC VPP project to support the SAI P2MP IPINIP tunnel
-behavior that SONiC accepts/decaps traffic from any peer to the local.
-
-Type: feature
-Change-Id: Ia772ae35d80c90469801bc43fdaa15b63ea8753b
-Signed-off-by: Longxiang Lyu <lolv@microsoft.com>
----
- src/plugins/gre/interface.c      |   3 +
- src/vnet/ipip/ipip.c             |  32 ++++--
- src/vnet/ipip/ipip.h             |   1 +
- src/vnet/ipip/ipip_api.c         |   2 +
- src/vnet/ipip/ipip_cli.c         |  14 ++-
- src/vnet/ipip/node.c             |   9 +-
- src/vnet/tunnel/tunnel.c         |   2 +
- src/vnet/tunnel/tunnel.h         |   7 +-
- src/vnet/tunnel/tunnel_types.api |   2 +
- test/test_ipip.py                | 172 +++++++++++++++++++++++++++++++
- 10 files changed, 227 insertions(+), 17 deletions(-)
-
 diff --git a/src/plugins/gre/interface.c b/src/plugins/gre/interface.c
-index 446301289..d7c86e526 100644
+index 1d2dfba61..cbe0a42b6 100644
 --- a/src/plugins/gre/interface.c
 +++ b/src/plugins/gre/interface.c
 @@ -237,6 +237,9 @@ gre_tunnel_restack (gre_tunnel_t *gt)
@@ -41,11 +12,11 @@ index 446301289..d7c86e526 100644
        }
    }
  }
-diff --git a/src/vnet/ipip/ipip.c b/src/vnet/ipip/ipip.c
-index 3464cdd1d..bfbf5465d 100644
---- a/src/vnet/ipip/ipip.c
-+++ b/src/vnet/ipip/ipip.c
-@@ -367,6 +367,16 @@ ipip_update_adj (vnet_main_t * vnm, u32 sw_if_index, adj_index_t ai)
+diff --git a/src/plugins/ipip/ipip.c b/src/plugins/ipip/ipip.c
+index 10e231979..ed6abd40e 100644
+--- a/src/plugins/ipip/ipip.c
++++ b/src/plugins/ipip/ipip.c
+@@ -366,6 +366,16 @@ ipip_update_adj (vnet_main_t * vnm, u32 sw_if_index, adj_index_t ai)
    if (!t)
      return;
  
@@ -62,7 +33,7 @@ index 3464cdd1d..bfbf5465d 100644
    /*
     * the user has not requested that the load-balancing be based on
     * a flow hash of the inner packet. so use the stacking to choose
-@@ -754,10 +764,15 @@ ipip_add_tunnel (ipip_transport_t transport,
+@@ -752,10 +762,15 @@ ipip_add_tunnel (ipip_transport_t transport, u32 instance, ip46_address_t *src,
    ipip_tunnel_key_t key;
    ipip_mode_t mode;
  
@@ -80,7 +51,7 @@ index 3464cdd1d..bfbf5465d 100644
    ipip_mk_key_i (transport, mode, src, dst, fib_index, &key);
  
    t = ipip_tunnel_db_find (&key);
-@@ -786,11 +801,14 @@ ipip_add_tunnel (ipip_transport_t transport,
+@@ -784,11 +799,14 @@ ipip_add_tunnel (ipip_transport_t transport, u32 instance, ip46_address_t *src,
    t->dev_instance = t_idx;	/* actual */
    t->user_instance = u_idx;	/* name */
  
@@ -100,22 +71,10 @@ index 3464cdd1d..bfbf5465d 100644
  
    hi = vnet_get_hw_interface (vnm, hw_if_index);
    sw_if_index = hi->sw_if_index;
-diff --git a/src/vnet/ipip/ipip.h b/src/vnet/ipip/ipip.h
-index fd6f50172..132147430 100644
---- a/src/vnet/ipip/ipip.h
-+++ b/src/vnet/ipip/ipip.h
-@@ -44,6 +44,7 @@ typedef enum
-   IPIP_MODE_P2P = 0,
-   IPIP_MODE_P2MP,
-   IPIP_MODE_6RD,
-+  IPIP_MODE_MP2P,
- } __clib_packed ipip_mode_t;
- 
- typedef struct
-diff --git a/src/vnet/ipip/ipip_api.c b/src/vnet/ipip/ipip_api.c
-index 7a46bc35a..630cf7b74 100644
---- a/src/vnet/ipip/ipip_api.c
-+++ b/src/vnet/ipip/ipip_api.c
+diff --git a/src/plugins/ipip/ipip_api.c b/src/plugins/ipip/ipip_api.c
+index 55c220864..9949473f3 100644
+--- a/src/plugins/ipip/ipip_api.c
++++ b/src/plugins/ipip/ipip_api.c
 @@ -101,6 +101,8 @@ ipip_tunnel_mode_encode (ipip_mode_t mode)
        return TUNNEL_API_MODE_P2P;
      case IPIP_MODE_P2MP:
@@ -125,10 +84,10 @@ index 7a46bc35a..630cf7b74 100644
      case IPIP_MODE_6RD:
        return TUNNEL_API_MODE_P2P;
      default:
-diff --git a/src/vnet/ipip/ipip_cli.c b/src/vnet/ipip/ipip_cli.c
+diff --git a/src/plugins/ipip/ipip_cli.c b/src/plugins/ipip/ipip_cli.c
 index 2523fe014..7e658777c 100644
---- a/src/vnet/ipip/ipip_cli.c
-+++ b/src/vnet/ipip/ipip_cli.c
+--- a/src/plugins/ipip/ipip_cli.c
++++ b/src/plugins/ipip/ipip_cli.c
 @@ -187,11 +187,11 @@ done:
    return error;
  }
@@ -157,10 +116,22 @@ index 2523fe014..7e658777c 100644
      }
  
    s = format (s, "table-ID %d sw-if-idx %d flags [%U] dscp %U",
-diff --git a/src/vnet/ipip/node.c b/src/vnet/ipip/node.c
-index 800d9a3e8..0b404fdda 100644
---- a/src/vnet/ipip/node.c
-+++ b/src/vnet/ipip/node.c
+diff --git a/src/plugins/ipip/ipip_types.h b/src/plugins/ipip/ipip_types.h
+index 940138fe2..72ad08069 100644
+--- a/src/plugins/ipip/ipip_types.h
++++ b/src/plugins/ipip/ipip_types.h
+@@ -20,6 +20,7 @@ typedef enum
+   IPIP_MODE_P2P = 0,
+   IPIP_MODE_P2MP,
+   IPIP_MODE_6RD,
++  IPIP_MODE_MP2P
+ } __clib_packed ipip_mode_t;
+ 
+ typedef struct
+diff --git a/src/plugins/ipip/node.c b/src/plugins/ipip/node.c
+index 7276a9a69..bbf3f2923 100644
+--- a/src/plugins/ipip/node.c
++++ b/src/plugins/ipip/node.c
 @@ -125,14 +125,19 @@ ipip_input (vlib_main_t * vm, vlib_node_runtime_t * node,
  
  	  /*
@@ -228,10 +199,10 @@ index 142671737..2a29a557b 100644
  
  /**
 diff --git a/test/test_ipip.py b/test/test_ipip.py
-index 85b35fa7f..0c9a220b9 100644
+index b92f7c54d..66444b9e1 100644
 --- a/test/test_ipip.py
 +++ b/test/test_ipip.py
-@@ -521,6 +521,90 @@ class TestIPIP(VppTestCase):
+@@ -523,6 +523,90 @@ class TestIPIP(VppTestCase):
      def payload(self, len):
          return "x" * len
  
@@ -322,7 +293,7 @@ index 85b35fa7f..0c9a220b9 100644
      def test_mipip4(self):
          """p2mp IPv4 tunnel Tests"""
  
-@@ -1328,6 +1412,94 @@ class TestIPIP6(VppTestCase):
+@@ -1331,6 +1415,94 @@ class TestIPIP6(VppTestCase):
          sw_if_index = rv.sw_if_index
          self.vapi.ipip_del_tunnel(sw_if_index)
  
@@ -417,6 +388,3 @@ index 85b35fa7f..0c9a220b9 100644
      def payload(self, len):
          return "x" * len
  
--- 
-2.34.1
-

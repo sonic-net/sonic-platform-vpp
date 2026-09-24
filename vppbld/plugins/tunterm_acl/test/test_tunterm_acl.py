@@ -33,6 +33,16 @@ RUN_TESTS_INDIVIDUALLY = False
 class TestTuntermAcl(VppTestCase):
     """Tunnel Termination ACL Test Case"""
 
+    # The plugin is .default_disabled, so ask for it explicitly rather than
+    # relying on VPP auto-loading every .so it finds on the plugin path.
+    extra_vpp_plugin_config = [
+        "plugin",
+        "tunterm_acl_plugin.so",
+        "{",
+        "enable",
+        "}",
+    ]
+
     def __init__(self, *args):
         VppTestCase.__init__(self, *args)
 
