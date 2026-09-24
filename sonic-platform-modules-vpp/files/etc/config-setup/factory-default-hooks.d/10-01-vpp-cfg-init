@@ -85,13 +85,6 @@ function setup_ports_list()
         echo "VPP_WORKERS=$VPP_WORKERS" >> $VPP_ENV_FILE
     fi
 
-    if [ "x$SONIC_EXT_CONFIG" != "x" ]; then
-        # Unquoted, hence space-free: this file is sourced as shell, but the same
-        # value is also passed via docker -e, which keeps quotes as part of the value.
-        [[ "$SONIC_EXT_CONFIG" =~ ^[a-z][a-z0-9-]*=(on|off|enable|disable)(,[a-z][a-z0-9-]*=(on|off|enable|disable))*$ ]] || error "SONIC_EXT_CONFIG must be comma-separated '<feature>=on|off' entries, got '$SONIC_EXT_CONFIG'"
-        echo "SONIC_EXT_CONFIG=$SONIC_EXT_CONFIG" >> $VPP_ENV_FILE
-    fi
-
     if [ "x$SONIC_VPP_SWITCH" != "x" ]; then
         echo "SONIC_VPP_SWITCH=$SONIC_VPP_SWITCH" >> $VPP_ENV_FILE
     fi    

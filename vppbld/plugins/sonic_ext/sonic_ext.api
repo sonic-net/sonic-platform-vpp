@@ -81,8 +81,8 @@ autoreply define sonic_ext_mirror_encap_fixup_enable_disable
     ACL hook or the classify sessions, so the decision is never made rather
     than made and then refused.
 
-    An unrecognised name replies enabled, so a newer saivpp against an older
-    VPP keeps today's behaviour.
+    An unrecognised name replies disabled: the sonic-ext plugin has no such feature,
+    so there is nothing for saivpp to wire.
 
     @param client_index - opaque cookie to identify the sender
     @param context - sender context, to match reply w/ request

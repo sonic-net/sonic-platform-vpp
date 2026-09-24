@@ -100,9 +100,8 @@ vl_api_sonic_ext_feature_get_t_handler (vl_api_sonic_ext_feature_get_t *mp)
   /* Fixed-width field: a caller that fills all 64 bytes leaves no NUL, so copy
    * out and terminate rather than trusting the wire to be a C string. */
   char name[sizeof (mp->feature) + 1];
-  /* Unknown keyword answers "enabled": an older VPP must not silently turn a
-   * feature off for a saivpp that knows about it. */
-  u8 enabled = 1;
+  /* An unrecognized feature defaults to disabled */
+  u8 enabled = 0;
   int rv = 0;
 
   clib_memcpy (name, mp->feature, sizeof (mp->feature));
@@ -114,9 +113,9 @@ vl_api_sonic_ext_feature_get_t_handler (vl_api_sonic_ext_feature_get_t *mp)
     enabled = sem->l2_trap_fixup;
   else if (!strcmp (name, "l2-vlan-filter"))
     enabled = sem->l2_vlan_filter;
-  /* Wired by VPP, so nothing queries these; they answer only so that a
-   * disabled feature is not reported enabled by the unknown-keyword default.
-   * As in "show sonic-ext" this is the toggle, not arc membership. */
+
+  /* The following is wired by VPP and is not queried.
+   * Answer for completeness/correctness */
   else if (!strcmp (name, "punt-via-member"))
     enabled = sem->punt_via_member;
   else if (!strcmp (name, "host-xc"))
