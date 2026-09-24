@@ -116,20 +116,48 @@ typedef struct
   u8 enabled;
 } sonic_ext_mirror_encap_cfg_t;
 
+/* Who wires a feature: VPP-owned ones are wired by this plugin, SAIVPP-owned
+ * ones are only stored here and answered via sonic_ext_feature_get(). */
+typedef enum
+{
+  SONIC_EXT_OWNER_VPP,
+  SONIC_EXT_OWNER_SAIVPP,
+} sonic_ext_feature_owner_t;
+
+/* Configurable features: _ (symbol, field, name, default_enabled, owner) */
+#define foreach_sonic_ext_feature                                             \
+  _ (PUNT_VIA_MEMBER, punt_via_member, "punt-via-member", 1, VPP)             \
+  _ (HOST_XC, host_xc, "host-xc", 1, VPP)                                     \
+  _ (DROP_MEMBER_STATS, drop_member_stats, "drop-member-stats", 1, VPP)       \
+  _ (IP2ME, ip2me, "ip2me", 1, SAIVPP)                                        \
+  _ (L2_TRAP_FIXUP, l2_trap_fixup, "l2-trap-fixup", 1, SAIVPP)                \
+  _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)
+
+typedef enum
+{
+#define _(symbol, field, name, default_enabled, owner)                        \
+  SONIC_EXT_FEATURE_##symbol,
+  foreach_sonic_ext_feature
+#undef _
+    SONIC_EXT_FEATURE_COUNT,
+} sonic_ext_feature_id_t;
+
 typedef struct
 {
   /* API message ID base */
   u16 msg_id_base;
 
-  /* Global feature toggles. */
-  u8 punt_via_member;
-  u8 host_xc;
+  /* Feature toggles, one per foreach_sonic_ext_feature entry. */
+#define _(symbol, field, name, default_enabled, owner) u8 field;
+  foreach_sonic_ext_feature
+#undef _
 
   /* Set once capture/host-xc have been enabled on all existing
    * interfaces, so that toggling on/off is idempotent. */
   u8 capture_enabled;
   u8 host_xc_enabled;
   u8 glean_redirect_enabled;
+  u8 aggr_tap_redirect_enabled;
 
   /* Deferred egress mirror: set once the sonic-ext-egress-mirror feature
    * has been enabled on all interface-output arcs; gated by a refcount of
@@ -204,6 +232,11 @@ void sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable);
 /* Toggle accessors used by CLI and node fast paths. */
 void sonic_ext_set_punt_via_member (u8 is_enable);
 void sonic_ext_set_host_xc (u8 is_enable);
+
+/* Enable sonic-ext-capture on every existing LCP pair's wire phy.  Capture
+ * has no toggle of its own: it is enabled whenever one of the features that
+ * consumes its per-buffer cookie is. */
+void sonic_ext_capture_enable_all (void);
 
 /* Returns non-zero if phy_sw_if_index is an "aggregate" parent whose
  * LCP host tap should have the aggr-tap-redirect feature enabled --

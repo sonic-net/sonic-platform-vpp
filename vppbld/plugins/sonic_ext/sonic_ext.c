@@ -336,6 +336,35 @@ sonic_ext_capture_walk_enable_cb (index_t lipi, void *ctx)
   return WALK_CONTINUE;
 }
 
+/*
+ * lcp_itf_pair_walk callback: catches aggregate pairs that already existed
+ * when punt-via-member was turned on; later ones go via the LCP vft.
+ */
+static walk_rc_t
+sonic_ext_aggr_tap_redirect_walk_enable_cb (index_t lipi, void *ctx)
+{
+  const lcp_itf_pair_t *lip = lcp_itf_pair_get (lipi);
+  if (lip && sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
+    sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 1);
+  return WALK_CONTINUE;
+}
+
+/*
+ * Capture has no keyword of its own: it produces the cookie the other
+ * features consume, so it is derived from whichever of them is enabled.
+ */
+void
+sonic_ext_capture_enable_all (void)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+
+  if (sem->capture_enabled)
+    return;
+
+  lcp_itf_pair_walk (sonic_ext_capture_walk_enable_cb, NULL);
+  sem->capture_enabled = 1;
+}
+
 void
 sonic_ext_set_punt_via_member (u8 is_enable)
 {
@@ -343,34 +372,27 @@ sonic_ext_set_punt_via_member (u8 is_enable)
 
   sem->punt_via_member = (is_enable != 0);
 
-  /* Capture only fires on the wire phy side of LCP pairs (real ports,
-   * not BVIs/bonds) so the original ingress sw_if_index + VLAN tag is
-   * recorded before L2 bridging overwrites VLIB_RX with the BVI.  We
-   * leave the capture feature enabled even after disabling
-   * punt-via-member to avoid the per-interface enable/disable churn
-   * (the downstream redirect node short-circuits via the cookie magic
-   * check when the toggle is off). */
-  if (is_enable && !sem->capture_enabled)
-    {
-      lcp_itf_pair_walk (sonic_ext_capture_walk_enable_cb, NULL);
-      sem->capture_enabled = 1;
-    }
+  /* Gate only -- detaching is unsafe, see the device-input warning at the top
+   * of this file.  startup.conf provides the real never-attach. */
+  if (!is_enable)
+    return;
 
-  /* Glean-redirect is a single global feature on the ip4/ip6-drop
-   * arcs (dispatched with sw_if_index 0).  Enable once; the node
-   * self-scopes via the capture cookie + glean/arp adjacency check
-   * and short-circuits when punt_via_member is off, so we never need
-   * to disable it per-interface. */
-  if (is_enable && !sem->glean_redirect_enabled)
+  sonic_ext_capture_enable_all ();
+
+  /* Global, not per-interface: the drop arcs dispatch with sw_if_index 0. */
+  if (!sem->glean_redirect_enabled)
     {
       sonic_ext_glean_redirect_enable_disable (1);
       sem->glean_redirect_enabled = 1;
     }
 
-  /* The aggr-tap-redirect feature itself is wired per-interface from
-   * the LCP pair add/del callback (sonic_ext_lcp_pair_add_cb) -- it
-   * only needs to fire on the host tap of BVI/bond masters, never on
-   * every phy.  No per-interface iteration here. */
+  /* The walk catches existing pairs; the latch makes the LCP add callback
+   * wire the ones created later. */
+  if (!sem->aggr_tap_redirect_enabled)
+    {
+      lcp_itf_pair_walk (sonic_ext_aggr_tap_redirect_walk_enable_cb, NULL);
+      sem->aggr_tap_redirect_enabled = 1;
+    }
 }
 
 void
@@ -423,7 +445,8 @@ sonic_ext_lcp_pair_add_cb (lcp_itf_pair_t *lip)
     sonic_ext_capture_enable_disable (lip->lip_phy_sw_if_index, 1);
   if (sem->host_xc_enabled)
     sonic_ext_host_xc_enable_disable (lip->lip_host_sw_if_index, 1);
-  if (sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
+  if (sem->aggr_tap_redirect_enabled
+      && sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 1);
 }
 
@@ -438,9 +461,60 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
     sonic_ext_capture_enable_disable (lip->lip_phy_sw_if_index, 0);
   if (sem->host_xc_enabled)
     sonic_ext_host_xc_enable_disable (lip->lip_host_sw_if_index, 0);
-  if (sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
+  if (sem->aggr_tap_redirect_enabled
+      && sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 0);
 }
+
+static uword
+unformat_sonic_ext_onoff (unformat_input_t *input, va_list *args)
+{
+  u8 *result = va_arg (*args, u8 *);
+
+  if (unformat (input, "on") || unformat (input, "enable"))
+    *result = 1;
+  else if (unformat (input, "off") || unformat (input, "disable"))
+    *result = 0;
+  else
+    return 0;
+
+  return 1;
+}
+
+/*
+ * "sonic-ext { ... }" in startup.conf.  Records the choice only;
+ * sonic_ext_apply_config() does the wiring.  Assigning rather than acting is
+ * also what lets a second stanza merge with the first, per keyword.
+ *
+ * ip2me, l2-trap-fixup and l2-vlan-filter are stored but never acted on here:
+ * saivpp wires those, and asks for them over sonic_ext_feature_get().
+ */
+static clib_error_t *
+sonic_ext_config (vlib_main_t *vm, unformat_input_t *input)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      u8 enable;
+
+#define _(symbol, field, name, default_enabled, owner)                        \
+  if (unformat (input, name " %U", unformat_sonic_ext_onoff, &enable))        \
+    {                                                                         \
+      sem->field = enable;                                                    \
+      continue;                                                               \
+    }
+      foreach_sonic_ext_feature
+#undef _
+
+      return clib_error_return (0, "unknown sonic-ext setting `%U'",
+				format_unformat_error, input);
+    }
+
+  return 0;
+}
+
+VLIB_CONFIG_FUNCTION (sonic_ext_config, "sonic-ext");
 
 /*
  * Deferred egress mirror (Everflow MIRROR_EGRESS).
@@ -636,15 +710,12 @@ sonic_ext_init (vlib_main_t *vm)
   clib_memset (sem, 0, sizeof (*sem));
   lcp_itf_pair_register_vft (&sonic_ext_lcp_vft);
 
-  /* Default-on: capture + aggr-tap-redirect (punt-via-member) and
-   * host-xc.  At init time no LCP pairs exist yet, so the walks
-   * inside set_*() are no-ops and just flip the global toggles; as
-   * pairs are subsequently created, the LCP pair add callback wires
-   * the features per-interface.  The CLI ("sonic-ext punt-via-member
-   * disable" / "sonic-ext host-xc disable") can still flip them off
-   * at runtime. */
-  sonic_ext_set_punt_via_member (1);
-  sonic_ext_set_host_xc (1);
+  /* Defaults only -- no arcs are touched here, so a "sonic-ext { }" stanza
+   * parsed after this point can still keep a feature off them entirely. */
+#define _(symbol, field, name, default_enabled, owner)                        \
+  sem->field = default_enabled;
+  foreach_sonic_ext_feature
+#undef _
 
   sonic_ext_register_acl_deferred_mirror ();
 
@@ -652,3 +723,37 @@ sonic_ext_init (vlib_main_t *vm)
 }
 
 VLIB_INIT_FUNCTION (sonic_ext_init);
+
+/*
+ * Must be main-loop-enter rather than part of sonic_ext_config(): a config
+ * function only runs when its stanza is present, so the defaults would
+ * otherwise never be applied.  No LCP pair exists yet, so the walks below are
+ * empty on a cold boot -- it is the latches they set that drive
+ * sonic_ext_lcp_pair_add_cb.
+ */
+static clib_error_t *
+sonic_ext_apply_config (vlib_main_t *vm)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+
+  if (sem->punt_via_member)
+    sonic_ext_set_punt_via_member (1);
+  else if (sem->drop_member_stats)
+    /* Last remaining cookie consumer, so capture still has to run. */
+    sonic_ext_capture_enable_all ();
+
+  if (sem->host_xc)
+    sonic_ext_set_host_xc (1);
+
+  /* Nothing to wire for these -- saivpp does it, once it has asked.  Logged
+   * so an old saivpp that never asks does not make the setting look applied. */
+#define _(symbol, field, name, default_enabled, owner)                        \
+  if (SONIC_EXT_OWNER_##owner == SONIC_EXT_OWNER_SAIVPP && !sem->field)       \
+    clib_warning ("sonic-ext: %s off, awaiting saivpp query", name);
+  foreach_sonic_ext_feature
+#undef _
+
+  return 0;
+}
+
+VLIB_MAIN_LOOP_ENTER_FUNCTION (sonic_ext_apply_config);
