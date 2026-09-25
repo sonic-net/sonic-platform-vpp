@@ -149,6 +149,45 @@ VLIB_CLI_COMMAND (sonic_ext_ip2me_command, static) = {
 };
 
 static clib_error_t *
+sonic_ext_copp_ttl_punt_bind_command_fn (vlib_main_t *vm,
+					 unformat_input_t *input,
+					 vlib_cli_command_t *cmd)
+{
+  int is_bind = 1;
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (input, "del"))
+	is_bind = 0;
+      else
+	return clib_error_return (0, "unknown input `%U'",
+				   format_unformat_error, input);
+    }
+
+  {
+    int rv = sonic_ext_copp_ttl_punt_bind (is_bind);
+    if (rv)
+      return clib_error_return (0, "bind failed: rv %d", rv);
+  }
+
+  return 0;
+}
+
+/*
+ * Debug/manual-test CLI for the SAI TTL_ERROR punt-to-host toggle (see
+ * copp_ttl_punt_node.c). SAI/redis has no path to install this trap in
+ * this testbed's default copp_cfg.json, so this is the only way to
+ * exercise sonic-ext-copp-ttl-punt without a live SAI trap object --
+ * intended for manual verification, mirroring the existing
+ * `sonic-ext copp-ifout bind` debug command's role for that node.
+ */
+VLIB_CLI_COMMAND (sonic_ext_copp_ttl_punt_bind_command, static) = {
+  .path = "sonic-ext copp-ttl-punt bind",
+  .short_help = "sonic-ext copp-ttl-punt bind [del]",
+  .function = sonic_ext_copp_ttl_punt_bind_command_fn,
+};
+
+static clib_error_t *
 sonic_ext_copp_ifout_bind_command_fn (vlib_main_t *vm,
 				      unformat_input_t *input,
 				      vlib_cli_command_t *cmd)
@@ -263,8 +302,8 @@ show_sonic_ext_copp_ip2me_command_fn (vlib_main_t *vm, unformat_input_t *input,
 			 pol->violate_packets);
       else
 	vlib_cli_output (vm, "%-30s %-8d %-7s tcp/%-5d %10llu %10llu %10llu",
-			 pol->name, (i32) pol->policer_index, "tcp-dport",
-			 pol->match_tcp_dport, pol->conform_packets,
+			 pol->name, (i32) pol->policer_index, "tcp-port",
+			 pol->match_tcp_port, pol->conform_packets,
 			 pol->exceed_packets, pol->violate_packets);
     }
 
@@ -304,6 +343,8 @@ show_sonic_ext_command_fn (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (vm, "  host-xc direct  : %llu", sem->host_xc_direct);
   vlib_cli_output (vm, "  l2 trap fixups  : %llu", sem->l2_trap_fixups);
   vlib_cli_output (vm, "  ip2me hits      : %llu", sem->ip2me_hits);
+  vlib_cli_output (vm, "  ttl-punt enabled: %s",
+		   sem->copp_ttl_punt_enabled ? "on" : "off");
   return 0;
 }
 

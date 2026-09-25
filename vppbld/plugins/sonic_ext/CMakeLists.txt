@@ -26,6 +26,7 @@ add_vpp_plugin(sonic_ext
   copp_ifout_node.c
   copp_ip2me_node.c
   copp_udld_node.c
+  copp_ttl_punt_node.c
   cli.c
   egress_mirror_node.c
   mirror_encap_fixup_node.c

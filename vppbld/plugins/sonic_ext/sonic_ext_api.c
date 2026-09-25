@@ -169,17 +169,19 @@ vl_api_sonic_ext_copp_ip2me_bind_t_handler (
 }
 
 static void
-vl_api_sonic_ext_copp_ip2me_bind_bgp_t_handler (
-  vl_api_sonic_ext_copp_ip2me_bind_bgp_t *mp)
+vl_api_sonic_ext_copp_ip2me_bind_condition_t_handler (
+  vl_api_sonic_ext_copp_ip2me_bind_condition_t *mp)
 {
-  vl_api_sonic_ext_copp_ip2me_bind_bgp_reply_t *rmp;
+  vl_api_sonic_ext_copp_ip2me_bind_condition_reply_t *rmp;
   int rv;
   char name[64];
+  sonic_ext_copp_ip2me_condition_t condition = { 0 };
 
   snprintf (name, sizeof (name), "%s", mp->policer_name);
-  rv = sonic_ext_copp_ip2me_bind_bgp (name, mp->is_bind);
+  condition.tcp_port = ntohs (mp->tcp_port);
+  rv = sonic_ext_copp_ip2me_bind_condition (name, &condition, mp->is_bind);
 
-  REPLY_MACRO (VL_API_SONIC_EXT_COPP_IP2ME_BIND_BGP_REPLY);
+  REPLY_MACRO (VL_API_SONIC_EXT_COPP_IP2ME_BIND_CONDITION_REPLY);
 }
 
 static void
@@ -206,6 +208,18 @@ vl_api_sonic_ext_copp_ip2me_get_counters_t_handler (
     rmp->exceed_packets = clib_host_to_net_u64 (exceed);
     rmp->violate_packets = clib_host_to_net_u64 (violate);
   }));
+}
+
+static void
+vl_api_sonic_ext_copp_ttl_punt_bind_t_handler (
+  vl_api_sonic_ext_copp_ttl_punt_bind_t *mp)
+{
+  vl_api_sonic_ext_copp_ttl_punt_bind_reply_t *rmp;
+  int rv;
+
+  rv = sonic_ext_copp_ttl_punt_bind (mp->is_bind);
+
+  REPLY_MACRO (VL_API_SONIC_EXT_COPP_TTL_PUNT_BIND_REPLY);
 }
 
 /* API definitions */

@@ -32,23 +32,27 @@
  *
  *   2. This repo's copp/test_copp.py PTF UDLDTest (and hence the
  *      sonic-mgmt test_policer[UDLD] case this fixes): a bare,
- *      minimal frame with an all-zero 103-byte payload -- i.e. LLC
- *      dsap=ssap=0x00 (LLC_PROTOCOL_null). Nothing registers that
- *      SAP either, so llc-input's own LLC_INPUT_NEXT_DROP catches
- *      it one node earlier than case 1. The test only needs the
- *      dst-MAC + sub-0x600 "ethertype"/length field 0x0067 to be
- *      policed -- it does not construct a real SNAP header -- so
- *      this path must be handled too, or the test (and any other
- *      minimal/synthetic UDLD generator) never reaches a policer at
- *      all.
+ *      minimal frame with a non-null 103-byte payload of ASCII '0'
+ *      bytes (ptf.testutils.simple_eth_packet's default fill) -- i.e.
+ *      LLC dsap=ssap=0x30, not a real SNAP header at all. This is a
+ *      test-tool artifact, not real UDLD wire format (see the
+ *      SONIC_EXT_COPP_UDLD_LLC_SAP_PTF_TEST comment below for the
+ *      full history/reasoning -- flagged in PR review as needing this
+ *      exact justification, kept as a documented test-compat shim
+ *      rather than removed, so the existing sonic-mgmt test keeps
+ *      passing unmodified). Nothing registers SAP 0x30 either, so
+ *      llc-input's own LLC_INPUT_NEXT_DROP catches it one node
+ *      earlier than case 1.
  *
  * Both dead ends are plugged with ONE shared node
  * (sonic_ext_copp_udld_node), registered twice in
  * sonic_ext_copp_udld_init() -- once via llc_register_input_protocol
- * (LLC_PROTOCOL_null) for case 2, once via snap_register_input_protocol
- * (Cisco OUI, unidirectional_link_detection) for case 1's payload
- * after llc-input has already advanced past the LLC header and handed
- * off to snap-input. Whichever path a given frame took, the node:
+ * (LLC_PROTOCOL_null) for defensiveness (some other minimal generator
+ * could send true LLC-null), once via a raw LLC SAP-table write for
+ * case 2's SAP 0x30, and once via snap_register_input_protocol (Cisco
+ * OUI, unidirectional_link_detection) for case 1's payload after
+ * llc-input has already advanced past the LLC header and handed off
+ * to snap-input. Whichever path a given frame took, the node:
  *
  *   1. Restores the original wire L2 position (rewinds the buffer
  *      back past whatever llc-input / snap-input already consumed),
@@ -60,14 +64,16 @@
  *      sonic_ext_redirect_to_ingress_tap() and sonic-ext-host-xc
  *      already use -- and sets VLIB_TX to that tap.
  *   3. Hands off directly to the *existing* sonic-ext-copp-ifout
- *      node (not interface-output), so this new node stays a thin
+ *      node (not interface-output), so this node stays a thin
  *      "reach the classify/policer node from an LLC/SNAP dead end"
- *      shim: sonic-ext-copp-ifout's ethertype match against 0x0067
- *      (already bound today, see `show sonic-ext copp-ifout` --
- *      vpp-idx was permanently -1 for this row before this fix
- *      because nothing ever reached it) does the actual policing,
- *      counting, and conform/exceed/violate accounting, with no
- *      duplicated logic here.
+ *      shim: sonic-ext-copp-ifout does its own structural LLC/SNAP/
+ *      Cisco-OUI match on the restored Ethernet header to classify
+ *      real UDLD (see copp_ifout_node.c), falling back to a plain
+ *      ethertype/length-byte match for case 2's synthetic test frame
+ *      -- no policer resolution, counting, or match logic is
+ *      duplicated in this node; it exists purely to get the packet
+ *      from an LLC/SNAP dead end back onto an intact Ethernet frame
+ *      routed at the right TAP.
  */
 
 #include <sonic_ext/sonic_ext.h>
@@ -79,12 +85,6 @@
 #include <vnet/snap/snap.h>
 #include <vnet/feature/feature.h>
 #include <plugins/linux-cp/lcp_interface.h>
-
-/* The ethertype/length value sonic-ext-copp-ifout's bind table uses
- * for UDLD (see SwitchVppHostifTrap.cpp's buildClassifyMatchForTrapType,
- * SAI_HOSTIF_TRAP_TYPE_UDLD case) -- both wire encodings this node
- * handles carry this same value in the frame's 14th/15th bytes. */
-#define SONIC_EXT_COPP_UDLD_ETHERTYPE 0x0067
 
 typedef struct
 {
@@ -183,21 +183,6 @@ VLIB_NODE_FN (sonic_ext_copp_udld_node)
 	  tx0 = lip->lip_host_sw_if_index;
 	  vnet_buffer (b[0])->sw_if_index[VLIB_TX] = tx0;
 
-	  /* Pre-resolve the copp-ifout entry for UDLD via the key SAI bound
-	   * it under (SwitchVppHostifTrap.cpp's SONIC_EXT_COPP_UDLD_ETHERTYPE),
-	   * and tag the buffer with it. */
-	  {
-	    sonic_ext_main_t *sem = &sonic_ext_main;
-	    int ifout_idx = sonic_ext_copp_ifout_find_entry (
-	      sem, SONIC_EXT_COPP_UDLD_ETHERTYPE);
-
-	    if (ifout_idx >= 0)
-	      {
-		sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b[0]);
-		seb->copp_ifout_entry_idx = (u32) ifout_idx;
-	      }
-	  }
-
 	  /* Re-initialize the interface-output feature-arc position for
 	   * this buffer on the TAP we're redirecting to */
 	  {
@@ -278,6 +263,20 @@ sonic_ext_copp_udld_register_llc_sap (vlib_main_t *vm, u8 sap, u32 node_index)
   lm->input_next_by_protocol[sap] = next_index;
 }
 
+/*
+ * SAP 0x30 (ASCII '0') is NOT a SONiC-chosen or real-UDLD value -- it is
+ * an artifact of sonic-mgmt's PTF UDLDTest, whose packet-construction
+ * helper (ptf.testutils.simple_eth_packet) pads the frame's LLC
+ * dsap/ssap bytes with the fill character '0' rather than constructing
+ * a real LLC/SNAP header (see the file header comment's "case 2" for
+ * the full trace-confirmed explanation). Flagged in PR #281 review
+ * (sonic-net/sonic-platform-vpp#281, discussion on capture_node.c/
+ * copp_udld_node.c): kept as a documented test-compat shim, registered
+ * here alongside the real LLC_PROTOCOL_null and Cisco-OUI/SNAP paths
+ * below, rather than removed -- removing it would break test_policer
+ * [UDLD] since the test's synthetic frame never satisfies real UDLD's
+ * structural LLC/SNAP/Cisco-OUI match (see copp_ifout_node.c).
+ */
 #define SONIC_EXT_COPP_UDLD_LLC_SAP_PTF_TEST 0x30
 
 static clib_error_t *

@@ -192,15 +192,25 @@ define sonic_ext_copp_ip2me_bind_reply
            policer_index_by_name hash
     @param is_bind - 1 to bind, 0 to unbind
 */
-define sonic_ext_copp_ip2me_bind_bgp
+/** \brief Bind (or unbind) an independent policer slot matched by a
+    generic condition. Only one condition field exists today (tcp_port).
+
+    @param policer_name - name of an existing VPP policer object
+           (created via policer_add), looked up once via policer_main's
+           policer_index_by_name hash
+    @param tcp_port - TCP port to match (src or dst) for this slot
+    @param is_bind - 1 to bind, 0 to unbind
+*/
+define sonic_ext_copp_ip2me_bind_condition
 {
   u32 client_index;
   u32 context;
   string policer_name[64];
+  u16 tcp_port;
   bool is_bind;
 };
 
-define sonic_ext_copp_ip2me_bind_bgp_reply
+define sonic_ext_copp_ip2me_bind_condition_reply
 {
   u32 context;
   i32 retval;
@@ -222,5 +232,32 @@ define sonic_ext_copp_ip2me_get_counters_reply
   u64 conform_packets;
   u64 exceed_packets;
   u64 violate_packets;
+};
+
+/** \brief Enable / disable the SAI TTL_ERROR punt-to-host path: a single
+    global toggle (not a per-trap-group table entry, unlike copp-ifout/
+    copp-ip2me) read by core VPP's ip4-rewrite via a dlsym hook on every
+    genuinely-transiting TTL-expired packet. When enabled, such packets
+    are redirected to sonic-ext-copp-ttl-punt (which reaches the
+    control plane via the ingress phy's LCP host tap, then policed by
+    the existing sonic-ext-copp-ifout match_ip4_ttl_expiring path)
+    instead of VPP generating its own ICMPv4 time-exceeded reply. When
+    disabled, behavior is the stock/unmodified ip4-icmp-error path.
+
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param is_bind - 1 on SAI TTL_ERROR trap create, 0 on trap remove
+*/
+define sonic_ext_copp_ttl_punt_bind
+{
+  u32 client_index;
+  u32 context;
+  bool is_bind;
+};
+
+define sonic_ext_copp_ttl_punt_bind_reply
+{
+  u32 context;
+  i32 retval;
 };
 

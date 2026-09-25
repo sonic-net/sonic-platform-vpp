@@ -34,6 +34,8 @@
 #include <vnet/feature/feature.h>
 #include <policer/policer.h>
 #include <vnet/ip/ip4_packet.h>
+#include <vnet/llc/llc.h>
+#include <vnet/snap/snap.h>
 
 typedef struct
 {
@@ -85,10 +87,34 @@ typedef enum
   SONIC_EXT_COPP_IFOUT_N_NEXT,
 } sonic_ext_copp_ifout_next_t;
 
+/*
+ * Cache policer_main and policer_counters because
+ * policer_get_main()/policer_get_counters() are expensive
+ * dlsym-based plugin symbol lookups
+ */
+static policer_main_t *sonic_ext_copp_ifout_pm_cache;
+static vlib_combined_counter_main_t *sonic_ext_copp_ifout_pc_cache;
+
+static_always_inline policer_main_t *
+sonic_ext_copp_ifout_policer_main (void)
+{
+  if (PREDICT_FALSE (sonic_ext_copp_ifout_pm_cache == 0))
+    sonic_ext_copp_ifout_pm_cache = policer_get_main ();
+  return sonic_ext_copp_ifout_pm_cache;
+}
+
+static_always_inline vlib_combined_counter_main_t *
+sonic_ext_copp_ifout_policer_counters (void)
+{
+  if (PREDICT_FALSE (sonic_ext_copp_ifout_pc_cache == 0))
+    sonic_ext_copp_ifout_pc_cache = policer_get_counters ();
+  return sonic_ext_copp_ifout_pc_cache;
+}
+
 static_always_inline u32
 sonic_ext_copp_ifout_resolve_index (sonic_ext_copp_ifout_entry_t *entry)
 {
-  policer_main_t *pm = policer_get_main ();
+  policer_main_t *pm = sonic_ext_copp_ifout_policer_main ();
   uword *p;
 
   if (PREDICT_FALSE (pm == 0))
@@ -137,20 +163,52 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
   ethertype = clib_net_to_host_u16 (eth->type);
   *out_ethertype = ethertype;
 
-  /* Pre-resolved match wins over the byte-match loop below.
-   * Set by sonic-ext-copp-udld */
-  {
-    sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b);
+  /*
+   * UDLD structural match: a value < 0x0600 here is not a real
+   * ethertype, it is the 802.3 length field of an LLC frame -- real
+   * Cisco UDLD wire traffic varies in length and can never be relied
+   * on to equal a fixed byte value (see SwitchVppHostifTrap.cpp's
+   * SONIC_EXT_COPP_UDLD_ETHERTYPE comment: that constant is only an
+   * internal bind-table key shared with this node, never a wire
+   * match). Detect real UDLD structurally instead -- LLC dsap=ssap=
+   * 0xaa (SNAP), then a Cisco-OUI SNAP header carrying the UDLD
+   * protocol id -- and route straight to the UDLD entry regardless
+   * of the actual length value on the wire.
+   */
+  if (PREDICT_FALSE (ethertype < 0x0600))
+    {
+      llc_header_t *llc = (llc_header_t *) (eth + 1);
 
-    if (seb->magic == SONIC_EXT_BUFFER_MAGIC &&
-	seb->copp_ifout_entry_idx != (u32) ~0)
-      {
-	entry = &sem->copp_ifout_entries[seb->copp_ifout_entry_idx];
-	idx = (int) seb->copp_ifout_entry_idx;
-	seb->copp_ifout_entry_idx = ~0; /* one-shot: do not leak into reuse */
-      }
-  }
+      if (b->current_length >=
+	    sizeof (*eth) + sizeof (*llc) + sizeof (snap_header_t) &&
+	  llc->dst_sap == LLC_PROTOCOL_snap &&
+	  llc->src_sap == LLC_PROTOCOL_snap && llc->control == 0x03)
+	{
+	  snap_header_t *snap = (snap_header_t *) (llc + 1);
 
+	  if (snap_header_get_oui (snap) == IEEE_OUI_cisco &&
+	      clib_net_to_host_u16 (snap->protocol) ==
+		SNAP_cisco_unidirectional_link_detection)
+	    {
+	      idx = sonic_ext_copp_ifout_find_entry (
+		sem, SONIC_EXT_COPP_UDLD_ETHERTYPE);
+	      if (idx >= 0)
+		entry = &sem->copp_ifout_entries[idx];
+	    }
+	}
+    }
+
+  /*
+   * Plain ethertype/length-byte match. This is also the path that
+   * carries sonic-mgmt's PTF UDLDTest traffic today: its synthetic
+   * frame (bare LLC null/SAP-0x30 payload, no real SNAP header) does
+   * not satisfy the structural check above, but its wire length byte
+   * happens to equal SONIC_EXT_COPP_UDLD_ETHERTYPE (0x0067) by pure
+   * accident of the test's fixed pktlen=117 -- see copp_udld_node.c's
+   * SONIC_EXT_COPP_UDLD_LLC_SAP_PTF_TEST comment for the full
+   * explanation of why this is deliberately left as a documented
+   * test-compat fallback rather than removed.
+   */
   if (!entry)
     for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
     {
@@ -198,7 +256,7 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
       }
 
     {
-      policer_main_t *pm = policer_get_main ();
+      policer_main_t *pm = sonic_ext_copp_ifout_policer_main ();
 
       if (PREDICT_FALSE (pm == 0))
 	{
@@ -213,7 +271,7 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 	policer, metered_len, POLICE_CONFORM,
 	clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT);
 
-      vlib_combined_counter_main_t *pc = policer_get_counters ();
+      vlib_combined_counter_main_t *pc = sonic_ext_copp_ifout_policer_counters ();
       if (PREDICT_TRUE (pc != 0))
 	vlib_increment_combined_counter (&pc[verdict], vm->thread_index,
 					  policer_index, 1, metered_len);
@@ -363,6 +421,24 @@ sonic_ext_copp_ifout_find_entry (sonic_ext_main_t *sem, u16 ethertype)
   return -1;
 }
 
+/*
+ * Find a reusable (unbound) slot before growing the table.
+ */
+static int
+sonic_ext_copp_ifout_alloc_slot (sonic_ext_main_t *sem)
+{
+  for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
+    {
+      if (!sem->copp_ifout_entries[i].in_use)
+	return (int) i;
+    }
+
+  if (sem->copp_ifout_n_entries >= SONIC_EXT_COPP_IFOUT_MAX_ENTRIES)
+    return -1;
+
+  return (int) sem->copp_ifout_n_entries++;
+}
+
 int
 sonic_ext_copp_ifout_bind (u16 ethertype, const char *policer_name,
 			   int is_bind, int match_ip4_ttl_expiring)
@@ -384,9 +460,9 @@ sonic_ext_copp_ifout_bind (u16 ethertype, const char *policer_name,
 
   if (idx < 0)
     {
-      if (sem->copp_ifout_n_entries >= SONIC_EXT_COPP_IFOUT_MAX_ENTRIES)
+      idx = sonic_ext_copp_ifout_alloc_slot (sem);
+      if (idx < 0)
 	return VNET_API_ERROR_QUEUE_FULL;
-      idx = (int) sem->copp_ifout_n_entries++;
     }
 
   clib_memset (&sem->copp_ifout_entries[idx], 0,

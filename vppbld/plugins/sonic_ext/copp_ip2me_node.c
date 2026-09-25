@@ -83,6 +83,30 @@ typedef enum
 } sonic_ext_copp_ip2me_next_t;
 
 /*
+ * Cache policer_main and policer_counters because
+ * policer_get_main()/policer_get_counters() are expensive
+ * dlsym-based plugin symbol lookups
+ */
+static policer_main_t *sonic_ext_copp_ip2me_pm_cache;
+static vlib_combined_counter_main_t *sonic_ext_copp_ip2me_pc_cache;
+
+static_always_inline policer_main_t *
+sonic_ext_copp_ip2me_policer_main (void)
+{
+  if (PREDICT_FALSE (sonic_ext_copp_ip2me_pm_cache == 0))
+    sonic_ext_copp_ip2me_pm_cache = policer_get_main ();
+  return sonic_ext_copp_ip2me_pm_cache;
+}
+
+static_always_inline vlib_combined_counter_main_t *
+sonic_ext_copp_ip2me_policer_counters (void)
+{
+  if (PREDICT_FALSE (sonic_ext_copp_ip2me_pc_cache == 0))
+    sonic_ext_copp_ip2me_pc_cache = policer_get_counters ();
+  return sonic_ext_copp_ip2me_pc_cache;
+}
+
+/*
  * Resolve a policer slot's VPP policer_index by name, lazily -- same
  * pattern as sonic-ext-copp-ifout, so bind order relative to
  * policer_add() doesn't matter and a later policer_update() recreating
@@ -91,7 +115,7 @@ typedef enum
 static_always_inline u32
 sonic_ext_copp_ip2me_resolve_index (sonic_ext_copp_ip2me_policer_t *pol)
 {
-  policer_main_t *pm = policer_get_main ();
+  policer_main_t *pm = sonic_ext_copp_ip2me_policer_main ();
   uword *p;
 
   if (PREDICT_FALSE (pm == 0))
@@ -125,35 +149,57 @@ sonic_ext_copp_ip2me_addr_match (sonic_ext_main_t *sem, u32 dst_addr)
 }
 
 /*
- * Find the first in-use policer slot matching this packet: either the
- * legacy shared IP2ME/SNMP/SSH address-match slot (dst_addr is one of
- * our tracked router-interface IPs) or a TCP-dst-port slot (BGP/BGPV6,
- * matched independently of the address set so its own bind/unbind
- * never touches IP2ME/SNMP/SSH's slot or any other port-matched
- * slot). Returns NULL if nothing matches -- caller must pass through
- * unpoliced in that case, same as before this multi-slot change.
+ * Find the policer slot this packet should be metered against, with a
+ * DETERMINISTIC priority: check the TCP-port-match slots (BGP/BGPV6)
+ * FIRST, and only fall back to the shared IP2ME/SNMP/SSH address-match
+ * slot if no port slot matched. This matters because a packet can
+ * legitimately satisfy BOTH conditions at once -- a BGP session to the
+ * router's own address hits addr_hit (ip2me's dest-address match) AND
+ * src_port/dst_port==179 (BGP's port match) simultaneously; without an
+ * explicit, documented priority this previously resolved by bind-order/
+ * table-position accident (whichever slot's array index came first).
+ * BGP/BGPV6 is the more specific match (its own independent SAI trap
+ * group/policer), so it wins whenever both could apply.
+ *
+ * Port match is checked against EITHER src or dst TCP port, since a BGP
+ * session can be initiated from either side -- the port-179 side of an
+ * inbound packet is legitimately either src or dst depending on who
+ * dialed.
+ *
+ * Returns NULL if nothing matches -- caller must pass through unpoliced
+ * in that case, same as before this multi-slot change.
  */
 static_always_inline sonic_ext_copp_ip2me_policer_t *
 sonic_ext_copp_ip2me_find_policer (sonic_ext_main_t *sem, u32 dst_addr,
-				    int has_tcp_dport, u16 tcp_dport)
+				    int has_tcp_port, u16 src_port,
+				    u16 dst_port)
 {
-  int addr_hit = sonic_ext_copp_ip2me_addr_match (sem, dst_addr);
-
-  for (u32 i = 0; i < sem->copp_ip2me_n_policers; i++)
+  /* Pass 1: TCP-port-match slots (BGP/BGPV6) -- more specific, checked
+   * first so they always win over the shared addr-match slot. */
+  if (has_tcp_port)
     {
-      sonic_ext_copp_ip2me_policer_t *pol = &sem->copp_ip2me_policers[i];
-
-      if (!pol->in_use)
-	continue;
-
-      if (pol->match_kind == SONIC_EXT_COPP_IP2ME_MATCH_ADDR)
+      for (u32 i = 0; i < sem->copp_ip2me_n_policers; i++)
 	{
-	  if (addr_hit)
+	  sonic_ext_copp_ip2me_policer_t *pol = &sem->copp_ip2me_policers[i];
+
+	  if (!pol->in_use ||
+	      pol->match_kind != SONIC_EXT_COPP_IP2ME_MATCH_TCP_PORT)
+	    continue;
+
+	  if (src_port == pol->match_tcp_port || dst_port == pol->match_tcp_port)
 	    return pol;
 	}
-      else /* SONIC_EXT_COPP_IP2ME_MATCH_TCP_DPORT */
+    }
+
+  /* Pass 2: shared IP2ME/SNMP/SSH address-match slot, only reached if
+   * no port slot matched above. */
+  if (sonic_ext_copp_ip2me_addr_match (sem, dst_addr))
+    {
+      for (u32 i = 0; i < sem->copp_ip2me_n_policers; i++)
 	{
-	  if (has_tcp_dport && tcp_dport == pol->match_tcp_dport)
+	  sonic_ext_copp_ip2me_policer_t *pol = &sem->copp_ip2me_policers[i];
+
+	  if (pol->in_use && pol->match_kind == SONIC_EXT_COPP_IP2ME_MATCH_ADDR)
 	    return pol;
 	}
     }
@@ -181,8 +227,9 @@ sonic_ext_copp_ip2me_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
   ip4_header_t *ip4;
   u32 feat_next;
   u32 dst_addr;
+  u16 src_port = 0;
   u16 dst_port = 0;
-  int has_tcp_dport = 0;
+  int has_tcp_port = 0;
 
   vnet_feature_next (&feat_next, b);
   *next = (u16) feat_next;
@@ -207,13 +254,14 @@ sonic_ext_copp_ip2me_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 	sizeof (ip4_header_t) + sizeof (tcp_header_t))
     {
       tcp_header_t *tcp = (tcp_header_t *) (ip4 + 1);
+      src_port = clib_net_to_host_u16 (tcp->src_port);
       dst_port = clib_net_to_host_u16 (tcp->dst_port);
-      has_tcp_dport = 1;
+      has_tcp_port = 1;
     }
   *out_dst_port = dst_port;
 
-  sonic_ext_copp_ip2me_policer_t *pol =
-    sonic_ext_copp_ip2me_find_policer (sem, dst_addr, has_tcp_dport, dst_port);
+  sonic_ext_copp_ip2me_policer_t *pol = sonic_ext_copp_ip2me_find_policer (
+    sem, dst_addr, has_tcp_port, src_port, dst_port);
 
   if (!pol)
     {
@@ -239,7 +287,7 @@ sonic_ext_copp_ip2me_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
       }
 
     {
-      policer_main_t *pm = policer_get_main ();
+      policer_main_t *pm = sonic_ext_copp_ip2me_policer_main ();
 
       if (PREDICT_FALSE (pm == 0))
 	{
@@ -256,7 +304,7 @@ sonic_ext_copp_ip2me_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 	policer, metered_len, POLICE_CONFORM,
 	clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT);
 
-      vlib_combined_counter_main_t *pc = policer_get_counters ();
+      vlib_combined_counter_main_t *pc = sonic_ext_copp_ip2me_policer_counters ();
       if (PREDICT_TRUE (pc != 0))
 	vlib_increment_combined_counter (&pc[verdict], vm->thread_index,
 					  policer_index, 1, metered_len);
@@ -432,8 +480,9 @@ sonic_ext_copp_ip2me_ip6_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 {
   ip6_header_t *ip6;
   u32 feat_next;
+  u16 src_port = 0;
   u16 dst_port = 0;
-  int has_tcp_dport = 0;
+  int has_tcp_port = 0;
 
   vnet_feature_next (&feat_next, b);
   *next = (u16) feat_next;
@@ -458,15 +507,16 @@ sonic_ext_copp_ip2me_ip6_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
       b->current_length >= sizeof (ip6_header_t) + sizeof (tcp_header_t))
     {
       tcp_header_t *tcp = (tcp_header_t *) (ip6 + 1);
+      src_port = clib_net_to_host_u16 (tcp->src_port);
       dst_port = clib_net_to_host_u16 (tcp->dst_port);
-      has_tcp_dport = 1;
+      has_tcp_port = 1;
     }
   *out_dst_port = dst_port;
 
   /* dst_addr = 0: IPv6 has no address-matched slot here (IP2ME/SNMP/SSH
-   * are IPv4-only), so only TCP-dport slots (BGP/BGPv6) can ever match. */
-  sonic_ext_copp_ip2me_policer_t *pol =
-    sonic_ext_copp_ip2me_find_policer (sem, 0, has_tcp_dport, dst_port);
+   * are IPv4-only), so only TCP-port slots (BGP/BGPv6) can ever match. */
+  sonic_ext_copp_ip2me_policer_t *pol = sonic_ext_copp_ip2me_find_policer (
+    sem, 0, has_tcp_port, src_port, dst_port);
 
   if (!pol)
     {
@@ -489,7 +539,7 @@ sonic_ext_copp_ip2me_ip6_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
       }
 
     {
-      policer_main_t *pm = policer_get_main ();
+      policer_main_t *pm = sonic_ext_copp_ip2me_policer_main ();
 
       if (PREDICT_FALSE (pm == 0))
 	{
@@ -504,7 +554,7 @@ sonic_ext_copp_ip2me_ip6_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 	policer, metered_len, POLICE_CONFORM,
 	clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT);
 
-      vlib_combined_counter_main_t *pc = policer_get_counters ();
+      vlib_combined_counter_main_t *pc = sonic_ext_copp_ip2me_policer_counters ();
       if (PREDICT_TRUE (pc != 0))
 	vlib_increment_combined_counter (&pc[verdict], vm->thread_index,
 					  policer_index, 1, metered_len);
@@ -695,7 +745,7 @@ sonic_ext_copp_ip2me_alloc_policer_slot (sonic_ext_main_t *sem)
 
 /*
  * Bind (or unbind) one independent policer slot. match_kind/
- * match_tcp_dport select what this slot matches; every caller must
+ * match_tcp_port select what this slot matches; every caller must
  * pass its OWN unique policer_name (SwitchVppHostifTrap.cpp always
  * uses the SAI trap group's own "copp-policer-0x<oid>" string) so
  * that unbinding one SAI trap's slot can never remove another trap's
@@ -704,7 +754,7 @@ sonic_ext_copp_ip2me_alloc_policer_slot (sonic_ext_main_t *sem)
  */
 static int
 sonic_ext_copp_ip2me_bind_slot (const char *policer_name, int is_bind,
-				 u8 match_kind, u16 match_tcp_dport)
+				 u8 match_kind, u16 match_tcp_port)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
   int idx = sonic_ext_copp_ip2me_find_policer_slot_by_name (sem, policer_name);
@@ -732,7 +782,7 @@ sonic_ext_copp_ip2me_bind_slot (const char *policer_name, int is_bind,
   pol->policer_index = ~0;
   pol->in_use = 1;
   pol->match_kind = match_kind;
-  pol->match_tcp_dport = match_tcp_dport;
+  pol->match_tcp_port = match_tcp_port;
 
   return 0;
 }
@@ -744,11 +794,21 @@ sonic_ext_copp_ip2me_bind (const char *policer_name, int is_bind)
 					 SONIC_EXT_COPP_IP2ME_MATCH_ADDR, 0);
 }
 
+/*
+ * Generic condition-based bind (introduced to fold in review comment #8's
+ * "should the bind API be more generic?" question): the caller supplies a
+ * sonic_ext_copp_ip2me_condition_t struct instead of a hardcoded port
+ * value. Only one field (tcp_port) exists today -- BGP/BGPV6 is still the
+ * only real use case -- but a struct, not a bare u16 parameter, lets a
+ * future caller add another match dimension without changing this
+ * function's signature again.
+ */
 int
-sonic_ext_copp_ip2me_bind_bgp (const char *policer_name, int is_bind)
+sonic_ext_copp_ip2me_bind_condition (
+  const char *policer_name, const sonic_ext_copp_ip2me_condition_t *condition,
+  int is_bind)
 {
-  /* BGP/BGPV6 both use TCP dst port 179 on the wire */
   return sonic_ext_copp_ip2me_bind_slot (policer_name, is_bind,
-					 SONIC_EXT_COPP_IP2ME_MATCH_TCP_DPORT,
-					 179);
+					 SONIC_EXT_COPP_IP2ME_MATCH_TCP_PORT,
+					 condition->tcp_port);
 }

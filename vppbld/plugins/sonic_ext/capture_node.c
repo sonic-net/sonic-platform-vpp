@@ -113,8 +113,6 @@ VLIB_NODE_FN (sonic_ext_capture_node)
 
       seb->magic = SONIC_EXT_BUFFER_MAGIC;
 
-      /* sonic-ext-copp-udld sets this to a real index for UDLD traffic */
-      seb->copp_ifout_entry_idx = ~0;
       n_captured++;
 
       if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
