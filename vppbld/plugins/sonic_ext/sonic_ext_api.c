@@ -89,6 +89,139 @@ exit:
   REPLY_MACRO (VL_API_SONIC_EXT_MIRROR_ENCAP_FIXUP_ENABLE_DISABLE_REPLY);
 }
 
+static void
+vl_api_sonic_ext_copp_ifout_bind_t_handler (
+  vl_api_sonic_ext_copp_ifout_bind_t *mp)
+{
+  vl_api_sonic_ext_copp_ifout_bind_reply_t *rmp;
+  int rv;
+  char name[64];
+
+  snprintf (name, sizeof (name), "%s", mp->policer_name);
+  rv = sonic_ext_copp_ifout_bind (ntohs (mp->ethertype), name, mp->is_bind,
+				  mp->match_ip4_ttl_expiring);
+
+  REPLY_MACRO (VL_API_SONIC_EXT_COPP_IFOUT_BIND_REPLY);
+}
+
+static void
+vl_api_sonic_ext_copp_ifout_get_counters_t_handler (
+  vl_api_sonic_ext_copp_ifout_get_counters_t *mp)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  vl_api_sonic_ext_copp_ifout_get_counters_reply_t *rmp;
+  int rv = 0;
+  u64 conform = 0, exceed = 0, violate = 0;
+  u16 ethertype = ntohs (mp->ethertype);
+  int idx = -1;
+
+  for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
+    {
+      if (sem->copp_ifout_entries[i].in_use &&
+	  sem->copp_ifout_entries[i].ethertype == ethertype)
+	{
+	  idx = (int) i;
+	  break;
+	}
+    }
+
+  if (idx < 0)
+    rv = VNET_API_ERROR_NO_SUCH_ENTRY;
+  else
+    {
+      conform = sem->copp_ifout_conform_packets[idx];
+      exceed = sem->copp_ifout_exceed_packets[idx];
+      violate = sem->copp_ifout_violate_packets[idx];
+    }
+
+  REPLY_MACRO2 (VL_API_SONIC_EXT_COPP_IFOUT_GET_COUNTERS_REPLY,
+  ({
+    rmp->conform_packets = clib_host_to_net_u64 (conform);
+    rmp->exceed_packets = clib_host_to_net_u64 (exceed);
+    rmp->violate_packets = clib_host_to_net_u64 (violate);
+  }));
+}
+
+static void
+vl_api_sonic_ext_copp_ip2me_addr_add_del_t_handler (
+  vl_api_sonic_ext_copp_ip2me_addr_add_del_t *mp)
+{
+  vl_api_sonic_ext_copp_ip2me_addr_add_del_reply_t *rmp;
+  int rv;
+
+  rv = sonic_ext_copp_ip2me_addr_add_del (mp->addr, mp->is_add);
+
+  REPLY_MACRO (VL_API_SONIC_EXT_COPP_IP2ME_ADDR_ADD_DEL_REPLY);
+}
+
+static void
+vl_api_sonic_ext_copp_ip2me_bind_t_handler (
+  vl_api_sonic_ext_copp_ip2me_bind_t *mp)
+{
+  vl_api_sonic_ext_copp_ip2me_bind_reply_t *rmp;
+  int rv;
+  char name[64];
+
+  snprintf (name, sizeof (name), "%s", mp->policer_name);
+  rv = sonic_ext_copp_ip2me_bind (name, mp->is_bind);
+
+  REPLY_MACRO (VL_API_SONIC_EXT_COPP_IP2ME_BIND_REPLY);
+}
+
+static void
+vl_api_sonic_ext_copp_ip2me_bind_condition_t_handler (
+  vl_api_sonic_ext_copp_ip2me_bind_condition_t *mp)
+{
+  vl_api_sonic_ext_copp_ip2me_bind_condition_reply_t *rmp;
+  int rv;
+  char name[64];
+  sonic_ext_copp_ip2me_condition_t condition = { 0 };
+
+  snprintf (name, sizeof (name), "%s", mp->policer_name);
+  condition.tcp_port = ntohs (mp->tcp_port);
+  rv = sonic_ext_copp_ip2me_bind_condition (name, &condition, mp->is_bind);
+
+  REPLY_MACRO (VL_API_SONIC_EXT_COPP_IP2ME_BIND_CONDITION_REPLY);
+}
+
+static void
+vl_api_sonic_ext_copp_ip2me_get_counters_t_handler (
+  vl_api_sonic_ext_copp_ip2me_get_counters_t *mp)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  vl_api_sonic_ext_copp_ip2me_get_counters_reply_t *rmp;
+  int rv = 0;
+  u64 conform = 0, exceed = 0, violate = 0;
+
+  for (u32 i = 0; i < sem->copp_ip2me_n_policers; i++)
+    {
+      if (!sem->copp_ip2me_policers[i].in_use)
+	continue;
+      conform += sem->copp_ip2me_policers[i].conform_packets;
+      exceed += sem->copp_ip2me_policers[i].exceed_packets;
+      violate += sem->copp_ip2me_policers[i].violate_packets;
+    }
+
+  REPLY_MACRO2 (VL_API_SONIC_EXT_COPP_IP2ME_GET_COUNTERS_REPLY,
+  ({
+    rmp->conform_packets = clib_host_to_net_u64 (conform);
+    rmp->exceed_packets = clib_host_to_net_u64 (exceed);
+    rmp->violate_packets = clib_host_to_net_u64 (violate);
+  }));
+}
+
+static void
+vl_api_sonic_ext_copp_ttl_punt_bind_t_handler (
+  vl_api_sonic_ext_copp_ttl_punt_bind_t *mp)
+{
+  vl_api_sonic_ext_copp_ttl_punt_bind_reply_t *rmp;
+  int rv;
+
+  rv = sonic_ext_copp_ttl_punt_bind (mp->is_bind);
+
+  REPLY_MACRO (VL_API_SONIC_EXT_COPP_TTL_PUNT_BIND_REPLY);
+}
+
 /* API definitions */
 #include <sonic_ext/sonic_ext.api.c>
 

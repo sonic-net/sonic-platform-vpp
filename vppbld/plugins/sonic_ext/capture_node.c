@@ -112,6 +112,7 @@ VLIB_NODE_FN (sonic_ext_capture_node)
       }
 
       seb->magic = SONIC_EXT_BUFFER_MAGIC;
+
       n_captured++;
 
       if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&

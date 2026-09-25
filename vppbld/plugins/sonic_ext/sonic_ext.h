@@ -116,6 +116,77 @@ typedef struct
   u8 enabled;
 } sonic_ext_mirror_encap_cfg_t;
 
+/*
+ * sonic-ext-copp-ifout: interface-output CoPP policer for
+ * ARP/LACP/LLDP/UDLD/TTL_ERROR.
+ */
+#define SONIC_EXT_COPP_IFOUT_MAX_ENTRIES 16
+#define SONIC_EXT_COPP_IFOUT_NAME_LEN 64
+
+/*
+ * Internal bind-table key sonic-ext-copp-ifout uses for the UDLD row --
+ * NOT a real wire ethertype (UDLD is not Ethernet-II framed; see
+ * copp_ifout_node.c's structural LLC/SNAP/Cisco-OUI match, which is what
+ * actually classifies real UDLD traffic). SwitchVppHostifTrap.cpp's SAI
+ * classify-match builder uses this same value purely so the existing
+ * ethertype-keyed bind/lookup table can be reused as a policer-name
+ * lookup key, without needing a second, UDLD-only table.
+ */
+#define SONIC_EXT_COPP_UDLD_ETHERTYPE 0x0067
+
+typedef struct
+{
+  u16 ethertype;		/* host byte order */
+  u8 name[SONIC_EXT_COPP_IFOUT_NAME_LEN];
+  u32 policer_index;
+  u8 in_use;
+  u8 match_ip4_ttl_expiring; /* TTL_ERROR trap */
+} sonic_ext_copp_ifout_entry_t;
+
+#define SONIC_EXT_COPP_IP2ME_MAX_ADDRS 256
+
+typedef struct
+{
+  u32 addr;    /* network byte order, matches ip4_address_t.as_u32 */
+  u8 in_use;
+} sonic_ext_copp_ip2me_addr_t;
+
+/*
+ * sonic-ext-copp-ip2me supports more than one independently bound
+ * policer on the ip4-punt arc, keyed by SAI trap group
+ */
+#define SONIC_EXT_COPP_IP2ME_MAX_POLICERS 8
+
+typedef enum
+{
+  SONIC_EXT_COPP_IP2ME_MATCH_ADDR = 0,	/* dst IPv4 in copp_ip2me_addrs[] */
+  SONIC_EXT_COPP_IP2ME_MATCH_TCP_PORT = 1, /* src OR dst TCP port == match_tcp_port */
+} sonic_ext_copp_ip2me_match_kind_t;
+
+/*
+ * Generic condition for sonic_ext_copp_ip2me_bind_condition() -- a single
+ * TCP-port field for now (the only real use case, BGP/BGPV6 dst 179).
+ * Deliberately a struct, not a bare u16 parameter, so a future caller can
+ * add another match dimension (e.g. a protocol/address field) without
+ * changing this function's signature again.
+ */
+typedef struct
+{
+  u16 tcp_port; /* match if EITHER the packet's src or dst TCP port == this */
+} sonic_ext_copp_ip2me_condition_t;
+
+typedef struct
+{
+  u8 name[SONIC_EXT_COPP_IFOUT_NAME_LEN];
+  u32 policer_index;
+  u8 in_use;
+  u8 match_kind; /* sonic_ext_copp_ip2me_match_kind_t */
+  u16 match_tcp_port; /* only used when match_kind == MATCH_TCP_PORT */
+  u64 conform_packets;
+  u64 exceed_packets;
+  u64 violate_packets;
+} sonic_ext_copp_ip2me_policer_t;
+
 typedef struct
 {
   /* API message ID base */
@@ -138,6 +209,15 @@ typedef struct
   u8 egress_mirror_arc_enabled;
   u32 active_egress_mirror_actions;
 
+  /* SAI TTL_ERROR trap installed? Read by sonic_ext_ttl_error_should_
+   * punt(), the dlsym hook core VPP's ip4-rewrite calls on every
+   * genuinely-transiting TTL-expired packet (see copp_ttl_punt_node.c
+   * and vppbld/patches/0021-ip4-redirect-ttl-expired-to-copp-punt-
+   * hook.patch). A single global flag, not a per-ethertype table entry
+   * like copp-ifout -- TTL_ERROR is one SAI trap type with one binary
+   * "is it installed" question at this call site. */
+  u8 copp_ttl_punt_enabled;
+
   /* Everflow mirror encap fixup: per-interface (mirror GRE tunnel
    * sw_if_index) outer TTL + GRE protocol override, applied on the
    * ethernet-output arc after GRE encap.  vec indexed by sw_if_index. */
@@ -152,6 +232,18 @@ typedef struct
   u64 l2_trap_fixups;
   u64 ip2me_hits;
   u64 mirror_encap_fixups;
+
+  /* sonic-ext-copp-ifout: ethertype -> policer binding table. */
+  sonic_ext_copp_ifout_entry_t copp_ifout_entries[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
+  u32 copp_ifout_n_entries;
+  u64 copp_ifout_conform_packets[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
+  u64 copp_ifout_exceed_packets[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
+  u64 copp_ifout_violate_packets[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
+
+  sonic_ext_copp_ip2me_addr_t copp_ip2me_addrs[SONIC_EXT_COPP_IP2ME_MAX_ADDRS];
+  u32 copp_ip2me_n_addrs;
+  sonic_ext_copp_ip2me_policer_t copp_ip2me_policers[SONIC_EXT_COPP_IP2ME_MAX_POLICERS];
+  u32 copp_ip2me_n_policers;
 } sonic_ext_main_t;
 
 extern sonic_ext_main_t sonic_ext_main;
@@ -166,6 +258,10 @@ extern vlib_node_registration_t sonic_ext_ip2me_ip4_node;
 extern vlib_node_registration_t sonic_ext_ip2me_ip6_node;
 extern vlib_node_registration_t sonic_ext_egress_mirror_node;
 extern vlib_node_registration_t sonic_ext_mirror_encap_fixup_node;
+extern vlib_node_registration_t sonic_ext_copp_ifout_node;
+extern vlib_node_registration_t sonic_ext_copp_ip2me_node;
+extern vlib_node_registration_t sonic_ext_copp_udld_node;
+extern vlib_node_registration_t sonic_ext_copp_ttl_punt_node;
 
 /* Enable / disable sonic-ext-capture on a given interface.  No-op if
  * the capture sidecar is not yet initialized. */
@@ -245,5 +341,29 @@ int sonic_ext_mirror_encap_fixup_enable_disable (u32 sw_if_index,
  * clone.  Always accepts, so returns 1. */
 int sonic_ext_acl_deferred_mirror_stamp (vlib_buffer_t *b, u32 rx_sw_if_index,
 					 u32 mirror_sw_if_index);
+
+/*
+ * enable/disable the interface-output CoPP policer feature on a given
+ * TAP sw_if_index.
+ */
+void sonic_ext_copp_ifout_enable_disable (u32 sw_if_index, int enable);
+
+/*
+ * look up an entry by wire ethertype/length value.
+ * Returns -1 if no matching in-use entry exists.
+ */
+int sonic_ext_copp_ifout_find_entry (sonic_ext_main_t *sem, u16 ethertype);
+
+/*
+ * bind (or unbind) an ethertype -> policer-name
+ */
+int sonic_ext_copp_ifout_bind (u16 ethertype, const char *policer_name,
+			       int is_bind, int match_ip4_ttl_expiring);
+int sonic_ext_copp_ip2me_addr_add_del (u32 addr, int is_add);
+int sonic_ext_copp_ip2me_bind (const char *policer_name, int is_bind);
+int sonic_ext_copp_ip2me_bind_condition (
+  const char *policer_name, const sonic_ext_copp_ip2me_condition_t *condition,
+  int is_bind);
+int sonic_ext_copp_ttl_punt_bind (int is_bind);
 
 #endif /* __included_sonic_ext_h__ */
