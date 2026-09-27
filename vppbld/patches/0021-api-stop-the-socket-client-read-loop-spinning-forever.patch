@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Longxiang Lyu <lolv@microsoft.com>
+Date: Sun, 27 Sep 2026 08:41:31 +0000
+Subject: api: stop the socket client read loop spinning forever
+
+vl_socket_client_read_internal() retries read() on EAGAIN without
+looking at the caller's deadline, and it treats a read() of 0 bytes,
+which means VPP closed the socket, as progress. Either way the caller
+spins at 100% CPU until data arrives, which after VPP stops or restarts
+is never, whatever wait it asked for: the deadline check at the bottom
+of the outer loop is only reached after a complete message.
+
+Return -1 once the wait has expired, and when the peer closes the
+socket, through the existing error path. A wait of 0 still waits for
+data indefinitely.
+
+Type: fix
+Change-Id: I5ce2f8629c6ba4f0f7edea848bf9e02e148968cb
+Signed-off-by: Longxiang Lyu <lolv@microsoft.com>
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/vlibmemory/socket_client.c | 22 ++++++++++++++++++----
+ 1 file changed, 18 insertions(+), 4 deletions(-)
+
+diff --git a/src/vlibmemory/socket_client.c b/src/vlibmemory/socket_client.c
+index c5a407607c..214569fbfe 100644
+--- a/src/vlibmemory/socket_client.c
++++ b/src/vlibmemory/socket_client.c
+@@ -93,10 +93,17 @@ vl_socket_client_read_internal (socket_client_main_t * scm, int wait)
+ 		    scm->socket_buffer_size);
+ 	  if (n < 0)
+ 	    {
+-	      if (errno == EAGAIN)
++	      if (errno != EAGAIN)
++		clib_unix_warning ("socket_read");
++	      else if (!wait || clib_time_now (&scm->clib_time) < timeout)
+ 		continue;
+ 
+-	      clib_unix_warning ("socket_read");
++	      vec_set_len (scm->socket_rx_buffer, current_rx_index);
++	      return -1;
++	    }
++	  if (n == 0)
++	    {
++	      clib_warning ("socket_read: connection closed by peer");
+ 	      vec_set_len (scm->socket_rx_buffer, current_rx_index);
+ 	      return -1;
+ 	    }
+@@ -122,10 +129,17 @@ vl_socket_client_read_internal (socket_client_main_t * scm, int wait)
+ 		    msg_size - current_rx_index);
+ 	  if (n < 0)
+ 	    {
+-	      if (errno == EAGAIN)
++	      if (errno != EAGAIN)
++		clib_unix_warning ("socket_read");
++	      else if (!wait || clib_time_now (&scm->clib_time) < timeout)
+ 		continue;
+ 
+-	      clib_unix_warning ("socket_read");
++	      vec_set_len (scm->socket_rx_buffer, current_rx_index);
++	      return -1;
++	    }
++	  if (n == 0)
++	    {
++	      clib_warning ("socket_read: connection closed by peer");
+ 	      vec_set_len (scm->socket_rx_buffer, current_rx_index);
+ 	      return -1;
+ 	    }

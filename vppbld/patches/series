@@ -57,3 +57,9 @@
 #     adj_l2_rewrite_inline() starts the arc from both adj-l2-midchain and
 #     adj-l2-rewrite but only the former had the arc edges built.
 0020-adj-honour-ethernet-output-features-on-l2-adjacencies.patch
+# 21. api: stop the socket client read loop spinning forever. On EAGAIN the
+#     read loop retried without checking the caller's wait, and a read of 0
+#     bytes (VPP closed the socket) counted as progress, so a SAI call into
+#     a stopped or restarting VPP left syncd at 100% CPU for good. Now it
+#     returns -1 when the wait expires or the peer closes the socket.
+0021-api-stop-the-socket-client-read-loop-spinning-forever.patch
