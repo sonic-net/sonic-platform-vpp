@@ -23,6 +23,29 @@ function upd_startup()
     [ "$DPDK_DISABLE" != "y" ] && echo "$*" >> $TMP_FILE
 }
 
+function add_sonic_ext_config()
+{
+    local entry
+
+    [ "x$SONIC_EXT_CONFIG" == "x" ] && return 0
+
+    echo "sonic-ext {" >> $TMP_FILE
+    local IFS=","
+    for entry in $SONIC_EXT_CONFIG; do
+	# Kept space-free ("host-xc=off") because the same value is also passed
+	# via docker -e, which unlike the shell does not strip quotes.
+	entry="${entry//[[:space:]]/}"
+	[ "x$entry" == "x" ] && continue
+	# Whitelisted rather than interpolated: this lands in a VPP config file,
+	# where a stray brace would close the stanza and open an arbitrary one
+	# such as unix { exec <file> }.
+	[[ "$entry" =~ ^[a-z][a-z0-9-]*=(on|off|enable|disable)$ ]] || \
+	    error "invalid SONIC_EXT_CONFIG entry '$entry', expected <feature>=on|off"
+	echo "    ${entry%%=*} ${entry##*=}" >> $TMP_FILE
+    done
+    echo "}" >> $TMP_FILE
+}
+
 if [ "$VPP_CONF_DB" == "y" ]; then
     /usr/bin/vpp -c /etc/sonic/vpp/startup.conf
     exit $?
@@ -74,6 +97,8 @@ echo "buffers {" >> $TMP_FILE
 echo "    buffers-per-numa $TOTBUF" >> $TMP_FILE
 [ "$DPDK_DISABLE" != "y" ] && echo "    page-size default-hugepage" >> $TMP_FILE
 echo "}" >> $TMP_FILE
+
+add_sonic_ext_config
 
 if [ "$DPDK_DISABLE" != "y" ]; then
     if [ $IDX -le 6 ]; then

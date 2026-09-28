@@ -162,6 +162,9 @@ VNET_FEATURE_INIT (sonic_ext_drop_member_stats, static) = {
 static void
 sonic_ext_drop_member_stats_enable (u32 sw_if_index)
 {
+  if (!sonic_ext_main.drop_member_stats)
+    return;
+
   /* The add/del hook and the boot-time walk below can both cover the same
    * interface, and enabling is not idempotent in VPP: a second enable appends
    * the node to the arc config again, so the frame would count twice. */

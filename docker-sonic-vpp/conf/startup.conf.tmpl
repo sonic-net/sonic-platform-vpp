@@ -261,6 +261,32 @@ plugins {
 	# plugin acl_plugin.so { disable }
 }
 
+## sonic-ext plugin feature selection.  Every feature defaults to on, so a
+## keyword is only needed to turn one off.  Changing this requires a VPP
+## restart.  Each keyword takes on|off.
+##
+## VPP-wired: punt-via-member, host-xc, drop-member-stats.  A disabled
+## feature's node is never attached to its feature arc.  sonic-ext-capture has
+## no keyword -- it produces the per-buffer cookie that punt-via-member and
+## drop-member-stats consume, so it follows them.
+##
+## saivpp-wired: ip2me, l2-trap-fixup, l2-vlan-filter.  VPP only stores these
+## and answers sonic_ext_feature_get(); saivpp asks before installing the ACL
+## hook or the classify sessions.  "show interface features" does NOT reflect
+## them the way it does for the three above.
+##
+## Generated at runtime by vpp_init.sh from $SONIC_EXT_CONFIG, which is given as
+## comma-separated key=value pairs -- SONIC_EXT_CONFIG=host-xc=off -- and which
+## a platform sets in /etc/sonic/vpp/syncd_vpp_env.
+# sonic-ext {
+    # punt-via-member off
+    # host-xc off
+    # drop-member-stats off
+    # ip2me off
+    # l2-trap-fixup off
+    # l2-vlan-filter off
+# }
+
 ## Statistics Segment
 # statseg {
     # socket-name <filename>, name of the stats segment socket

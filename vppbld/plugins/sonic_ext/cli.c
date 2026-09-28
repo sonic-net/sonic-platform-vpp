@@ -153,16 +153,28 @@ show_sonic_ext_command_fn (vlib_main_t *vm, unformat_input_t *input,
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
   vlib_cli_output (vm, "sonic-ext state:");
-  vlib_cli_output (vm, "  punt-via-member : %s",
-		   sem->punt_via_member ? "on" : "off");
-  vlib_cli_output (vm, "  host-xc         : %s",
-		   sem->host_xc ? "on" : "off");
-  vlib_cli_output (vm, "  captures        : %llu", sem->captures);
-  vlib_cli_output (vm, "  aggr-tap redir  : %llu", sem->aggr_tap_redirects);
-  vlib_cli_output (vm, "  glean redirect  : %llu", sem->glean_redirects);
-  vlib_cli_output (vm, "  host-xc direct  : %llu", sem->host_xc_direct);
-  vlib_cli_output (vm, "  l2 trap fixups  : %llu", sem->l2_trap_fixups);
-  vlib_cli_output (vm, "  ip2me hits      : %llu", sem->ip2me_hits);
+#define _(symbol, field, name, default_enabled, owner)                        \
+  if (SONIC_EXT_OWNER_##owner == SONIC_EXT_OWNER_VPP)                         \
+    vlib_cli_output (vm, "  %-17s : %s", name, sem->field ? "on" : "off");
+  foreach_sonic_ext_feature
+#undef _
+  /* Derived from the two cookie consumers above, so report the latch. */
+  vlib_cli_output (vm, "  capture (derived) : %s",
+		   sem->capture_enabled ? "on" : "off");
+  /* Stored for saivpp, which wires these; arc membership does not reflect them. */
+  vlib_cli_output (vm, "  -- saivpp-wired --");
+#define _(symbol, field, name, default_enabled, owner)                        \
+  if (SONIC_EXT_OWNER_##owner == SONIC_EXT_OWNER_SAIVPP)                      \
+    vlib_cli_output (vm, "  %-17s : %s", name, sem->field ? "on" : "off");
+  foreach_sonic_ext_feature
+#undef _
+  vlib_cli_output (vm, "  -- counters --");
+  vlib_cli_output (vm, "  captures          : %llu", sem->captures);
+  vlib_cli_output (vm, "  aggr-tap redir    : %llu", sem->aggr_tap_redirects);
+  vlib_cli_output (vm, "  glean redirect    : %llu", sem->glean_redirects);
+  vlib_cli_output (vm, "  host-xc direct    : %llu", sem->host_xc_direct);
+  vlib_cli_output (vm, "  l2 trap fixups    : %llu", sem->l2_trap_fixups);
+  vlib_cli_output (vm, "  ip2me hits        : %llu", sem->ip2me_hits);
   return 0;
 }
 

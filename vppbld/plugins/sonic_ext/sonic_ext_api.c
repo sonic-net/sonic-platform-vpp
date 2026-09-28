@@ -20,6 +20,9 @@
  * (sonic-sairedis) can enable the "receive-DPO check before ACL" feature
  * on exactly the L2 ports where an ingress drop ACL that could discard
  * ip2me traffic is bound.
+ *
+ * Exposes sonic_ext_feature_get so the same layer can read the startup.conf
+ * selection for the features it wires itself, and skip installing them.
  */
 
 #include <vnet/vnet.h>
@@ -87,6 +90,34 @@ vl_api_sonic_ext_mirror_encap_fixup_enable_disable_t_handler (
 
 exit:
   REPLY_MACRO (VL_API_SONIC_EXT_MIRROR_ENCAP_FIXUP_ENABLE_DISABLE_REPLY);
+}
+
+static void
+vl_api_sonic_ext_feature_get_t_handler (vl_api_sonic_ext_feature_get_t *mp)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  vl_api_sonic_ext_feature_get_reply_t *rmp;
+  /* Fixed-width field: a caller that fills all 64 bytes leaves no NUL, so copy
+   * out and terminate rather than trusting the wire to be a C string. */
+  char name[sizeof (mp->feature) + 1];
+  /* An unrecognized feature defaults to disabled */
+  u8 enabled = 0;
+  int rv = 0;
+
+  clib_memcpy (name, mp->feature, sizeof (mp->feature));
+  name[sizeof (mp->feature)] = 0;
+
+#define _(symbol, field, str, default_enabled, owner)                         \
+  if (!strcmp (name, str))                                                    \
+    enabled = sem->field;                                                     \
+  else
+  foreach_sonic_ext_feature
+#undef _
+  if (!strcmp (name, "capture"))
+    enabled = sem->capture_enabled;
+
+  REPLY_MACRO2 (VL_API_SONIC_EXT_FEATURE_GET_REPLY,
+		({ rmp->enabled = enabled; }));
 }
 
 /* API definitions */
