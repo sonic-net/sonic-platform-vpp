@@ -57,3 +57,7 @@
 #     adj_l2_rewrite_inline() starts the arc from both adj-l2-midchain and
 #     adj-l2-rewrite but only the former had the arc edges built.
 0020-adj-honour-ethernet-output-features-on-l2-adjacencies.patch
+# 21. ip-neighbor: 'no-learn' startup option (ip-neighbor { no-learn }) and
+#     'set ip neighbor-config ip4|ip6 learn|nolearn' so received ARP/ND
+#     never creates or updates a neighbor; SAI owns the neighbor table.
+0021-ip-neighbor-add-no-learn-option.patch

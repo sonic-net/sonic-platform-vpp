@@ -73,6 +73,11 @@ ip {
 	no-class-e-drop
 }
 
+## SAI programs every neighbor; VPP must not create them from received ARP/ND
+ip-neighbor {
+	no-learn
+}
+
 ip6 {
 	heap-size 128M
 }

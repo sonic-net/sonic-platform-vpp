@@ -1,0 +1,337 @@
+From fa6d23ef02eb34e910cd30bc6a83a367fc4e31f5 Mon Sep 17 00:00:00 2001
+From: Longxiang Lyu <lolv@microsoft.com>
+Date: Mon, 28 Sep 2026 13:12:20 +0000
+Subject: [PATCH] ip-neighbor: add 'no-learn' option to stop data-plane
+ neighbor learning
+
+VPP creates or updates a dynamic neighbor from received ARP and ND that
+carry a link-layer address: an ARP request it answers, an ARP reply to
+one of its addresses, an NS with a source link-layer address option, an
+NA with a target link-layer address option, and an RS. All of these go
+through ip_neighbor_learn().
+
+When a control plane owns the neighbor table, as SONiC does through SAI,
+a learned entry is a neighbor the control plane never created. It also
+keeps the adjacency-sourced host route that VPP adds for a new neighbor:
+a later API add of the same neighbor with no-fib-entry updates the entry
+in place and cannot remove that route, because VPP applies no-fib-entry
+only when it creates the entry.
+
+Add a per address family learn setting, on by default. The startup
+config
+
+  ip-neighbor {
+      no-learn
+  }
+
+turns it off for IPv4 and IPv6, and
+
+  set ip neighbor-config ip4|ip6 [learn|nolearn]
+
+changes it at run time; 'show ip neighbor-config' reports it. When it is
+off, ip_neighbor_learn() returns without creating or updating a neighbor.
+VPP still answers ARP requests and neighbor solicitations for its own
+addresses, and neighbors added through the API or CLI are unaffected.
+The binary API is unchanged.
+
+Test: test/test_neighbor.py::NeighborNoLearnTestCase
+
+Type: feature
+Signed-off-by: Longxiang Lyu <lolv@microsoft.com>
+---
+ src/vnet/ip-neighbor/ip_neighbor.c |  42 ++++++++-
+ test/test_neighbor.py              | 141 +++++++++++++++++++++++++++++
+ 2 files changed, 179 insertions(+), 4 deletions(-)
+
+diff --git a/src/vnet/ip-neighbor/ip_neighbor.c b/src/vnet/ip-neighbor/ip_neighbor.c
+index 4b778d5ffd..b49c8cf5d7 100644
+--- a/src/vnet/ip-neighbor/ip_neighbor.c
++++ b/src/vnet/ip-neighbor/ip_neighbor.c
+@@ -110,6 +110,8 @@ typedef struct ip_neighbor_db_t_
+   /** when the limit is reached and new neighbors are created, should
+    * we recycle an old one */
+   bool ipndb_recycle;
++  /** create/update neighbors from received ARP/ND packets */
++  bool ipndb_learn;
+   /** per-protocol number of elements */
+   u32 ipndb_n_elts;
+   /** per-protocol number of elements per-fib-index*/
+@@ -125,12 +127,14 @@ static ip_neighbor_db_t ip_neighbor_db[N_AF] = {
+     /* Default to not aging and not recycling */
+     .ipndb_age = 0,
+     .ipndb_recycle = false,
++    .ipndb_learn = true,
+   },
+   [AF_IP6] = {
+     .ipndb_limit = 50000,
+     /* Default to not aging and not recycling */
+     .ipndb_age = 0,
+     .ipndb_recycle = false,
++    .ipndb_learn = true,
+   }
+ };
+ 
+@@ -789,6 +793,9 @@ ip_neighbor_update (vnet_main_t * vnm, adj_index_t ai)
+ void
+ ip_neighbor_learn (const ip_neighbor_learn_t * l)
+ {
++  if (!ip_neighbor_db[ip_addr_version (&l->ip)].ipndb_learn)
++    return;
++
+   ip_neighbor_add (&l->ip, &l->mac, l->sw_if_index,
+ 		   IP_NEIGHBOR_FLAG_DYNAMIC, NULL);
+ }
+@@ -1773,10 +1780,11 @@ ip_neighbor_config_show (vlib_main_t * vm,
+ 
+   FOR_EACH_IP_ADDRESS_FAMILY(af) {
+     vlib_cli_output (vm, "%U:", format_ip_address_family, af);
+-    vlib_cli_output (vm, "  limit:%d, age:%d, recycle:%d",
++    vlib_cli_output (vm, "  limit:%d, age:%d, recycle:%d, learn:%d",
+                      ip_neighbor_db[af].ipndb_limit,
+                      ip_neighbor_db[af].ipndb_age,
+-                     ip_neighbor_db[af].ipndb_recycle);
++                     ip_neighbor_db[af].ipndb_recycle,
++                     ip_neighbor_db[af].ipndb_learn);
+   }
+ 
+   return (NULL);
+@@ -1790,7 +1798,7 @@ ip_neighbor_config_set (vlib_main_t *vm, unformat_input_t *input,
+   clib_error_t *error = NULL;
+   ip_address_family_t af;
+   u32 limit, age;
+-  bool recycle;
++  bool recycle, learn;
+ 
+   if (!unformat_user (input, unformat_line_input, line_input))
+     return 0;
+@@ -1804,6 +1812,7 @@ ip_neighbor_config_set (vlib_main_t *vm, unformat_input_t *input,
+   limit = ip_neighbor_db[af].ipndb_limit;
+   age = ip_neighbor_db[af].ipndb_age;
+   recycle = ip_neighbor_db[af].ipndb_recycle;
++  learn = ip_neighbor_db[af].ipndb_learn;
+ 
+   while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
+     {
+@@ -1815,6 +1824,10 @@ ip_neighbor_config_set (vlib_main_t *vm, unformat_input_t *input,
+ 	recycle = true;
+       else if (unformat (line_input, "norecycle"))
+ 	recycle = false;
++      else if (unformat (line_input, "learn"))
++	learn = true;
++      else if (unformat (line_input, "nolearn"))
++	learn = false;
+       else
+ 	{
+ 	  error = unformat_parse_error (line_input);
+@@ -1822,6 +1835,7 @@ ip_neighbor_config_set (vlib_main_t *vm, unformat_input_t *input,
+ 	}
+     }
+ 
++  ip_neighbor_db[af].ipndb_learn = learn;
+   ip_neighbor_config (af, limit, age, recycle);
+ 
+ done:
+@@ -1879,7 +1893,7 @@ VLIB_CLI_COMMAND (set_ip_neighbor_cfg_cmd_node, static) = {
+   .path = "set ip neighbor-config",
+   .function = ip_neighbor_config_set,
+   .short_help = "set ip neighbor-config ip4|ip6 [limit <limit>] [age <age>] "
+-		"[recycle|norecycle]",
++		"[recycle|norecycle] [learn|nolearn]",
+ };
+ VLIB_CLI_COMMAND (show_ip_neighbor_stats_cmd_node, static) = {
+   .path = "show ip neighbor-stats",
+@@ -1887,6 +1901,26 @@ VLIB_CLI_COMMAND (show_ip_neighbor_stats_cmd_node, static) = {
+   .short_help = "show ip neighbor-stats [interface]",
+ };
+ 
++static clib_error_t *
++ip_neighbor_startup_config (vlib_main_t *vm, unformat_input_t *input)
++{
++  ip_address_family_t af;
++
++  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
++    {
++      if (unformat (input, "no-learn"))
++	FOR_EACH_IP_ADDRESS_FAMILY (af)
++	  ip_neighbor_db[af].ipndb_learn = false;
++      else
++	return clib_error_return (0, "unknown input '%U'",
++				  format_unformat_error, input);
++    }
++
++  return (NULL);
++}
++
++VLIB_CONFIG_FUNCTION (ip_neighbor_startup_config, "ip-neighbor");
++
+ static clib_error_t *
+ ip_neighbor_init (vlib_main_t * vm)
+ {
+diff --git a/test/test_neighbor.py b/test/test_neighbor.py
+index 8e7b82d41e..8da6a1369b 100644
+--- a/test/test_neighbor.py
++++ b/test/test_neighbor.py
+@@ -2,6 +2,7 @@
+ 
+ import unittest
+ import os
++from socket import AF_INET6, inet_ntop, inet_pton
+ 
+ from config import config
+ from framework import VppTestCase
+@@ -26,6 +27,13 @@ from scapy.layers.inet import IP, UDP, TCP
+ from scapy.layers.inet6 import IPv6
+ from scapy.contrib.mpls import MPLS
+ from scapy.layers.inet6 import IPv6
++from scapy.layers.inet6 import (
++    ICMPv6ND_NA,
++    ICMPv6ND_NS,
++    ICMPv6NDOptDstLLAddr,
++    ICMPv6NDOptSrcLLAddr,
++)
++from scapy.utils6 import in6_getnsma, in6_getnsmac
+ 
+ NUM_PKTS = 67
+ 
+@@ -2831,5 +2839,138 @@ class NeighborFlush(VppTestCase):
+                 )
+ 
+ 
++class NeighborNoLearnTestCase(VppTestCase):
++    """Neighbor learning disabled by 'ip-neighbor { no-learn }'"""
++
++    extra_vpp_config = ["ip-neighbor", "{", "no-learn", "}"]
++
++    @classmethod
++    def setUpClass(cls):
++        super(NeighborNoLearnTestCase, cls).setUpClass()
++
++    @classmethod
++    def tearDownClass(cls):
++        super(NeighborNoLearnTestCase, cls).tearDownClass()
++
++    def setUp(self):
++        super(NeighborNoLearnTestCase, self).setUp()
++
++        self.create_pg_interfaces(range(1))
++        self.pg0.admin_up()
++        self.pg0.config_ip4()
++        self.pg0.config_ip6()
++        self.pg0.disable_ipv6_ra()
++        self.pg0.generate_remote_hosts(3)
++
++    def tearDown(self):
++        af = VppEnum.vl_api_address_family_t
++        self.vapi.ip_neighbor_flush(af.ADDRESS_IP4, self.pg0.sw_if_index)
++        self.vapi.ip_neighbor_flush(af.ADDRESS_IP6, self.pg0.sw_if_index)
++        self.pg0.unconfig_ip4()
++        self.pg0.unconfig_ip6()
++        self.pg0.admin_down()
++
++        super(NeighborNoLearnTestCase, self).tearDown()
++
++    def arp_request(self, host):
++        return Ether(dst="ff:ff:ff:ff:ff:ff", src=host.mac) / ARP(
++            op="who-has",
++            hwsrc=host.mac,
++            pdst=self.pg0.local_ip4,
++            psrc=host.ip4,
++        )
++
++    def arp_reply(self, host):
++        return Ether(dst=self.pg0.local_mac, src=host.mac) / ARP(
++            op="is-at",
++            hwsrc=host.mac,
++            psrc=host.ip4,
++            hwdst=self.pg0.local_mac,
++            pdst=self.pg0.local_ip4,
++        )
++
++    def nd_solicitation(self, host):
++        nsma = in6_getnsma(inet_pton(AF_INET6, self.pg0.local_ip6))
++        return (
++            Ether(dst=in6_getnsmac(nsma), src=host.mac)
++            / IPv6(dst=inet_ntop(AF_INET6, nsma), src=host.ip6)
++            / ICMPv6ND_NS(tgt=self.pg0.local_ip6)
++            / ICMPv6NDOptSrcLLAddr(lladdr=host.mac)
++        )
++
++    def nd_advertisement(self, host):
++        return (
++            Ether(dst=self.pg0.local_mac, src=host.mac)
++            / IPv6(dst=self.pg0.local_ip6, src=host.ip6)
++            / ICMPv6ND_NA(tgt=host.ip6, R=0, S=1, O=1)
++            / ICMPv6NDOptDstLLAddr(lladdr=host.mac)
++        )
++
++    def test_arp_no_learn(self):
++        """ARP is answered but the sender is not learned"""
++        host = self.pg0.remote_hosts[1]
++
++        rx = self.send_and_expect(self.pg0, [self.arp_request(host)], self.pg0)
++        self.assertEqual(rx[0][ARP].op, arp_opts["is-at"])
++        self.assertEqual(rx[0][ARP].pdst, host.ip4)
++        self.assertFalse(find_nbr(self, self.pg0.sw_if_index, host.ip4))
++
++        host = self.pg0.remote_hosts[2]
++        self.send_and_assert_no_replies(self.pg0, [self.arp_reply(host)])
++        self.assertFalse(find_nbr(self, self.pg0.sw_if_index, host.ip4))
++
++    def test_nd_no_learn(self):
++        """NS is answered but neither NS nor NA creates a neighbor"""
++        host = self.pg0.remote_hosts[1]
++
++        rx = self.send_and_expect(self.pg0, [self.nd_solicitation(host)], self.pg0)
++        self.assertTrue(rx[0].haslayer(ICMPv6ND_NA))
++        self.assertEqual(rx[0][ICMPv6ND_NA].tgt, self.pg0.local_ip6)
++        self.assertEqual(rx[0][IPv6].dst, host.ip6)
++        self.assertFalse(find_nbr(self, self.pg0.sw_if_index, host.ip6))
++
++        host = self.pg0.remote_hosts[2]
++        self.send_and_assert_no_replies(self.pg0, [self.nd_advertisement(host)])
++        self.assertFalse(find_nbr(self, self.pg0.sw_if_index, host.ip6))
++
++    def test_api_neighbor_added(self):
++        """Neighbors added through the API are still programmed"""
++        host = self.pg0.remote_hosts[1]
++
++        for ip, is_static in ((host.ip4, False), (host.ip6, True)):
++            VppNeighbor(
++                self, self.pg0.sw_if_index, host.mac, ip, is_static=is_static
++            ).add_vpp_config()
++            self.assertTrue(
++                find_nbr(
++                    self, self.pg0.sw_if_index, ip, is_static=is_static, mac=host.mac
++                )
++            )
++
++    def test_cli_learn(self):
++        """set ip neighbor-config learn/nolearn"""
++        host = self.pg0.remote_hosts[1]
++
++        self.assertIn("learn:0", self.vapi.cli("show ip neighbor-config"))
++
++        self.vapi.cli("set ip neighbor-config ip6 learn")
++        try:
++            self.send_and_assert_no_replies(self.pg0, [self.nd_advertisement(host)])
++            self.assertTrue(
++                find_nbr(self, self.pg0.sw_if_index, host.ip6, mac=host.mac)
++            )
++            # IPv4 is still not learned
++            self.send_and_assert_no_replies(self.pg0, [self.arp_reply(host)])
++            self.assertFalse(find_nbr(self, self.pg0.sw_if_index, host.ip4))
++        finally:
++            self.vapi.cli("set ip neighbor-config ip6 nolearn")
++
++        self.vapi.ip_neighbor_flush(
++            VppEnum.vl_api_address_family_t.ADDRESS_IP6, self.pg0.sw_if_index
++        )
++        self.send_and_assert_no_replies(self.pg0, [self.nd_advertisement(host)])
++        self.assertFalse(find_nbr(self, self.pg0.sw_if_index, host.ip6))
++
++
+ if __name__ == "__main__":
+     unittest.main(testRunner=VppTestRunner)
+-- 
+2.34.1
+
