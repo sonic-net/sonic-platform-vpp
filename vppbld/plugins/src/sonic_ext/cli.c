@@ -153,16 +153,28 @@ show_sonic_ext_command_fn (vlib_main_t *vm, unformat_input_t *input,
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
   vlib_cli_output (vm, "sonic-ext state:");
-  vlib_cli_output (vm, "  punt-via-member : %s",
-		   sem->punt_via_member ? "on" : "off");
-  vlib_cli_output (vm, "  host-xc         : %s",
-		   sem->host_xc ? "on" : "off");
-  vlib_cli_output (vm, "  captures        : %llu", sem->captures);
-  vlib_cli_output (vm, "  aggr-tap redir  : %llu", sem->aggr_tap_redirects);
-  vlib_cli_output (vm, "  glean redirect  : %llu", sem->glean_redirects);
-  vlib_cli_output (vm, "  host-xc direct  : %llu", sem->host_xc_direct);
-  vlib_cli_output (vm, "  l2 trap fixups  : %llu", sem->l2_trap_fixups);
-  vlib_cli_output (vm, "  ip2me hits      : %llu", sem->ip2me_hits);
+#define _(symbol, field, name, default_enabled, owner)                        \
+  if (SONIC_EXT_OWNER_##owner == SONIC_EXT_OWNER_VPP)                         \
+    vlib_cli_output (vm, "  %-17s : %s", name, sem->field ? "on" : "off");
+  foreach_sonic_ext_feature
+#undef _
+  /* Derived from the two cookie consumers above, so report the latch. */
+  vlib_cli_output (vm, "  capture (derived) : %s",
+		   sem->capture_enabled ? "on" : "off");
+  /* Stored for saivpp, which wires these; arc membership does not reflect them. */
+  vlib_cli_output (vm, "  -- saivpp-wired --");
+#define _(symbol, field, name, default_enabled, owner)                        \
+  if (SONIC_EXT_OWNER_##owner == SONIC_EXT_OWNER_SAIVPP)                      \
+    vlib_cli_output (vm, "  %-17s : %s", name, sem->field ? "on" : "off");
+  foreach_sonic_ext_feature
+#undef _
+  vlib_cli_output (vm, "  -- counters --");
+  vlib_cli_output (vm, "  captures          : %llu", sem->captures);
+  vlib_cli_output (vm, "  aggr-tap redir    : %llu", sem->aggr_tap_redirects);
+  vlib_cli_output (vm, "  glean redirect    : %llu", sem->glean_redirects);
+  vlib_cli_output (vm, "  host-xc direct    : %llu", sem->host_xc_direct);
+  vlib_cli_output (vm, "  l2 trap fixups    : %llu", sem->l2_trap_fixups);
+  vlib_cli_output (vm, "  ip2me hits        : %llu", sem->ip2me_hits);
   return 0;
 }
 
@@ -170,4 +182,34 @@ VLIB_CLI_COMMAND (show_sonic_ext_command, static) = {
   .path = "show sonic-ext",
   .short_help = "show sonic-ext",
   .function = show_sonic_ext_command_fn,
+};
+
+static clib_error_t *
+show_sonic_ext_mirror_encap_command_fn (vlib_main_t *vm,
+					unformat_input_t *input,
+					vlib_cli_command_t *cmd)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  vnet_main_t *vnm = vnet_get_main ();
+  u32 i;
+
+  vlib_cli_output (vm, "sonic-ext mirror-encap fixups: %llu",
+		   sem->mirror_encap_fixups);
+  for (i = 0; i < vec_len (sem->mirror_encap_cfg); i++)
+    {
+      sonic_ext_mirror_encap_cfg_t *c =
+	vec_elt_at_index (sem->mirror_encap_cfg, i);
+      if (!c->enabled)
+	continue;
+      vlib_cli_output (vm, "  %U: gre-protocol 0x%04x ttl %u",
+		       format_vnet_sw_if_index_name, vnm, i, c->gre_protocol,
+		       c->ttl);
+    }
+  return 0;
+}
+
+VLIB_CLI_COMMAND (show_sonic_ext_mirror_encap_command, static) = {
+  .path = "show sonic-ext mirror-encap",
+  .short_help = "show sonic-ext mirror-encap",
+  .function = show_sonic_ext_mirror_encap_command_fn,
 };

@@ -20,6 +20,9 @@
  * (sonic-sairedis) can enable the "receive-DPO check before ACL" feature
  * on exactly the L2 ports where an ingress drop ACL that could discard
  * ip2me traffic is bound.
+ *
+ * Exposes sonic_ext_feature_get so the same layer can read the startup.conf
+ * selection for the features it wires itself, and skip installing them.
  */
 
 #include <vnet/vnet.h>
@@ -54,6 +57,67 @@ vl_api_sonic_ext_ip2me_enable_disable_t_handler (
 
 exit:
   REPLY_MACRO (VL_API_SONIC_EXT_IP2ME_ENABLE_DISABLE_REPLY);
+}
+
+static void
+vl_api_sonic_ext_egress_mirror_enable_disable_t_handler (
+  vl_api_sonic_ext_egress_mirror_enable_disable_t *mp)
+{
+  vl_api_sonic_ext_egress_mirror_enable_disable_reply_t *rmp;
+  int rv = sonic_ext_egress_mirror_enable_disable (mp->enable ? 1 : 0);
+
+  REPLY_MACRO (VL_API_SONIC_EXT_EGRESS_MIRROR_ENABLE_DISABLE_REPLY);
+}
+
+static void
+vl_api_sonic_ext_mirror_encap_fixup_enable_disable_t_handler (
+  vl_api_sonic_ext_mirror_encap_fixup_enable_disable_t *mp)
+{
+  vnet_interface_main_t *im = &vnet_get_main ()->interface_main;
+  vl_api_sonic_ext_mirror_encap_fixup_enable_disable_reply_t *rmp;
+  u32 sw_if_index = ntohl (mp->sw_if_index);
+  int rv = 0;
+
+  if (pool_is_free_index (im->sw_interfaces, sw_if_index))
+    {
+      rv = VNET_API_ERROR_INVALID_SW_IF_INDEX;
+      goto exit;
+    }
+
+  rv = sonic_ext_mirror_encap_fixup_enable_disable (
+    sw_if_index, ntohs (mp->gre_protocol), mp->hop_limit,
+    mp->enable ? 1 : 0);
+
+exit:
+  REPLY_MACRO (VL_API_SONIC_EXT_MIRROR_ENCAP_FIXUP_ENABLE_DISABLE_REPLY);
+}
+
+static void
+vl_api_sonic_ext_feature_get_t_handler (vl_api_sonic_ext_feature_get_t *mp)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  vl_api_sonic_ext_feature_get_reply_t *rmp;
+  /* Fixed-width field: a caller that fills all 64 bytes leaves no NUL, so copy
+   * out and terminate rather than trusting the wire to be a C string. */
+  char name[sizeof (mp->feature) + 1];
+  /* An unrecognized feature defaults to disabled */
+  u8 enabled = 0;
+  int rv = 0;
+
+  clib_memcpy (name, mp->feature, sizeof (mp->feature));
+  name[sizeof (mp->feature)] = 0;
+
+#define _(symbol, field, str, default_enabled, owner)                         \
+  if (!strcmp (name, str))                                                    \
+    enabled = sem->field;                                                     \
+  else
+  foreach_sonic_ext_feature
+#undef _
+  if (!strcmp (name, "capture"))
+    enabled = sem->capture_enabled;
+
+  REPLY_MACRO2 (VL_API_SONIC_EXT_FEATURE_GET_REPLY,
+		({ rmp->enabled = enabled; }));
 }
 
 /* API definitions */
