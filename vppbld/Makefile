@@ -129,6 +129,10 @@ ci-test-deps: ci-build
 # survive even though .SHELLFLAGS has -e.
 CI_TEST_LOGS ?= $(CURDIR)/test-logs
 
+# VPP's test runner discovers only its own test/ directory plus one
+# EXTERN_TESTS directory, so a plugin's tests run only if named here.
+CI_EXTERN_TESTS ?= $(CURDIR)/$(VPP_CUSTOM_PLUGINS_DIR)/sonic_ext/test
+
 .PHONY: ci-test
 ci-test: ci-build ci-test-deps
 	# Start clean so a passing run cannot republish a previous run's failures.
@@ -137,7 +141,8 @@ ci-test: ci-build ci-test-deps
 	pushd $(VPP_REPO_DIR)
 	env WORKSPACE=$(CI_TEST_LOGS) \
 		make UNATTENDED=y PLATFORM=vpp TEST_JOBS=$(CI_TEST_JOBS) \
-		     COMPRESS_FAILED_TEST_LOGS=yes test
+		     COMPRESS_FAILED_TEST_LOGS=yes \
+		     EXTERN_TESTS=$(CI_EXTERN_TESTS) test
 	popd
 
 .PHONY: ci-clean
