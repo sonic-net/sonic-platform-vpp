@@ -90,6 +90,8 @@ sonic_ext_nd_punt_command_fn (vlib_main_t *vm, unformat_input_t *input,
 			      vlib_cli_command_t *cmd)
 {
   unformat_input_t _line_input, *line_input = &_line_input;
+  clib_error_t *error = 0;
+
   if (!unformat_user (input, unformat_line_input, line_input))
     return 0;
 
@@ -102,14 +104,14 @@ sonic_ext_nd_punt_command_fn (vlib_main_t *vm, unformat_input_t *input,
 	sonic_ext_set_nd_punt (0);
       else
 	{
-	  unformat_free (line_input);
-	  return clib_error_return (0, "unknown input `%U'",
-				    format_unformat_error, line_input);
+	  error = clib_error_return (0, "unknown input `%U'",
+				     format_unformat_error, line_input);
+	  break;
 	}
     }
 
   unformat_free (line_input);
-  return 0;
+  return error;
 }
 
 VLIB_CLI_COMMAND (sonic_ext_nd_punt_command, static) = {

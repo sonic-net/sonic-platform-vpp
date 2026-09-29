@@ -9,6 +9,7 @@ from asfframework import VppTestRunner
 from vpp_ip import VppIpPuntRedirect
 from vpp_neighbor import VppNeighbor, find_nbr
 from vpp_papi import VppEnum
+from vpp_papi_provider import CliFailedCommandError
 
 from scapy.layers.l2 import Ether
 from scapy.layers.inet6 import (
@@ -154,6 +155,12 @@ class TestSonicExtNdPunt(SonicExtNdPuntBase):
         self.assertTrue(self.nd_punt_enabled())
         self.send_and_expect_only(self.pg0, [self.ns()], self.pg1)
         self.assertFalse(self.remote_learned())
+
+    def test_nd_punt_cli_bad_input(self):
+        """sonic-ext nd-punt rejects an unknown word and names it"""
+        with self.assertRaisesRegex(CliFailedCommandError, "unknown input `bogus'"):
+            self.vapi.cli("sonic-ext nd-punt bogus")
+        self.assertTrue(self.nd_punt_enabled())
 
 
 class TestSonicExtNdPuntStartupOff(SonicExtNdPuntBase):
