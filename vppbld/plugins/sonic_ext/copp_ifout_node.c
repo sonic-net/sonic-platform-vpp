@@ -143,6 +143,14 @@ sonic_ext_copp_ifout_resolve_index (sonic_ext_copp_ifout_entry_t *entry)
     }
 
   entry->policer_index = (u32) p[0];
+
+  /* Refresh the cached meter-type flag */
+  {
+    uword *cfg_idx = hash_get_mem (pm->policer_config_by_name, entry->name);
+    entry->rate_is_pps =
+      (cfg_idx && pm->configs[cfg_idx[0]].rate_type == QOS_RATE_PPS) ? 1 : 0;
+  }
+
   return entry->policer_index;
 }
 
@@ -310,7 +318,16 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 	}
 
       policer_t *policer = pool_elt_at_index (pm->policers, policer_index);
-      u32 metered_len = 256;
+      /*
+       * PPS-configured policers: VPP calibrates the token refill rate
+       * assuming every packet is debited as exactly 256 bytes.
+       * KBPS-configured policers use the real length to meter.
+       * entry->rate_is_pps is refreshed in
+       * sonic_ext_copp_ifout_resolve_index() whenever policer_index
+       * itself is (re-)resolved.
+       */
+      u32 metered_len =
+	entry->rate_is_pps ? 256 : vlib_buffer_length_in_chain (vm, b);
       policer_result_e verdict = vnet_police_packet (
 	policer, metered_len, POLICE_CONFORM,
 	clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT);

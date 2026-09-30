@@ -167,6 +167,7 @@ typedef struct
   u32 policer_index;
   u8 in_use;
   u8 match_ip4_ttl_expiring; /* TTL_ERROR trap */
+  u8 rate_is_pps;
 } sonic_ext_copp_ifout_entry_t;
 
 #define SONIC_EXT_COPP_IP2ME_MAX_ADDRS 256
@@ -208,6 +209,7 @@ typedef struct
   u8 in_use;
   u8 match_kind; /* sonic_ext_copp_ip2me_match_kind_t */
   u16 match_tcp_port; /* only used when match_kind == MATCH_TCP_PORT */
+  u8 rate_is_pps;
   u64 conform_packets;
   u64 exceed_packets;
   u64 violate_packets;

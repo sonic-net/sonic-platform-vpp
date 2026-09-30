@@ -141,6 +141,14 @@ sonic_ext_copp_ip2me_resolve_index (sonic_ext_copp_ip2me_policer_t *pol)
     }
 
   pol->policer_index = (u32) p[0];
+
+  /* Refresh cached meter-type flag */
+  {
+    uword *cfg_idx = hash_get_mem (pm->policer_config_by_name, pol->name);
+    pol->rate_is_pps =
+      (cfg_idx && pm->configs[cfg_idx[0]].rate_type == QOS_RATE_PPS) ? 1 : 0;
+  }
+
   return pol->policer_index;
 }
 
@@ -310,9 +318,8 @@ sonic_ext_copp_ip2me_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 	}
 
       policer_t *policer = pool_elt_at_index (pm->policers, policer_index);
-      /* Same 256-byte reference length convention sonic-ext-copp-ifout
-       * uses, matching VPP's own pps-mode policer calibration. */
-      u32 metered_len = 256;
+      u32 metered_len =
+	pol->rate_is_pps ? 256 : vlib_buffer_length_in_chain (vm, b);
       policer_result_e verdict = vnet_police_packet (
 	policer, metered_len, POLICE_CONFORM,
 	clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT);
@@ -568,7 +575,8 @@ sonic_ext_copp_ip2me_ip6_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 	}
 
       policer_t *policer = pool_elt_at_index (pm->policers, policer_index);
-      u32 metered_len = 256;
+      u32 metered_len =
+	pol->rate_is_pps ? 256 : vlib_buffer_length_in_chain (vm, b);
       policer_result_e verdict = vnet_police_packet (
 	policer, metered_len, POLICE_CONFORM,
 	clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT);
