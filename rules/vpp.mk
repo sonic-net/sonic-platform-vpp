@@ -2,12 +2,17 @@
 
 VPP_VERSION_BASE = 2606
 # Bump the minor suffix whenever vppbld/patches/series or any patch file
-# under vppbld/patches/*.patch changes content. The VPP_VERSION_SONIC string
-# is the cache key used by vppbld/Makefile to fetch pre-built debs from
+# under vppbld/patches/*.patch changes content, OR when anything under
+# vppbld/plugins/ changes (vppbld/Makefile's repo_clone target copies
+# plugins/ into the VPP source tree before the .deb is built, so a
+# plugin-only change produces a genuinely different .deb under the same
+# version string otherwise). The VPP_VERSION_SONIC string is the cache key
+# used by vppbld/Makefile to fetch pre-built debs from
 # https://packages.buildkite.com/sonic-vpp/vpp; if the suffix isn't bumped,
 # downstream sonic-buildimage builds will silently pull stale debs that
-# pre-date the new patch series and end up with VPP/SAI CRC drift.
-VPP_VERSION = $(VPP_VERSION_BASE)-0.8
+# pre-date the new patch series/plugin changes and end up with VPP/SAI CRC
+# drift.
+VPP_VERSION = $(VPP_VERSION_BASE)-0.10
 VPP_VERSION_SONIC = $(VPP_VERSION)+b1sonic1
 VPP_SRC_PATH = platform/vpp/vppbld
 

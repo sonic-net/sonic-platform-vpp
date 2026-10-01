@@ -57,3 +57,13 @@
 #     adj_l2_rewrite_inline() starts the arc from both adj-l2-midchain and
 #     adj-l2-rewrite but only the former had the arc edges built.
 0020-adj-honour-ethernet-output-features-on-l2-adjacencies.patch
+# 21. ip4: redirect TTL-expired transit packets to a new sonic_ext
+#     "sonic-ext-copp-ttl-punt" node instead of unconditionally sending an
+#     ICMP time-exceeded reply, when the SAI TTL_ERROR trap is installed.
+#     Resolved via vlib_get_plugin_symbol() (same idiom as patch 0019's
+#     mirror-stamp hook) -- no link dependency, byte-for-byte unchanged
+#     behavior when sonic_ext isn't loaded or the trap isn't installed.
+#     ip4-drop-arc redirect (PR #267's glean-redirect pattern) does NOT
+#     work here: by the time a packet reaches ip4-drop, ip4-icmp-error has
+#     already unconditionally sent the ICMP reply.
+0021-ip4-redirect-ttl-expired-to-copp-punt-hook.patch
