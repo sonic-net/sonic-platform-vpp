@@ -12,7 +12,10 @@ jobs:
     timeoutInMinutes: 300
     container:
       image: sonicdev-microsoft.azurecr.io:443/sonic-slave-${{ parameters.debian_version }}:latest
-      options:  "--privileged"
+      # --privileged grants capabilities to root only, so the steps must also
+      # run as root: the VPP test suite needs CAP_SYS_ADMIN to create the
+      # network namespaces the custom plugin tests rely on.
+      options:  "--privileged --user 0:0"
     steps:
     - checkout: self
       clean: true
@@ -46,6 +49,20 @@ jobs:
         cd $(System.DefaultWorkingDirectory)/vppbld
         make ci-build CONFIGURED_ARCH=${{ parameters.arch }} CI_DEST=$(System.DefaultWorkingDirectory)/vppbld/artifacts
       displayName: "Build VPP packages from source"
+    # The custom plugin suites self-skip when namespaces cannot be created,
+    # which would leave the job green while testing nothing.  "make ci-test"
+    # gates on this too, but probing here fails fast with an attributable
+    # step instead of surfacing after a long test run.
+    - script: |
+        set -ex
+        id
+        capsh --print || true
+        ip netns del ci_netns_probe 2>/dev/null || true
+        ip netns add ci_netns_probe
+        ip netns del ci_netns_probe
+      displayName: "Verify network namespace capability"
+    # Runs the upstream VPP suite plus the tests shipped by our custom plugins
+    # (vppbld/plugins/tests/<plugin>/), passed to the runner via EXTERN_TESTS.
     - script: |
         set -ex
         cd $(System.DefaultWorkingDirectory)/vppbld

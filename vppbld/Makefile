@@ -145,8 +145,53 @@ CI_TEST_LOGS ?= $(CURDIR)/test-logs
 # $(WS)/test directory, so the upstream suite still runs unchanged.
 CI_PLUGIN_TESTS = $(abspath $(VPP_CUSTOM_PLUGIN_TESTS_DIR))
 
+# Name used by the preflight namespace probe below.
+CI_NETNS_PROBE = vppbld_netns_probe
+
+# A missing capability must break the job, not quietly shrink the test run.
+#
+# The custom plugin suites are guarded by
+# @unittest.skipIf(config.skip_netns_tests, ...), and test/config.py sets that
+# flag by *probing* "ip netns add" at import time
+# (vpp_qemu_utils.can_create_namespaces, which swallows every exception).  So a
+# container that cannot create namespaces -- e.g. a privileged one whose steps
+# still run as a non-root uid, since --privileged grants capabilities to root
+# only -- turns every one of those suites into a SKIP and the job still passes.
+#
+# Assert the preconditions up front instead.  This mirrors the runtime probe
+# exactly: same binary, same uid, same container.
+.PHONY: ci-test-preflight
+ci-test-preflight:
+	@if [ -n "$(VPP_EXCLUDED_PLUGINS)" ]; then \
+		echo "ERROR: VPP_EXCLUDED_PLUGINS=$(VPP_EXCLUDED_PLUGINS) is set; the"; \
+		echo "       sonic_ext / linux-cp plugin suites would self-skip."; \
+		exit 1; \
+	fi
+	@if [ -z "$(wildcard $(VPP_CUSTOM_PLUGIN_TESTS_DIR)/*/test_*.py)" ]; then \
+		echo "ERROR: no custom plugin tests found under"; \
+		echo "       $(VPP_CUSTOM_PLUGIN_TESTS_DIR)/<plugin>/test_*.py"; \
+		exit 1; \
+	fi
+	@if ! command -v ip >/dev/null 2>&1; then \
+		echo "ERROR: iproute2 'ip' is not installed, so can_create_namespaces()"; \
+		echo "       would silently skip every netns-dependent plugin suite."; \
+		exit 1; \
+	fi
+	@ip netns del $(CI_NETNS_PROBE) >/dev/null 2>&1 || true
+	@if ! ip netns add $(CI_NETNS_PROBE) >/dev/null 2>&1; then \
+		echo "ERROR: cannot create a network namespace as uid $$(id -u)."; \
+		echo "       The custom plugin suites would all be reported SKIP while"; \
+		echo "       the job stayed green.  Run the container privileged *and*"; \
+		echo "       as root (e.g. --privileged --user 0:0)."; \
+		echo "--- 'ip netns add' reported ---"; \
+		ip netns add $(CI_NETNS_PROBE) || true; \
+		exit 1; \
+	fi
+	@ip netns del $(CI_NETNS_PROBE) >/dev/null 2>&1 || true
+	@echo "preflight: namespace creation OK, custom plugin tests will run"
+
 .PHONY: ci-test
-ci-test: ci-build ci-test-deps
+ci-test: ci-build ci-test-deps ci-test-preflight
 	# Start clean so a passing run cannot republish a previous run's failures.
 	rm -rf $(CI_TEST_LOGS)
 	mkdir -p $(CI_TEST_LOGS)
