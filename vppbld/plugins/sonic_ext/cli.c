@@ -86,6 +86,41 @@ VLIB_CLI_COMMAND (sonic_ext_host_xc_command, static) = {
 };
 
 static clib_error_t *
+sonic_ext_nd_punt_command_fn (vlib_main_t *vm, unformat_input_t *input,
+			      vlib_cli_command_t *cmd)
+{
+  unformat_input_t _line_input, *line_input = &_line_input;
+  clib_error_t *error = 0;
+
+  if (!unformat_user (input, unformat_line_input, line_input))
+    return 0;
+
+  while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (line_input, "on") || unformat (line_input, "enable"))
+	sonic_ext_set_nd_punt (1);
+      else if (unformat (line_input, "off") ||
+	       unformat (line_input, "disable"))
+	sonic_ext_set_nd_punt (0);
+      else
+	{
+	  error = clib_error_return (0, "unknown input `%U'",
+				     format_unformat_error, line_input);
+	  break;
+	}
+    }
+
+  unformat_free (line_input);
+  return error;
+}
+
+VLIB_CLI_COMMAND (sonic_ext_nd_punt_command, static) = {
+  .path = "sonic-ext nd-punt",
+  .short_help = "sonic-ext nd-punt [on|enable|off|disable]",
+  .function = sonic_ext_nd_punt_command_fn,
+};
+
+static clib_error_t *
 sonic_ext_ip2me_command_fn (vlib_main_t *vm, unformat_input_t *input,
 			    vlib_cli_command_t *cmd)
 {

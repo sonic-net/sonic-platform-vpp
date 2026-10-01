@@ -129,6 +129,7 @@ typedef enum
   _ (PUNT_VIA_MEMBER, punt_via_member, "punt-via-member", 1, VPP)             \
   _ (HOST_XC, host_xc, "host-xc", 1, VPP)                                     \
   _ (DROP_MEMBER_STATS, drop_member_stats, "drop-member-stats", 1, VPP)       \
+  _ (ND_PUNT, nd_punt, "nd-punt", 1, VPP)                                     \
   _ (IP2ME, ip2me, "ip2me", 1, SAIVPP)                                        \
   _ (L2_TRAP_FIXUP, l2_trap_fixup, "l2-trap-fixup", 1, SAIVPP)                \
   _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)
@@ -330,6 +331,7 @@ void sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable);
 /* Toggle accessors used by CLI and node fast paths. */
 void sonic_ext_set_punt_via_member (u8 is_enable);
 void sonic_ext_set_host_xc (u8 is_enable);
+void sonic_ext_set_nd_punt (u8 is_enable);
 
 /* Enable sonic-ext-capture on every existing LCP pair's wire phy.  Capture
  * has no toggle of its own: it is enabled whenever one of the features that
