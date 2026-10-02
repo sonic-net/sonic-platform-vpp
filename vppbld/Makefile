@@ -22,7 +22,11 @@ UID = $(shell id -u)
 GUID = $(shell id -g)
 
 VPP_REPO_DIR = repo
-VPP_CUSTOM_PLUGINS_DIR = plugins
+# Custom plugins mirror VPP's own layout: sources under src/<plugin>/ are
+# dropped into the VPP tree, tests under tests/<plugin>/ are fed to the test
+# runner from here (VPP keeps its tests out of the plugin source dirs too).
+VPP_CUSTOM_PLUGINS_DIR = plugins/src
+VPP_CUSTOM_PLUGIN_TESTS_DIR = plugins/tests
 MAIN_TARGET = $(VPPINFRA)
 DERIVED_TARGETS = $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK) \
 				  $(VPP_PLUGIN_DEV) $(VPP_DEV) $(VPPINFRA_DEV) $(VPPDBG)
@@ -129,20 +133,73 @@ ci-test-deps: ci-build
 # survive even though .SHELLFLAGS has -e.
 CI_TEST_LOGS ?= $(CURDIR)/test-logs
 
-# VPP's test runner discovers only its own test/ directory plus one
-# EXTERN_TESTS directory, so a plugin's tests run only if named here.
-CI_EXTERN_TESTS ?= $(CURDIR)/$(VPP_CUSTOM_PLUGINS_DIR)/sonic_ext/test
+# Extra test cases shipped by our custom plugins.
+#
+# Tests live in $(VPP_CUSTOM_PLUGIN_TESTS_DIR)/<plugin>/ and are run straight
+# from the workspace rather than from a copy in the VPP tree, so editing a test
+# does not invalidate the build stamp.  VPP's runner takes the directory via
+# EXTERN_TESTS -> --test-src-dir and scans it recursively, so this one
+# directory covers every plugin.
+#
+# This only ever *adds* tests: test/config.py always prepends the upstream
+# $(WS)/test directory, so the upstream suite still runs unchanged.
+CI_PLUGIN_TESTS = $(abspath $(VPP_CUSTOM_PLUGIN_TESTS_DIR))
+
+# Name used by the preflight namespace probe below.
+CI_NETNS_PROBE = vppbld_netns_probe
+
+# A missing capability must break the job, not quietly shrink the test run.
+#
+# The custom plugin suites are guarded by
+# @unittest.skipIf(config.skip_netns_tests, ...), and test/config.py sets that
+# flag by *probing* "ip netns add" at import time
+# (vpp_qemu_utils.can_create_namespaces, which swallows every exception).  So a
+# container that cannot create namespaces -- e.g. a privileged one whose steps
+# still run as a non-root uid, since --privileged grants capabilities to root
+# only -- turns every one of those suites into a SKIP and the job still passes.
+#
+# Assert the preconditions up front instead.  This mirrors the runtime probe
+# exactly: same binary, same uid, same container.
+.PHONY: ci-test-preflight
+ci-test-preflight:
+	@if [ -n "$(VPP_EXCLUDED_PLUGINS)" ]; then \
+		echo "ERROR: VPP_EXCLUDED_PLUGINS=$(VPP_EXCLUDED_PLUGINS) is set; the"; \
+		echo "       sonic_ext / linux-cp plugin suites would self-skip."; \
+		exit 1; \
+	fi
+	@if [ -z "$(wildcard $(VPP_CUSTOM_PLUGIN_TESTS_DIR)/*/test_*.py)" ]; then \
+		echo "ERROR: no custom plugin tests found under"; \
+		echo "       $(VPP_CUSTOM_PLUGIN_TESTS_DIR)/<plugin>/test_*.py"; \
+		exit 1; \
+	fi
+	@if ! command -v ip >/dev/null 2>&1; then \
+		echo "ERROR: iproute2 'ip' is not installed, so can_create_namespaces()"; \
+		echo "       would silently skip every netns-dependent plugin suite."; \
+		exit 1; \
+	fi
+	@ip netns del $(CI_NETNS_PROBE) >/dev/null 2>&1 || true
+	@if ! ip netns add $(CI_NETNS_PROBE) >/dev/null 2>&1; then \
+		echo "ERROR: cannot create a network namespace as uid $$(id -u)."; \
+		echo "       The custom plugin suites would all be reported SKIP while"; \
+		echo "       the job stayed green.  Run the container privileged *and*"; \
+		echo "       as root (e.g. --privileged --user 0:0)."; \
+		echo "--- 'ip netns add' reported ---"; \
+		ip netns add $(CI_NETNS_PROBE) || true; \
+		exit 1; \
+	fi
+	@ip netns del $(CI_NETNS_PROBE) >/dev/null 2>&1 || true
+	@echo "preflight: namespace creation OK, custom plugin tests will run"
 
 .PHONY: ci-test
-ci-test: ci-build ci-test-deps
+ci-test: ci-build ci-test-deps ci-test-preflight
 	# Start clean so a passing run cannot republish a previous run's failures.
 	rm -rf $(CI_TEST_LOGS)
 	mkdir -p $(CI_TEST_LOGS)
 	pushd $(VPP_REPO_DIR)
 	env WORKSPACE=$(CI_TEST_LOGS) \
 		make UNATTENDED=y PLATFORM=vpp TEST_JOBS=$(CI_TEST_JOBS) \
-		     COMPRESS_FAILED_TEST_LOGS=yes \
-		     EXTERN_TESTS=$(CI_EXTERN_TESTS) test
+		     EXTERN_TESTS=$(CI_PLUGIN_TESTS) \
+		     COMPRESS_FAILED_TEST_LOGS=yes test
 	popd
 
 .PHONY: ci-clean
