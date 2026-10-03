@@ -27,6 +27,7 @@
 #include <vnet/ip/ip.h>
 #include <vnet/l2/l2_input.h>
 #include <vnet/l2/l2_bd.h>
+#include <vnet/bonding/node.h>
 
 sonic_ext_pbh_main_t sonic_ext_pbh_main;
 
@@ -183,6 +184,42 @@ sonic_ext_pbh_rules_need_sideband (sonic_ext_pbh_rule_t *rules)
 }
 
 /*
+ * Take and release the per-buffer side-band on behalf of a table.
+ *
+ * The bond TX override reads side-band slots, so it must be live exactly
+ * while the table it reads exists -- hence a PBH-level count rather than
+ * reusing sonic_ext_vnet_buf_main.refs, which a future non-LAG feature may
+ * also hold.  Registration order is deliberate: the table is built before
+ * the override that reads it, and cleared before the table is released.
+ */
+static int
+sonic_ext_pbh_sideband_ref (void)
+{
+  sonic_ext_pbh_main_t *pm = &sonic_ext_pbh_main;
+
+  if (sonic_ext_vnet_buf_ref (vlib_get_main ()))
+    return 1;
+
+  if (pm->n_sideband_tables++ == 0)
+    bond_main.lag_hash_override = sonic_ext_pbh_lag_hash_override;
+
+  return 0;
+}
+
+static void
+sonic_ext_pbh_sideband_unref (void)
+{
+  sonic_ext_pbh_main_t *pm = &sonic_ext_pbh_main;
+
+  ASSERT (pm->n_sideband_tables > 0);
+
+  if (--pm->n_sideband_tables == 0)
+    bond_main.lag_hash_override = 0;
+
+  sonic_ext_vnet_buf_unref (vlib_get_main ());
+}
+
+/*
  * Replace is atomic by construction: the new rule vector and its counters
  * are built to one side and swapped in, so a packet in flight sees either
  * the old rule set or the new one and never a partially rebuilt table.
@@ -228,7 +265,7 @@ sonic_ext_pbh_table_add_replace (u8 *name, sonic_ext_pbh_rule_t *rules,
    * the buffer free callback, e.g. `set buffer traces on`. */
   if (need_sideband && !t->holds_sideband)
     {
-      if (sonic_ext_vnet_buf_ref (vlib_get_main ()))
+      if (sonic_ext_pbh_sideband_ref ())
         {
           if (*table_index != ~0 && vec_len (t->rules) == 0 && t->name == 0)
             pool_put (pm->tables, t);
@@ -252,7 +289,7 @@ sonic_ext_pbh_table_add_replace (u8 *name, sonic_ext_pbh_rule_t *rules,
   /* Released only after the rules that needed it are gone. */
   if (!need_sideband && t->holds_sideband)
     {
-      sonic_ext_vnet_buf_unref (vlib_get_main ());
+      sonic_ext_pbh_sideband_unref ();
       t->holds_sideband = 0;
     }
 
@@ -288,7 +325,7 @@ sonic_ext_pbh_table_del (u32 table_index)
                                            0);
 
   if (t->holds_sideband)
-    sonic_ext_vnet_buf_unref (vlib_get_main ());
+    sonic_ext_pbh_sideband_unref ();
 
   vec_free (t->sw_if_indices);
   vec_free (t->rules);

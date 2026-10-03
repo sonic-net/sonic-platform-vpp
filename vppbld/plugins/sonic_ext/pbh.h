@@ -206,6 +206,11 @@ typedef struct
    * least one interface, so the arc cost is only paid while PBH is in use. */
   u32 n_attachments;
 
+  /* Tables currently holding a side-band reference, i.e. carrying at least
+   * one SET_LAG_HASH rule.  The bond TX override reads side-band slots, so
+   * it may only be registered while the table it reads exists. */
+  u32 n_sideband_tables;
+
   u64 hits;   /* packets a rule matched and an action applied to */
   u64 misses; /* packets examined that matched no rule */
 } sonic_ext_pbh_main_t;
@@ -236,6 +241,14 @@ sonic_ext_pbh_encap_from_match (const sonic_ext_pbh_match_t *m);
 
 format_function_t format_sonic_ext_pbh_profile;
 format_function_t format_sonic_ext_pbh_rule;
+
+/* Consumer of SONIC_EXT_VNET_BUF_PBH_LAG_HASH, registered into
+ * bond_main.lag_hash_override by patch 0021 while a table carrying a
+ * SET_LAG_HASH rule exists.  Signature must match
+ * bond_lag_hash_override_fn_t; declared here rather than including
+ * vnet/bonding/node.h, which the dataplane does not otherwise need. */
+void sonic_ext_pbh_lag_hash_override (vlib_main_t *vm, vlib_buffer_t **b,
+                                      u32 *h, u32 n);
 
 extern vlib_node_registration_t sonic_ext_pbh_ip4_node;
 extern vlib_node_registration_t sonic_ext_pbh_ip6_node;

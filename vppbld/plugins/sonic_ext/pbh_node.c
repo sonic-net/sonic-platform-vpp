@@ -567,3 +567,41 @@ VNET_FEATURE_INIT (sonic_ext_pbh_ip6, static) = {
   .node_name = "sonic-ext-pbh-ip6",
   .runs_after = VNET_FEATURES ("acl-plugin-in-ip6-fa"),
 };
+
+/*
+ * SET_LAG_HASH consumer.
+ *
+ * Registered into bond_main.lag_hash_override (patch 0021) and called from
+ * bond_tx_hash() after the configured vnet_hash_fn_t has filled h[], with
+ * the frame's buffer array parallel to it.  Entries whose buffer carries a
+ * live SONIC_EXT_VNET_BUF_PBH_LAG_HASH are replaced; everything else keeps
+ * the configured algorithm's answer.
+ *
+ * Nothing here writes to b[i]: the slot is located from buffer_pool_index
+ * and the buffer index, so the buffer itself is read-only.
+ *
+ * The bit is released on a hit so the tag is applied at most once.  That is
+ * only an optimisation -- the buffer free callback clears the whole slot in
+ * any case -- but it keeps a replicated frame from re-consuming a tag that
+ * was meant for the original.
+ */
+void
+sonic_ext_pbh_lag_hash_override (vlib_main_t *vm, vlib_buffer_t **b, u32 *h,
+                                 u32 n)
+{
+  for (u32 i = 0; i < n; i++)
+    {
+      sonic_ext_vnet_buf_t *sb;
+
+      if (PREDICT_TRUE (i + 8 < n))
+        clib_prefetch_load (sonic_ext_vnet_buf_slot (vm, b[i + 8]));
+
+      sb = sonic_ext_vnet_buf_find (vm, b[i],
+                                    SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
+      if (PREDICT_FALSE (sb != 0))
+        {
+          h[i] = sb->pbh_lag_hash;
+          sonic_ext_vnet_buf_release (sb, SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
+        }
+    }
+}
