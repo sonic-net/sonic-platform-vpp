@@ -26,6 +26,9 @@ add_vpp_plugin(sonic_ext
   cli.c
   egress_mirror_node.c
   mirror_encap_fixup_node.c
+  sonic_ext_vnet_buf.c
+  pbh.c
+  pbh_node.c
 
   API_FILES
   sonic_ext.api
