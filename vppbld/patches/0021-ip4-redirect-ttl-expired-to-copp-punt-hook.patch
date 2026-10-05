@@ -1,0 +1,168 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nikhil Hegde <nikhilhegde@microsoft.com>
+Date: Fri, 25 Sep 2026 00:00:00 -0700
+Subject: ip4: redirect TTL-expired transit packets to a CoPP punt hook
+ instead of unconditionally sending an ICMP reply
+
+sonic-net/sonic-platform-vpp PR #281 review (discussion_r4098860047 /
+discussion_r4098748408): SAI's TTL_ERROR trap models genuine ASIC/SAI
+behavior where a transiting TTL-expired packet is punted to the control
+plane (and CoPP-policed there), NOT necessarily answered with VPP's own
+ICMPv4 time-exceeded reply. That punt-to-host behavior did not exist
+anywhere in this codebase: ip4_ttl_and_checksum_check() (inside
+ip4-rewrite) unconditionally builds and sends an ICMP reply and drops
+the original buffer to ip4-drop.
+
+Investigated whether this could be done entirely from the sonic_ext
+plugin, hooking the ip4-drop feature arc the way sonic-ext-glean-
+redirect (PR #267) already does -- confirmed this does NOT work: by
+the time a packet reaches ip4-drop, ip4_icmp_error() has ALREADY
+unconditionally dispatched the ICMP reply copy to ip4-lookup. There is
+also no feature arc before ip4-icmp-error to hook into; its 3 callers
+set it as a hardcoded next-node index, not a VNET_FEATURE_ARC. So
+avoiding the reply when the trap is installed requires touching this
+call site.
+
+Add one new next-node slot (IP4_REWRITE_NEXT_COPP_TTL_PUNT) to
+ip4-rewrite, resolved by name ("sonic-ext-copp-ttl-punt") so this
+patch has no link/build dependency on the sonic_ext plugin. Guard the
+new next_nodes entry with VLIB_NODE_FLAG_ALLOW_LAZY_NEXT_NODES so VPP
+init does not hard-error ("refers to unknown node") on any
+platform/config that doesn't load sonic_ext -- the slot then simply
+never resolves and is never reached, since the hook below is also
+resolved to null in that case.
+
+Add a small dlsym-resolved hook, sonic_ext_ttl_error_hook(), using the
+exact same idiom as policer_get_main()/policer_get_counters()
+(src/plugins/policer/policer.h): vlib_get_plugin_symbol() against
+"sonic_ext_plugin.so", cached after first resolution, no link
+dependency either direction. When the hook is null (plugin not loaded)
+or returns false (no SAI TTL_ERROR trap currently installed), behavior
+is byte-for-byte identical to before this patch. When it returns true,
+redirect to the new node instead of generating an ICMP reply.
+
+This function only ever runs on a packet that has already resolved to
+an outbound adjacency inside ip4-rewrite -- by construction this can
+never be a locally-terminated (ip2me) destination, so no separate
+"is this addressed to us" check is needed at this call site; that
+case is already handled entirely by the existing copp-ip2me punt path.
+
+The actual redirect-to-host-tap logic, the SAI trap-installed state,
+and the CoPP policing itself all live in the sonic_ext plugin (new
+copp_ttl_punt_node.c) -- this patch is the minimal, narrowly-scoped
+core-VPP change needed to make the redirect possible at all, per
+agreement with reviewer yue-fred-gao on PR #281.
+
+Signed-off-by: Nikhil Hegde <nikhilhegde@microsoft.com>
+---
+diff --git a/src/vnet/ip/ip4_forward.c b/src/vnet/ip/ip4_forward.c
+index da99989c3..804544335 100644
+--- a/src/vnet/ip/ip4_forward.c
++++ b/src/vnet/ip/ip4_forward.c
+@@ -24,6 +24,7 @@
+ #include <vnet/mfib/mfib_table.h>	/* for mFIB table and entry creation */
+ #include <vnet/adj/adj_dp.h>
+ #include <vnet/pg/pg.h>
++#include <vlib/unix/plugin.h>
+ 
+ #include <vnet/ip/ip4_forward.h>
+ #include <vnet/interface_output.h>
+@@ -1957,6 +1958,7 @@ typedef enum
+   IP4_REWRITE_NEXT_DROP,
+   IP4_REWRITE_NEXT_ICMP_ERROR,
+   IP4_REWRITE_NEXT_FRAGMENT,
++  IP4_REWRITE_NEXT_COPP_TTL_PUNT,
+   IP4_REWRITE_N_NEXT		/* Last */
+ } ip4_rewrite_next_t;
+ 
+@@ -2024,6 +2026,38 @@ ip4_ttl_inc (vlib_buffer_t * b, ip4_header_t * ip)
+ 
+ /* Decrement TTL & update checksum.
+    Works either endian, so no need for byte swap. */
++
++/*
++ * SONiC CoPP hook (sonic_ext plugin): should this genuinely-transiting
++ * TTL-expired packet be punted to the control plane instead of VPP
++ * generating its own ICMPv4 time-exceeded reply?  Resolved via
++ * vlib_get_plugin_symbol(), same dlsym idiom as policer_get_main()
++ * (src/plugins/policer/policer.h) -- no link dependency on sonic_ext
++ * either way.  Null (plugin not loaded, or no SAI TTL_ERROR trap
++ * installed) preserves today's unmodified ip4-icmp-error behavior
++ * byte-for-byte; this function only ever runs on a packet that has
++ * already resolved to an outbound adjacency here in ip4-rewrite, so a
++ * locally-terminated (ip2me) destination can never reach it -- no
++ * separate "is this for us" check is needed.
++ */
++typedef int (sonic_ext_ttl_error_hook_fn_t) (vlib_buffer_t * b);
++
++static_always_inline sonic_ext_ttl_error_hook_fn_t *
++sonic_ext_ttl_error_hook (void)
++{
++  static sonic_ext_ttl_error_hook_fn_t *fn;
++  static int resolved;
++
++  if (PREDICT_FALSE (!resolved))
++    {
++      fn = (sonic_ext_ttl_error_hook_fn_t *) vlib_get_plugin_symbol (
++	"sonic_ext_plugin.so", "sonic_ext_ttl_error_should_punt");
++      resolved = 1;
++    }
++
++  return fn;
++}
++
+ static_always_inline void
+ ip4_ttl_and_checksum_check (vlib_buffer_t * b, ip4_header_t * ip, u16 * next,
+ 			    u32 * error)
+@@ -2051,12 +2085,26 @@ ip4_ttl_and_checksum_check (vlib_buffer_t * b, ip4_header_t * ip, u16 * next,
+    */
+   if (PREDICT_FALSE (ttl <= 0))
+     {
++      sonic_ext_ttl_error_hook_fn_t *punt_hook = sonic_ext_ttl_error_hook ();
++
+       *error = IP4_ERROR_TIME_EXPIRED;
+       vnet_buffer (b)->sw_if_index[VLIB_TX] = (u32) ~ 0;
+-      icmp4_error_set_vnet_buffer (b, ICMP4_time_exceeded,
+-				   ICMP4_time_exceeded_ttl_exceeded_in_transit,
+-				   0);
+-      *next = IP4_REWRITE_NEXT_ICMP_ERROR;
++
++      if (PREDICT_FALSE (punt_hook != 0) && punt_hook (b))
++	{
++	  /* SAI TTL_ERROR trap installed: redirect to the control plane
++	   * instead of generating VPP's own ICMP time-exceeded reply.
++	   * Policing happens downstream at interface-output, via the
++	   * existing sonic-ext-copp-ifout match_ip4_ttl_expiring path. */
++	  *next = IP4_REWRITE_NEXT_COPP_TTL_PUNT;
++	}
++      else
++	{
++	  icmp4_error_set_vnet_buffer (b, ICMP4_time_exceeded,
++				       ICMP4_time_exceeded_ttl_exceeded_in_transit,
++				       0);
++	  *next = IP4_REWRITE_NEXT_ICMP_ERROR;
++	}
+     }
+ 
+   /* Verify checksum. */
+@@ -2603,11 +2651,20 @@ VLIB_REGISTER_NODE (ip4_rewrite_node) = {
+ 
+   .format_trace = format_ip4_rewrite_trace,
+ 
++  /* sonic-ext-copp-ttl-punt only exists when the sonic_ext plugin is
++   * loaded; ALLOW_LAZY_NEXT_NODES keeps VPP init from hard-erroring
++   * ("refers to unknown node") on platforms/configs that don't load
++   * it -- the slot simply never resolves and the hook above is never
++   * reached in that case (sonic_ext_ttl_error_hook() itself resolves
++   * to null via vlib_get_plugin_symbol()). */
++  .flags = VLIB_NODE_FLAG_ALLOW_LAZY_NEXT_NODES,
++
+   .n_next_nodes = IP4_REWRITE_N_NEXT,
+   .next_nodes = {
+     [IP4_REWRITE_NEXT_DROP] = "ip4-drop",
+     [IP4_REWRITE_NEXT_ICMP_ERROR] = "ip4-icmp-error",
+     [IP4_REWRITE_NEXT_FRAGMENT] = "ip4-frag",
++    [IP4_REWRITE_NEXT_COPP_TTL_PUNT] = "sonic-ext-copp-ttl-punt",
+   },
+ };
+ 

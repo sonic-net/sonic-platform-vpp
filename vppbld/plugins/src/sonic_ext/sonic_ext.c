@@ -18,6 +18,7 @@
 #include <vnet/plugin/plugin.h>
 #include <vnet/feature/feature.h>
 #include <vnet/interface.h>
+#include <vnet/ip/icmp6.h>
 #include <vnet/l2/l2_input.h>
 #include <vnet/l2/l2_bvi.h>
 #include <vnet/l2/l2_in_out_feat_arc.h>
@@ -417,6 +418,67 @@ sonic_ext_set_host_xc (u8 is_enable)
 }
 
 /*
+ * nd-punt: hand IPv6 Neighbor Discovery to the kernel, as ARP already is.
+ *
+ * saivpp diverts every ARP packet to the linux-cp host tap, so Linux answers
+ * and learns, and a neighbor reaches VPP only when SONiC creates it through
+ * SAI.  ND has no such diversion: ip6-icmp-input hands RS/RA/NS/NA to VPP's
+ * own ND nodes, which answer solicitations themselves and learn neighbors
+ * SONiC never created.  Such an entry keeps its /128 host route even when
+ * SONiC then creates the same neighbor with NO_HOST_ROUTE, as it does for
+ * dual-ToR mux neighbors.
+ *
+ * Pointing the four ND types at ip6-punt instead sends them where linux-cp
+ * already sends punted IPv6 -- the ingress port's host tap -- which is also
+ * where a hardware switch's ND trap sends them.  Redirect (137) has no VPP
+ * handler, so it is punted already.
+ *
+ * ip6-punt is ip6-icmp-input's existing punt next, so either direction only
+ * rewrites that node's per-type dispatch table: no graph change, no barrier.
+ * VPP's own handlers are registered static, hence looked up by name.
+ */
+static const struct
+{
+  icmp6_type_t type;
+  char *vpp_node;
+} sonic_ext_nd_types[] = {
+  { ICMP6_router_solicitation, "icmp6-router-solicitation" },
+  { ICMP6_router_advertisement, "icmp6-router-advertisement" },
+  { ICMP6_neighbor_solicitation, "icmp6-neighbor-solicitation" },
+  { ICMP6_neighbor_advertisement, "icmp6-neighbor-advertisement" },
+};
+
+void
+sonic_ext_set_nd_punt (u8 is_enable)
+{
+  vlib_main_t *vm = vlib_get_main ();
+  int i;
+
+  for (i = 0; i < ARRAY_LEN (sonic_ext_nd_types); i++)
+    {
+      u32 node_index = ip6_punt_node.index;
+
+      if (!is_enable)
+	{
+	  vlib_node_t *n =
+	    vlib_get_node_by_name (vm, (u8 *) sonic_ext_nd_types[i].vpp_node);
+
+	  if (!n)
+	    {
+	      clib_warning ("sonic-ext: nd-punt: no node %s",
+			    sonic_ext_nd_types[i].vpp_node);
+	      continue;
+	    }
+	  node_index = n->index;
+	}
+
+      icmp6_register_type (vm, sonic_ext_nd_types[i].type, node_index);
+    }
+
+  sonic_ext_main.nd_punt = (is_enable != 0);
+}
+
+/*
  * LCP pair add/del: when a new linux-cp pair appears, enable the per-
  * interface sonic-ext features that apply.
  *
@@ -448,6 +510,8 @@ sonic_ext_lcp_pair_add_cb (lcp_itf_pair_t *lip)
   if (sem->aggr_tap_redirect_enabled
       && sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 1);
+  if (!sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
+    sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 1);
 }
 
 static void
@@ -464,6 +528,17 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
   if (sem->aggr_tap_redirect_enabled
       && sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 0);
+  if (!sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
+    sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 0);
+}
+
+static walk_rc_t
+sonic_ext_copp_ifout_walk_enable_cb (index_t lipi, void *ctx)
+{
+  const lcp_itf_pair_t *lip = lcp_itf_pair_get (lipi);
+  if (lip && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
+    sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 1);
+  return WALK_CONTINUE;
 }
 
 static uword
@@ -719,6 +794,10 @@ sonic_ext_init (vlib_main_t *vm)
 
   sonic_ext_register_acl_deferred_mirror ();
 
+  lcp_itf_pair_walk (sonic_ext_copp_ifout_walk_enable_cb, NULL);
+  vnet_feature_enable_disable ("ip4-punt", "sonic-ext-copp-ip2me", 0, 1, 0, 0);
+  vnet_feature_enable_disable ("ip6-punt", "sonic-ext-copp-ip2me-ip6", 0, 1, 0, 0);
+
   return 0;
 }
 
@@ -744,6 +823,10 @@ sonic_ext_apply_config (vlib_main_t *vm)
 
   if (sem->host_xc)
     sonic_ext_set_host_xc (1);
+
+  /* After ip6_nd_init / ip6_ra_init have registered VPP's own ND handlers. */
+  if (sem->nd_punt)
+    sonic_ext_set_nd_punt (1);
 
   /* Nothing to wire for these -- saivpp does it, once it has asked.  Logged
    * so an old saivpp that never asks does not make the setting look applied. */
