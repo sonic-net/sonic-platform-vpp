@@ -62,6 +62,8 @@ stages:
   jobs:
   - template: .azure-pipelines/build-sai-vpp-test-image-template.yml
     parameters:
+      arch: ${{ parameters.arch }}
+      vpp_artifact_name: vpp-${{ parameters.debian_version }}
       sairedis_run_id: ${{ parameters.sairedis_run_id }}
 
 - stage: TestSaiVpp

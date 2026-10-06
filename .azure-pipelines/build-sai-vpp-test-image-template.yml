@@ -11,6 +11,10 @@ parameters:
   type: string
   default: vpp-trixie
 
+- name: arch
+  type: string
+  default: amd64
+
 - name: image_artifact_name
   type: string
   default: docker-sai-test-vpp-platform
@@ -100,10 +104,10 @@ jobs:
           cp -v "${matches[0]}" "$deb_dir/"
       }
 
-      copy_one_deb 'libvppinfra_*_amd64.deb'
-      copy_one_deb 'vpp_*_amd64.deb'
-      copy_one_deb 'vpp-plugin-core_*_amd64.deb'
-      copy_one_deb 'vpp-plugin-dpdk_*_amd64.deb'
+      copy_one_deb 'libvppinfra_*_${{ parameters.arch }}.deb'
+      copy_one_deb 'vpp_*_${{ parameters.arch }}.deb'
+      copy_one_deb 'vpp-plugin-core_*_${{ parameters.arch }}.deb'
+      copy_one_deb 'vpp-plugin-dpdk_*_${{ parameters.arch }}.deb'
       cp -v .azure-pipelines/Dockerfile.sai-vpp-overlay "$context_dir/Dockerfile"
 
       docker load -i "$sairedis_dir/docker-sai-test-vpp.gz"
