@@ -48,6 +48,7 @@ jobs:
         path: $(Build.ArtifactStagingDirectory)/sairedis
         runVersion: latestFromBranch
         runBranch: refs/heads/master
+        allowPartiallySucceededBuilds: true
       displayName: Download latest successful SAI VPP test image
 
   - ${{ if ne(parameters.sairedis_run_id, '') }}:
