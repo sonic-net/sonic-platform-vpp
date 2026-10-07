@@ -120,38 +120,38 @@ jobs:
           -t "$image_tag" \
           "$context_dir"
 
-        base_packages="$output_dir/base-package-inventory.txt"
-        derived_packages="$output_dir/derived-package-inventory.txt"
-        docker run --rm --entrypoint dpkg-query "$base_image_tag" \
+      base_packages="$output_dir/base-package-inventory.txt"
+      derived_packages="$output_dir/derived-package-inventory.txt"
+      docker run --rm --entrypoint dpkg-query "$base_image_tag" \
           -W -f='${binary:Package}\t${Version}\n' | sort > "$base_packages"
-        docker run --rm --entrypoint dpkg-query "$image_tag" \
+      docker run --rm --entrypoint dpkg-query "$image_tag" \
           -W -f='${binary:Package}\t${Version}\n' | sort > "$derived_packages"
 
-        package_changes="$output_dir/package-changes.txt"
-        comm -3 "$base_packages" "$derived_packages" > "$package_changes"
-        if awk '
+      package_changes="$output_dir/package-changes.txt"
+      comm -3 "$base_packages" "$derived_packages" > "$package_changes"
+      if awk '
           {
-            package = $1
-            sub(/^[[:space:]]+/, "", package)
-            if (package != "libvppinfra" &&
-              package != "vpp" &&
-              package != "vpp-plugin-core" &&
-              package != "vpp-plugin-dpdk") {
-              print
-              unexpected = 1
-            }
+              package = $1
+              sub(/^[[:space:]]+/, "", package)
+              if (package != "libvppinfra" &&
+                  package != "vpp" &&
+                  package != "vpp-plugin-core" &&
+                  package != "vpp-plugin-dpdk") {
+                  print
+                  unexpected = 1
+              }
           }
           END { exit unexpected }
-        ' "$package_changes"; then
+      ' "$package_changes"; then
           :
-        else
+      else
           echo "Derivative image changed packages outside the VPP overlay:" >&2
           cat "$package_changes" >&2
           exit 1
-        fi
+      fi
 
-        package_identity="$output_dir/sairedis-package-identity.txt"
-        for package in \
+      package_identity="$output_dir/sairedis-package-identity.txt"
+      for package in \
           libsairedis \
           libsaivs \
           libsaimetadata \
@@ -162,7 +162,7 @@ jobs:
           test -n "$base_entry"
           test "$base_entry" = "$derived_entry"
           echo "$derived_entry" >> "$package_identity"
-        done
+      done
 
       docker save "$image_tag" | gzip -c > "$output_dir/docker-sai-test-vpp.gz"
       echo "$image_tag" > "$output_dir/image-tag.txt"
@@ -194,17 +194,17 @@ jobs:
       (
           cd "$output_dir"
           sha256sum \
-            docker-sai-test-vpp.gz \
-            base-package-inventory.txt \
-            derived-package-inventory.txt \
+              docker-sai-test-vpp.gz \
+              base-package-inventory.txt \
+              derived-package-inventory.txt \
               image-tag.txt \
-            package-changes.txt \
+              package-changes.txt \
               platform-vpp-provenance.txt \
-            sairedis-package-identity.txt \
+              sairedis-package-identity.txt \
               sairedis-provenance.txt \
               SAIREDIS_SHA256SUMS \
-            ci-contract/* \
-            vpp-debs/* > SHA256SUMS
+              ci-contract/* \
+              vpp-debs/* > SHA256SUMS
       )
       rm -rf "$context_dir" "$vpp_dir" "$sairedis_dir"
     displayName: Build VPP PR SAI test image
