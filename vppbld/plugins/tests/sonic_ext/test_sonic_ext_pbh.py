@@ -117,13 +117,14 @@ ERR_MISS = "packets matched no PBH rule"
 ERR_UNRESOLVED = "inner header could not be parsed"
 
 # format_pbh_trace() -- pbh_node.c.  Longest action name first, the
-# alternation is ordered.
+# alternation is ordered.  The " (load-balance)" suffix marks a steered
+# DPO_LOAD_BALANCE, i.e. a recursive route.
 PBH_TRACE_RE = re.compile(
     r"sonic-ext-pbh: table (\d+) "
     r"(?:(miss)"
     r"|rule (\d+) "
     r"(set-ecmp-hash set-lag-hash|set-ecmp-hash|set-lag-hash|none) "
-    r"hash 0x([0-9a-f]{8})(?: dpo (\d+))?)"
+    r"hash 0x([0-9a-f]{8})(?: dpo (\d+)( \(load-balance\))?)?)"
 )
 
 
@@ -220,6 +221,23 @@ class SonicExtPbhBase(VppTestCase):
     OUTER_DST6 = "2001:db8:20::5"
     OUTER_SRC4 = "192.0.2.1"
     OUTER_SRC6 = "2001:db8:dead::1"
+
+    # Recursive-route leg, built on demand by _setup_recursive().  REC
+    # resolves over two via-addresses: one in ECMP, the prefix _setup_bond()
+    # already installed, and one in VIA, added alongside.  Both are two-path,
+    # so neither collapses to an adjacency and both buckets of REC's load
+    # balance are themselves load balances.
+    VIA4 = ("21.0.0.0", 24)
+    VIA6 = ("2001:db8:21::", 64)
+    VIA_NH4 = ("10.99.99.12", "10.99.99.13")
+    VIA_NH6 = ("2001:db8:99::12", "2001:db8:99::13")
+    VIA_NH_MAC = ("00:00:00:aa:bb:03", "00:00:00:aa:bb:04")
+    REC4 = ("30.0.0.0", 24)
+    REC6 = ("2001:db8:30::", 64)
+    REC_DST4 = "30.0.0.5"
+    REC_DST6 = "2001:db8:30::5"
+    REC_VIA4 = ("20.0.0.5", "21.0.0.5")
+    REC_VIA6 = ("2001:db8:20::5", "2001:db8:21::5")
 
     # Subclass knobs: which actions the rules carry.
     WANT_ECMP = True
@@ -392,6 +410,52 @@ class SonicExtPbhBase(VppTestCase):
         for (net, plen), nhs in ((self.ECMP4, self.NH4), (self.ECMP6, self.NH6)):
             paths = [VppRoutePath(nh, self.bond.sw_if_index) for nh in nhs]
             self.routes.append(VppIpRoute(self, net, plen, paths).add_vpp_config())
+
+    def _setup_recursive(self, af):
+        """Add a prefix reached by recursion, so the PBH node has a
+        DPO_LOAD_BALANCE bucket to steer rather than a DPO_ADJACENCY.
+
+        Leg A is the ECMP prefix _setup_bond() already installed; leg B gets
+        its own pair of next hops here.  Four leaf adjacencies with four
+        distinct rewrites means the egress MAC names both the first-level
+        bucket and the second-level one.
+
+        Appends to self.routes / self.neighbors, which tearDown() drains.
+        """
+        if af == 4:
+            via, via_nhs = self.VIA4, self.VIA_NH4
+            rec, rec_vias = self.REC4, self.REC_VIA4
+        else:
+            via, via_nhs = self.VIA6, self.VIA_NH6
+            rec, rec_vias = self.REC6, self.REC_VIA6
+
+        for nh, mac in zip(via_nhs, self.VIA_NH_MAC):
+            self.neighbors.append(
+                VppNeighbor(
+                    self, self.bond.sw_if_index, mac, nh, is_static=True
+                ).add_vpp_config()
+            )
+        self.routes.append(
+            VppIpRoute(
+                self,
+                via[0],
+                via[1],
+                [VppRoutePath(nh, self.bond.sw_if_index) for nh in via_nhs],
+            ).add_vpp_config()
+        )
+        # A path with no interface is a recursive path.
+        self.routes.append(
+            VppIpRoute(
+                self,
+                rec[0],
+                rec[1],
+                [VppRoutePath(v, NO_INDEX) for v in rec_vias],
+            ).add_vpp_config()
+        )
+        self.logger.info(
+            "recursive fib:\n%s",
+            self.vapi.cli("show ip%s fib %s" % ("" if af == 4 else "6", rec[0])),
+        )
 
     def _setup_lcp(self):
         # The pairs must come after the BVI is bound into the bridge domain:
@@ -574,11 +638,14 @@ class SonicExtPbhBase(VppTestCase):
     def _frame(self, l3):
         return Ether(dst=self.bvi.local_mac, src=self.pg0.remote_mac) / l3
 
-    def _encap(self, encap, outer_af, inner_af, inner, osport=12345, okey=GRE_KEY):
+    def _encap(
+        self, encap, outer_af, inner_af, inner, osport=12345, okey=GRE_KEY, odst=None
+    ):
         outer_l = IP if outer_af == 4 else IPv6
         inner_l = IP if inner_af == 4 else IPv6
         osrc = self.OUTER_SRC4 if outer_af == 4 else self.OUTER_SRC6
-        odst = self.OUTER_DST4 if outer_af == 4 else self.OUTER_DST6
+        if odst is None:
+            odst = self.OUTER_DST4 if outer_af == 4 else self.OUTER_DST6
         isrc, idst, isport, idport = inner
         if encap == "vxlan":
             return _build_vxlan(
@@ -594,8 +661,9 @@ class SonicExtPbhBase(VppTestCase):
             return ("10.99.0.1", "10.99.0.2", 1234, 5678)
         return ("2001:db8:cafe::1", "2001:db8:cafe::2", 1234, 5678)
 
-    def _stream(self, encap, outer_af, inner_af, vary, seed=1, n=N_PKTS):
-        """Build n packets varying exactly one aspect.
+    def _stream(self, encap, outer_af, inner_af, vary, seed=1, n=N_PKTS, odst=None):
+        """Build n packets varying exactly one aspect.  odst overrides the
+        outer destination, which selects which route the stream exercises.
 
         vary='inner'  -- whole inner 5-tuple random, outer constant
         vary='ports'  -- inner L4 ports random, inner addresses constant
@@ -635,6 +703,7 @@ class SonicExtPbhBase(VppTestCase):
                         (isrc, idst, isport, idport),
                         osport=osport,
                         okey=okey,
+                        odst=odst,
                     )
                 )
                 / Raw(_tag(0))
@@ -695,7 +764,7 @@ class SonicExtPbhBase(VppTestCase):
         """Parse the PBH trace lines of the last pg run, in dispatch order."""
         out = []
         for m in PBH_TRACE_RE.finditer(self.vapi.cli("show trace max 1000")):
-            table, miss, rule_id, action, pbh_hash, dpo = m.groups()
+            table, miss, rule_id, action, pbh_hash, dpo, recursive = m.groups()
             out.append(
                 {
                     "table": int(table),
@@ -704,6 +773,7 @@ class SonicExtPbhBase(VppTestCase):
                     "action": action,
                     "hash": int(pbh_hash, 16) if pbh_hash else None,
                     "dpo": int(dpo) if dpo else None,
+                    "recursive": recursive is not None,
                 }
             )
         return out
@@ -771,6 +841,56 @@ class SonicExtPbhBase(VppTestCase):
                 seen[1],
                 "pair %d: forward and reverse diverged: %s" % (i, seen),
             )
+
+    def _assert_recursive_ecmp(self, af):
+        """The ECMP hash must survive a recursive route.
+
+        Without the DPO_LOAD_BALANCE branch the packet falls through the
+        feature arc to ip4-lookup, which zeroes ip.flow_hash on entry and
+        rehashes the outer header -- constant across this stream -- so every
+        packet would leave by one adjacency.  Four distinct egress MACs means
+        the PBH hash chose the first-level bucket and, after
+        ip4-load-balance's flow_hash >> 1, the second-level one too.
+        """
+        self._setup_recursive(af)
+        odst = self.REC_DST4 if af == 4 else self.REC_DST6
+
+        # Shape first, on a short traced run: the trace has to report that
+        # the steered bucket was a load balance, otherwise a four-way spread
+        # below would only prove the FIB had flattened the hierarchy.
+        self._send(
+            self.pg0, self._stream("vxlan", af, af, "inner", n=4, odst=odst), trace=True
+        )
+        traces = self._pbh_traces()
+        self.assertEqual(len(traces), 4, "unexpected trace count: %d" % len(traces))
+        for t in traces:
+            self.assertFalse(t["miss"])
+            self.assertIn("set-ecmp-hash", t["action"])
+            self.assertIsNotNone(t["dpo"], "recursive bucket was not steered")
+            self.assertTrue(
+                t["recursive"],
+                "steered a DPO_ADJACENCY; the route did not stay recursive",
+            )
+
+        members, macs, total = self._observe(
+            self.pg0, self._stream("vxlan", af, af, "inner", odst=odst)
+        )
+        self.assertEqual(total, N_PKTS, "lost packets (members=%s)" % members)
+        self.assertEqual(
+            len(macs),
+            4,
+            "recursive ECMP did not spread over both levels: macs=%s" % sorted(macs),
+        )
+
+        # Control: the outer header is what ip4-lookup would have hashed, so
+        # moving it must not move the bucket at either level.
+        _, macs, total = self._observe(
+            self.pg0, self._stream("vxlan", af, af, "outer", odst=odst)
+        )
+        self.assertEqual(total, N_PKTS)
+        self.assertEqual(
+            len(macs), 1, "outer variation moved recursive ECMP: macs=%s" % sorted(macs)
+        )
 
     def _assert_independence(self, encap, af):
         """The two actions use disjoint profiles, so each must respond only to
@@ -855,6 +975,14 @@ class TestSonicExtPbhEcmpLag(SonicExtPbhBase):
         """PBH NVGRE outer-v6/inner-v6: ECMP and LAG hashes are independent"""
         self._assert_independence("nvgre", 6)
 
+    def test_recursive_v4_ecmp(self):
+        """PBH set-ecmp-hash reaches both levels of a recursive v4 route"""
+        self._assert_recursive_ecmp(4)
+
+    def test_recursive_v6_ecmp(self):
+        """PBH set-ecmp-hash reaches both levels of a recursive v6 route"""
+        self._assert_recursive_ecmp(6)
+
     def test_trace_reports_both_actions(self):
         """PBH trace names both actions and the chosen adjacency"""
         pkts = self._stream("vxlan", 4, 4, "inner", n=4)
@@ -869,6 +997,9 @@ class TestSonicExtPbhEcmpLag(SonicExtPbhBase):
             self.assertEqual(t["action"], "set-ecmp-hash set-lag-hash")
             self.assertNotEqual(t["hash"], 0, "the hash is never the 0 sentinel")
             self.assertIsNotNone(t["dpo"], "ECMP steer did not resolve an adjacency")
+            self.assertFalse(
+                t["recursive"], "a non-recursive route steered a load balance"
+            )
 
     def test_rule_counters(self):
         """PBH per-rule counters follow the priority-sorted position"""
@@ -897,6 +1028,50 @@ class TestSonicExtPbhEcmpLag(SonicExtPbhBase):
             table_index=self.table_index, name="pbh_table", rules=self.rules
         )
         self.assertEqual(self._rule_packets(pos), 0)
+
+    def test_lag_member_down(self):
+        """PBH survives a bond member leaving and rejoining the active set
+
+        Detaching is what SONiC does when teamd reports a member down:
+        vpp_set_lag_member_egress_disable() calls delete_bond_member() and
+        leaves the member link up so LACP keeps running over its LCP tap.
+        With one member left, bond_tx_inline() takes its n_members == 1
+        shortcut and never calls bond_tx_hash(), so the override is not
+        invoked at all -- the side-band slot PBH claimed is reclaimed by the
+        buffer free callback instead of by the override.
+        """
+        pos = self.rule_pos[("vxlan", 4, 4)]
+        pkts = self._stream("vxlan", 4, 4, "inner")
+
+        members, _, total = self._observe(self.pg0, pkts)
+        self.assertEqual(total, N_PKTS)
+        self.assertEqual(len(members), 2, "LAG did not spread: members=%s" % members)
+
+        before = self._rule_packets(pos)
+        self.bond.detach_vpp_bond_interface(sw_if_index=self.pg4.sw_if_index)
+        try:
+            members, macs, total = self._observe(self.pg0, pkts)
+            self.assertEqual(total, N_PKTS, "packets lost after member detach")
+            self.assertEqual(
+                members,
+                {0},
+                "traffic did not fall back to the survivor: members=%s" % members,
+            )
+            # ECMP is decided at ingress and is indifferent to the member set.
+            self.assertEqual(len(macs), 2, "ECMP stopped spreading: macs=%s" % macs)
+            self.assertEqual(
+                self._rule_packets(pos),
+                before + N_PKTS,
+                "PBH stopped matching once the bond had one member",
+            )
+        finally:
+            self.bond.add_member_vpp_bond_interface(sw_if_index=self.pg4.sw_if_index)
+
+        members, _, total = self._observe(self.pg0, pkts)
+        self.assertEqual(total, N_PKTS)
+        self.assertEqual(
+            len(members), 2, "LAG did not recover after re-attach: members=%s" % members
+        )
 
     def test_full_profile(self):
         """PBH with the full SONiC hash-field set still steers both actions"""

@@ -44,6 +44,7 @@
 typedef enum
 {
   SONIC_EXT_PBH_NEXT_REWRITE,
+  SONIC_EXT_PBH_NEXT_LOAD_BALANCE,
   SONIC_EXT_PBH_N_NEXT,
 } sonic_ext_pbh_next_t;
 
@@ -55,6 +56,7 @@ typedef struct
   u32 dpo_index;
   u8 matched;
   u8 action;
+  u8 recursive;
 } sonic_ext_pbh_trace_t;
 
 #define foreach_sonic_ext_pbh_action                                          \
@@ -109,7 +111,8 @@ format_sonic_ext_pbh_trace (u8 *s, va_list *args)
               t->table_index, t->rule_id,
               sonic_ext_pbh_action_names[t->action], t->hash);
   if (t->dpo_index != ~0)
-    s = format (s, " dpo %u", t->dpo_index);
+    s = format (s, " dpo %u%s", t->dpo_index,
+                t->recursive ? " (load-balance)" : "");
 
   return s;
 }
@@ -269,24 +272,40 @@ sonic_ext_pbh_match (const sonic_ext_pbh_table_t *t, const void *l3,
  *
  * Handing the hash to ip4-lookup is not an option: ip4_lookup_inline()
  * opens with `vnet_buffer (b)->ip.flow_hash = 0` and recomputes from the
- * outer header, which is exactly what PBH exists to override.  (The
- * recursive ip4-load-balance node does honour a pre-set hash; the
- * first-level lookup does not.)
+ * outer header, which is exactly what PBH exists to override.
  *
  * fib_index must also be derived here, because ip4-lookup is what normally
  * sets it and we run ahead of it.
  *
- * Only a resolved adjacency is steered.  Anything else -- an incomplete
- * adjacency awaiting ARP, a recursive load balance, drop, punt, local --
- * falls through to the feature arc and reaches ip4-lookup as usual, which
- * handles every case correctly.  Narrowing to the one case PBH cares about
- * keeps this node out of the business of reimplementing the lookup graph.
+ * Two bucket types are steered:
  *
- * Returns 1 if the packet was steered to ip4-rewrite.
+ *   DPO_ADJACENCY    -- a resolved next hop; go straight to ip4-rewrite,
+ *                       as ip4-lookup would.
+ *   DPO_LOAD_BALANCE -- a recursive route.  Hand the inner load balance to
+ *                       ip4-load-balance with the PBH hash already in
+ *                       place: that node reuses a non-zero ip.flow_hash
+ *                       (shifted right one bit per level, which is how the
+ *                       core avoids polarisation) rather than recomputing
+ *                       from the outer header.  Falling through instead
+ *                       would route the packet via ip4-lookup, which zeroes
+ *                       the hash, losing PBH at every level of recursion.
+ *
+ * Anything else -- an incomplete adjacency awaiting ARP, drop, punt, local
+ * -- falls through to the feature arc and reaches ip4-lookup as usual,
+ * which handles every case correctly.
+ *
+ * Counter accounting mirrors the core graph: this node charges the
+ * first-level load balance to lbm_to_counters exactly as ip4-lookup does,
+ * and ip4-load-balance charges each subsequent level to lbm_via_counters
+ * itself.
+ *
+ * Returns 1 if the packet was steered, with *steer_next naming which of
+ * this node's nexts to use.
  */
 static_always_inline int
 sonic_ext_pbh_steer_ip4 (vlib_main_t *vm, vlib_buffer_t *b,
-                         const ip4_header_t *ip4, u32 hash, u32 *dpo_index)
+                         const ip4_header_t *ip4, u32 hash, u32 *dpo_index,
+                         u16 *steer_next)
 {
   ip4_main_t *im = &ip4_main;
   const load_balance_t *lb;
@@ -303,7 +322,11 @@ sonic_ext_pbh_steer_ip4 (vlib_main_t *vm, vlib_buffer_t *b,
     return 0;
 
   dpo = load_balance_get_fwd_bucket (lb, hash & lb->lb_n_buckets_minus_1);
-  if (PREDICT_FALSE (dpo->dpoi_type != DPO_ADJACENCY))
+  if (PREDICT_TRUE (dpo->dpoi_type == DPO_ADJACENCY))
+    *steer_next = SONIC_EXT_PBH_NEXT_REWRITE;
+  else if (dpo->dpoi_type == DPO_LOAD_BALANCE)
+    *steer_next = SONIC_EXT_PBH_NEXT_LOAD_BALANCE;
+  else
     return 0;
 
   vnet_buffer (b)->ip.adj_index[VLIB_TX] = dpo->dpoi_index;
@@ -319,7 +342,8 @@ sonic_ext_pbh_steer_ip4 (vlib_main_t *vm, vlib_buffer_t *b,
 
 static_always_inline int
 sonic_ext_pbh_steer_ip6 (vlib_main_t *vm, vlib_buffer_t *b,
-                         const ip6_header_t *ip6, u32 hash, u32 *dpo_index)
+                         const ip6_header_t *ip6, u32 hash, u32 *dpo_index,
+                         u16 *steer_next)
 {
   ip6_main_t *im = &ip6_main;
   const load_balance_t *lb;
@@ -336,7 +360,11 @@ sonic_ext_pbh_steer_ip6 (vlib_main_t *vm, vlib_buffer_t *b,
     return 0;
 
   dpo = load_balance_get_fwd_bucket (lb, hash & lb->lb_n_buckets_minus_1);
-  if (PREDICT_FALSE (dpo->dpoi_type != DPO_ADJACENCY))
+  if (PREDICT_TRUE (dpo->dpoi_type == DPO_ADJACENCY))
+    *steer_next = SONIC_EXT_PBH_NEXT_REWRITE;
+  else if (dpo->dpoi_type == DPO_LOAD_BALANCE)
+    *steer_next = SONIC_EXT_PBH_NEXT_LOAD_BALANCE;
+  else
     return 0;
 
   vnet_buffer (b)->ip.adj_index[VLIB_TX] = dpo->dpoi_index;
@@ -409,6 +437,7 @@ sonic_ext_pbh_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
       u32 table_index = ~0, rule_position = ~0, dpo_index = ~0;
       u32 hash = 0;
       u8 steered = 0;
+      u16 steer_next = SONIC_EXT_PBH_NEXT_REWRITE;
       u8 action = SONIC_EXT_PBH_ACTION_NONE;
       void *l3 = vlib_buffer_get_current (b[0]);
 
@@ -465,9 +494,10 @@ sonic_ext_pbh_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 
           hash = sonic_ext_pbh_hash_inner (p, &inner);
           steered =
-            is_ip6 ?
-              sonic_ext_pbh_steer_ip6 (vm, b[0], l3, hash, &dpo_index) :
-              sonic_ext_pbh_steer_ip4 (vm, b[0], l3, hash, &dpo_index);
+            is_ip6 ? sonic_ext_pbh_steer_ip6 (vm, b[0], l3, hash, &dpo_index,
+                                              &steer_next) :
+                     sonic_ext_pbh_steer_ip4 (vm, b[0], l3, hash, &dpo_index,
+                                              &steer_next);
 
           action = action == SONIC_EXT_PBH_ACTION_LAG ?
                      SONIC_EXT_PBH_ACTION_BOTH :
@@ -476,7 +506,7 @@ sonic_ext_pbh_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 
     no_action:
       if (steered)
-        next[0] = SONIC_EXT_PBH_NEXT_REWRITE;
+        next[0] = steer_next;
       else
         vnet_feature_next_u16 (&next[0], b[0]);
 
@@ -490,6 +520,8 @@ sonic_ext_pbh_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
           tr->dpo_index = dpo_index;
           tr->matched = r != 0;
           tr->action = action;
+          tr->recursive =
+            steered && steer_next == SONIC_EXT_PBH_NEXT_LOAD_BALANCE;
         }
 
       b += 1;
@@ -534,6 +566,7 @@ VLIB_REGISTER_NODE (sonic_ext_pbh_ip4_node) = {
   .n_next_nodes = SONIC_EXT_PBH_N_NEXT,
   .next_nodes = {
     [SONIC_EXT_PBH_NEXT_REWRITE] = "ip4-rewrite",
+    [SONIC_EXT_PBH_NEXT_LOAD_BALANCE] = "ip4-load-balance",
   },
 };
 
@@ -547,6 +580,7 @@ VLIB_REGISTER_NODE (sonic_ext_pbh_ip6_node) = {
   .n_next_nodes = SONIC_EXT_PBH_N_NEXT,
   .next_nodes = {
     [SONIC_EXT_PBH_NEXT_REWRITE] = "ip6-rewrite",
+    [SONIC_EXT_PBH_NEXT_LOAD_BALANCE] = "ip6-load-balance",
   },
 };
 
