@@ -34,6 +34,26 @@ autoreply define sonic_ext_ip2me_enable_disable
   bool enable;
 };
 
+/** \brief Set the router-interface loopback (hairpin) packet action.
+    When action is DROP, a routed packet whose ingress interface equals its
+    egress interface (a hairpin) is dropped on the ip4-output / ip6-output
+    arc and the interface tx-error counter is incremented; the arc nodes are
+    enabled on the interface only while the action is DROP. Gated by the
+    iface-loopback feature toggle. Driven by the SAIVPP layer from
+    SAI_ROUTER_INTERFACE_ATTR_LOOPBACK_PACKET_ACTION.
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param sw_if_index - the interface the action applies to
+    @param action - 0 = FORWARD (default), 1 = DROP
+*/
+autoreply define sonic_ext_iface_loopback_set_action
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u8 action;
+};
+
 /** \brief Install / remove a deferred egress-mirror (Everflow MIRROR_EGRESS)
     action.  Refcounted: enable=1 on the first action enables the
     sonic-ext-egress-mirror feature on every interface-output arc; enable=0

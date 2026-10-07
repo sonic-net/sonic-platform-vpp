@@ -132,7 +132,13 @@ typedef enum
   _ (ND_PUNT, nd_punt, "nd-punt", 1, VPP)                                     \
   _ (IP2ME, ip2me, "ip2me", 1, SAIVPP)                                        \
   _ (L2_TRAP_FIXUP, l2_trap_fixup, "l2-trap-fixup", 1, SAIVPP)                \
-  _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)
+  _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)             \
+  _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)
+
+/* Router-interface loopback (hairpin) packet action values, carried in the
+ * sonic_ext_iface_loopback_set_action API and stored per sw_if_index. */
+#define SONIC_EXT_LOOPBACK_ACTION_FORWARD 0
+#define SONIC_EXT_LOOPBACK_ACTION_DROP    1
 
 typedef enum
 {
@@ -226,6 +232,12 @@ typedef struct
   foreach_sonic_ext_feature
 #undef _
 
+  /* Per-sw_if_index RIF loopback (hairpin) packet action,
+   * SONIC_EXT_LOOPBACK_ACTION_* (default FORWARD). Written only from the
+   * main/API thread; read by the ip4/ip6-loopback output-arc nodes on
+   * worker threads. Gated by the iface_loopback feature toggle above. */
+  u8 *loopback_action_by_sw_if_index;
+
   /* Set once capture/host-xc have been enabled on all existing
    * interfaces, so that toggling on/off is idempotent. */
   u8 capture_enabled;
@@ -293,6 +305,8 @@ extern vlib_node_registration_t sonic_ext_copp_ifout_node;
 extern vlib_node_registration_t sonic_ext_copp_ip2me_node;
 extern vlib_node_registration_t sonic_ext_copp_udld_node;
 extern vlib_node_registration_t sonic_ext_copp_ttl_punt_node;
+extern vlib_node_registration_t sonic_ext_ip4_loopback_node;
+extern vlib_node_registration_t sonic_ext_ip6_loopback_node;
 
 /* Enable / disable sonic-ext-capture on a given interface.  No-op if
  * the capture sidecar is not yet initialized. */
@@ -402,5 +416,11 @@ int sonic_ext_copp_ip2me_bind_condition (
   const char *policer_name, const sonic_ext_copp_ip2me_condition_t *condition,
   int is_bind);
 int sonic_ext_copp_ttl_punt_bind (int is_bind);
+
+/* Set the per-interface RIF loopback (hairpin) packet action and enable or
+ * disable the sonic-ext-ip4/ip6-loopback output-arc nodes accordingly.
+ * Returns 0 on success, a VNET_API_ERROR_* on failure. Honours the
+ * iface_loopback feature toggle. */
+int sonic_ext_iface_loopback_set_action (u32 sw_if_index, u8 action);
 
 #endif /* __included_sonic_ext_h__ */
