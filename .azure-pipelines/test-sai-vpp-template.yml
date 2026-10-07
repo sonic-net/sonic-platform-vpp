@@ -13,7 +13,7 @@ parameters:
 
 jobs:
 - job: RunSaiVppMatrix
-  displayName: Run VPP SAI compatibility tests
+  displayName: Run SAI UT
   timeoutInMinutes: ${{ parameters.timeout }}
 
   pool: sonictest

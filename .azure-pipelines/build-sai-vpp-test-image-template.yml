@@ -21,7 +21,7 @@ parameters:
 
 jobs:
 - job: BuildSaiVppTestImage
-  displayName: Overlay PR VPP packages on SAI test image
+  displayName: Replace VPP
   timeoutInMinutes: ${{ parameters.timeout }}
 
   pool:
