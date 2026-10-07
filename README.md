@@ -86,11 +86,11 @@ make test PLATFORM=vpp TEST=vxlan6.TestVxlan6.test_mcast_rcv*
 
 # VPP SAI compatibility CI
 
-The Azure pipeline builds the Trixie VPP packages from the current commit and tests them with the VPP SAI unit-test framework published by `sonic-sairedis`. `BuildSaiVppTestImage` downloads an approved `docker-sai-test-vpp` artifact, installs only the current run's `libvppinfra`, `vpp`, `vpp-plugin-core`, and `vpp-plugin-dpdk` packages in a derivative image, verifies that every non-VPP Debian package is unchanged, and publishes combined provenance and checksums.
+The Azure pipeline builds the Trixie VPP packages from the current commit and tests them with the VPP SAI unit-test framework published by `sonic-sairedis`. `BuildSaiVppTestImage` downloads the `docker-sai-test-vpp` artifact, replaces its `libvppinfra`, `vpp`, `vpp-plugin-core`, and `vpp-plugin-dpdk` packages with the current run's builds in a derivative image, verifies that every other Debian package is unchanged, and publishes combined provenance and checksums.
 
-`TestSaiVpp` runs the four-module compatibility matrix on the `sonictest` pool. The expected matrix, stable-pass baseline, evaluator, and matrix generator come from the same approved sairedis artifact as the base image, so this repository does not carry a copy of sairedis test policy.
+`TestSaiVpp` runs the four-module compatibility matrix on the `sonictest` pool. The expected matrix, stable-pass baseline, evaluator, and matrix generator come from the same sairedis artifact as the base image, so this repository does not carry a copy of sairedis test policy.
 
-By default, the pipeline selects the latest successful `Azure.sonic-sairedis` master artifact. Set the optional `sairedis_run_id` pipeline parameter to an immutable Azure build ID to validate against a specific sairedis image. Privileged test execution must retain the repository's trusted-maintainer authorization policy for pull requests.
+By default, the pipeline selects the latest successful (or partially successful) `Azure.sonic-sairedis` master artifact. Set the optional `sairedis_run_id` pipeline parameter to an Azure build ID to validate against a specific sairedis image. `TestSaiVpp` runs the test container with `--privileged`, so CI for pull requests from forks should only run after maintainer approval.
 
 # Troubleshooting
 
