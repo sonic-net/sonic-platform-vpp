@@ -1,0 +1,13 @@
+TEMP: change the ip API CRC so SAI built against stock VPP fails to resolve the ip message base
+
+diff --git a/src/vnet/ip/ip.api b/src/vnet/ip/ip.api
+--- a/src/vnet/ip/ip.api
++++ b/src/vnet/ip/ip.api
+@@ -234,6 +234,7 @@
+   u32 context;
+   i32 retval;
+   u32 stats_index;
++  u32 temp_crc_bump;
+ };
+ define ip_route_add_del_v2_reply
+ {

@@ -15,6 +15,8 @@ jobs:
 - job: RunSaiVppMatrix
   displayName: Run SAI UT
   timeoutInMinutes: ${{ parameters.timeout }}
+  # TEMP: experiment, job-level continueOnError.
+  continueOnError: true
 
   pool: sonictest
 
@@ -133,3 +135,14 @@ jobs:
       fi
     displayName: Clean VPP SAI test image
     condition: always()
+
+# TEMP: experiment, step-level continueOnError for comparison.
+- job: TempStepContinueOnError
+  displayName: "TEMP step-level continueOnError"
+  pool:
+    vmImage: ubuntu-22.04
+  steps:
+  - checkout: none
+  - script: exit 1
+    displayName: "TEMP: deliberate failure"
+    continueOnError: true
