@@ -67,5 +67,3 @@
 #     work here: by the time a packet reaches ip4-drop, ip4-icmp-error has
 #     already unconditionally sent the ICMP reply.
 0021-ip4-redirect-ttl-expired-to-copp-punt-hook.patch
-# TEMP: deliberate ip API CRC change to break the SAI UT (revert before merge)
-9999-TEMP-ip-bump-api-crc.patch

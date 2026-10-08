@@ -100,6 +100,10 @@ jobs:
           --junit-out "$results_dir/junit/vpp-sai-ptf.xml"
     displayName: Evaluate VPP SAI stable baseline
 
+  # TEMP: fails after the real evaluation, whose own result still shows.
+  - script: exit 1
+    displayName: "TEMP: deliberate SAI UT failure"
+
   - task: PublishTestResults@2
     inputs:
       testResultsFormat: JUnit
