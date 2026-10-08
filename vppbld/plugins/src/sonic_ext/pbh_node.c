@@ -81,7 +81,8 @@ static const char *const sonic_ext_pbh_action_names[] = {
 #define foreach_sonic_ext_pbh_error                                           \
   _ (HIT, "packets matched a PBH rule")                                       \
   _ (MISS, "packets matched no PBH rule")                                     \
-  _ (UNRESOLVED, "inner header could not be parsed")
+  _ (UNRESOLVED, "inner header could not be parsed")                          \
+  _ (STALE_PROFILE, "rule referenced a deleted hash profile")
 
 typedef enum
 {
@@ -414,6 +415,40 @@ sonic_ext_pbh_shadow_admits (vlib_buffer_t *b, u32 rx_sw_if_index,
          pm->table_index_by_sw_if_index[orig] == table_index;
 }
 
+/*
+ * Resolve a rule's profile reference, tolerating a stale one.
+ *
+ * sonic_ext_pbh_rules_validate() proves every profile exists when a table is
+ * installed, but nothing holds it there afterwards:
+ * sonic_ext_pbh_profile_add_del() frees the pool slot without asking whether
+ * a rule still points at it, and SAI gives no ordering guarantee between
+ * deleting a hash object and deleting the entries that use it.  A rule can
+ * therefore outlive its profile.
+ *
+ * Dereferencing the freed slot is not merely wrong, it is unsafe:
+ * pool_elt_at_index() carries ASSERT (!pool_is_free (...)), so a debug image
+ * aborts.  A release image reads the slot anyway and gets one of two silent
+ * wrong answers -- fields == 0 after vec_free(), so every packet hashes to
+ * the same constant and the load balance collapses onto one bucket; or the
+ * slot has since been reused, so the rule hashes on another rule's fields.
+ *
+ * pool_is_free_index() is bounds-safe by construction (it returns 1 for an
+ * out-of-range index rather than reading), so this one test covers both a
+ * freed slot and an index that was never valid.
+ *
+ * Returns 0 for a stale reference; the caller then skips that stage, which
+ * leaves the switch-global hash in charge -- the same fallback as a rule
+ * that carries no action at all.
+ */
+static_always_inline sonic_ext_pbh_profile_t *
+sonic_ext_pbh_profile_resolve (sonic_ext_pbh_main_t *pm, u32 profile_index)
+{
+  if (PREDICT_FALSE (pool_is_free_index (pm->profiles, profile_index)))
+    return 0;
+
+  return pool_elt_at_index (pm->profiles, profile_index);
+}
+
 static_always_inline uword
 sonic_ext_pbh_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
                       vlib_frame_t *frame, int is_ip6)
@@ -424,7 +459,7 @@ sonic_ext_pbh_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
   u32 *from = vlib_frame_vector_args (frame);
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b = bufs;
   u16 nexts[VLIB_FRAME_SIZE], *next = nexts;
-  u32 n_hits = 0, n_miss = 0, n_unresolved = 0;
+  u32 n_hits = 0, n_miss = 0, n_unresolved = 0, n_stale = 0;
 
   vlib_get_buffers (vm, from, bufs, n_left);
 
@@ -478,30 +513,42 @@ sonic_ext_pbh_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
       if (r->lag_profile != ~0)
         {
           sonic_ext_pbh_profile_t *p =
-            pool_elt_at_index (pm->profiles, r->lag_profile);
-          sonic_ext_vnet_buf_t *sb = sonic_ext_vnet_buf_claim (
-            vm, b[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
+            sonic_ext_pbh_profile_resolve (pm, r->lag_profile);
 
-          hash = sonic_ext_pbh_hash_inner (p, &inner);
-          sb->pbh_lag_hash = hash;
-          action = SONIC_EXT_PBH_ACTION_LAG;
+          if (PREDICT_FALSE (p == 0))
+            n_stale++;
+          else
+            {
+              sonic_ext_vnet_buf_t *sb = sonic_ext_vnet_buf_claim (
+                vm, b[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
+
+              hash = sonic_ext_pbh_hash_inner (p, &inner);
+              sb->pbh_lag_hash = hash;
+              action = SONIC_EXT_PBH_ACTION_LAG;
+            }
         }
 
       if (r->ecmp_profile != ~0)
         {
           sonic_ext_pbh_profile_t *p =
-            pool_elt_at_index (pm->profiles, r->ecmp_profile);
+            sonic_ext_pbh_profile_resolve (pm, r->ecmp_profile);
 
-          hash = sonic_ext_pbh_hash_inner (p, &inner);
-          steered =
-            is_ip6 ? sonic_ext_pbh_steer_ip6 (vm, b[0], l3, hash, &dpo_index,
-                                              &steer_next) :
-                     sonic_ext_pbh_steer_ip4 (vm, b[0], l3, hash, &dpo_index,
-                                              &steer_next);
+          if (PREDICT_FALSE (p == 0))
+            n_stale++;
+          else
+            {
+              hash = sonic_ext_pbh_hash_inner (p, &inner);
+              steered = is_ip6 ? sonic_ext_pbh_steer_ip6 (vm, b[0], l3, hash,
+                                                          &dpo_index,
+                                                          &steer_next) :
+                                 sonic_ext_pbh_steer_ip4 (vm, b[0], l3, hash,
+                                                          &dpo_index,
+                                                          &steer_next);
 
-          action = action == SONIC_EXT_PBH_ACTION_LAG ?
-                     SONIC_EXT_PBH_ACTION_BOTH :
-                     SONIC_EXT_PBH_ACTION_ECMP;
+              action = action == SONIC_EXT_PBH_ACTION_LAG ?
+                         SONIC_EXT_PBH_ACTION_BOTH :
+                         SONIC_EXT_PBH_ACTION_ECMP;
+            }
         }
 
     no_action:
@@ -537,6 +584,8 @@ sonic_ext_pbh_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
                                n_miss);
   vlib_node_increment_counter (vm, node->node_index,
                                SONIC_EXT_PBH_ERROR_UNRESOLVED, n_unresolved);
+  vlib_node_increment_counter (
+    vm, node->node_index, SONIC_EXT_PBH_ERROR_STALE_PROFILE, n_stale);
 
   pm->hits += n_hits;
   pm->misses += n_miss;
