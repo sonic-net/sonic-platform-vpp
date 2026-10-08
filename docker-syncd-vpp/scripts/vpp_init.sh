@@ -81,11 +81,26 @@ if [ "x$VPP_WORKERS" != "x" ]; then
 fi
 
 IDX=0
+VPP_DPDK_NUM_TX_DESC=${VPP_DPDK_NUM_TX_DESC:=4096}
 upd_startup """dpdk {
 	dev default {
-	    num-tx-desc 4096
+	    num-tx-desc ${VPP_DPDK_NUM_TX_DESC}
 	}
 	"""
+
+# When VPP_DPDK_NUM_QUEUES is set in syncd_vpp_env, emit per-port
+# num-rx-queues / num-tx-queues. Required for QEMU multi-queue tap
+# setups: if the host tap is multi-queue but the guest's DPDK
+# virtio-pmd only opens one queue, ~99% of unicast drops at the
+# host tap layer (broadcasts replicate to all queues, so ARP works
+# but pings don't).
+PER_PORT_QUEUE_OPTS=""
+if [ -n "$VPP_DPDK_NUM_QUEUES" ]; then
+	PER_PORT_QUEUE_OPTS="
+	    num-rx-queues ${VPP_DPDK_NUM_QUEUES}
+	    num-tx-queues ${VPP_DPDK_NUM_QUEUES}"
+fi
+
 for port in ${portlist[@]};
 do
     if eval ip link show type veth dev $port >& /dev/null; then
@@ -94,7 +109,7 @@ do
     fi
     upd_startup """
 	dev $port {
-	    name ${HWIFNAME}${IDX}
+	    name ${HWIFNAME}${IDX}${PER_PORT_QUEUE_OPTS}
 	}
 	"""
     IDX=$((IDX + 1))
@@ -103,7 +118,11 @@ upd_startup "}"
 
 sed -i -e "s,VPP_STARTUP_CONFIG,$STARTUP_CFG,g" $TMP_FILE
 
-PERPORT_BUF=${PERPORT_BUF:=2048}
+# The virtio PMD frees TX descriptors only when the ring is nearly full, so every
+# port that has sent a ring's worth of packets keeps that many buffers. Budget a
+# full TX ring per port plus room for its rx ring and the host taps, or a busy
+# switch runs the pool dry and stops punting (LACP, ARP, routing to the host).
+PERPORT_BUF=${PERPORT_BUF:=$((VPP_DPDK_NUM_TX_DESC + 1024))}
 TOTBUF=$((PERPORT_BUF * SONIC_NUM_PORTS))
 
 echo "buffers {" >> $TMP_FILE
