@@ -1,43 +1,30 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: SONiC VPP <sonic-vpp@sonic-net.github.io>
-Date: Wed, 07 Oct 2026 14:55:53 -0700
-Subject: [PATCH] ip: add 'no-local-src-check' startup config option to
- disable the implicit ip4/ip6 local source lookup
+Date: Mon, 1 Jan 2024 00:00:00 +0000
+Subject: [PATCH] ip: add 'no-local-src-check' startup config option
 
-ip4-local and ip6-local perform an implicit loose uRPF on every packet
-punted to the local stack: if the FIB has no route back to the packet's
-source address the packet is dropped with
+ip4-local and ip6-local implicitly validate the source address of every
+packet destined for the local stack:
 
-    ip4-local: ip4 source lookup miss
-    ip6-local: ip6 source lookup miss
+ - a loose uRPF against the receiving FIB, dropping the packet with
+   "ip4/ip6 source lookup miss" when there is no route back to the
+   source, and
+ - a local-address anti-spoof, dropping the packet with "spoofed local
+   packets" when the source address resolves to a DPO_RECEIVE, i.e. to
+   one of our own interface addresses.
 
-This is unconventional.  No other forwarding plane applies anti-spoofing
-unconditionally and implicitly; it is normally opt-in.  VPP already has
-an explicit, per-interface uRPF feature for operators who want it:
+A hardware forwarding plane does neither: source validation is expected
+to be opt-in, via the explicit per-interface uRPF feature ("set
+interface ip source-check"). The implicit checks also break perfectly
+legitimate locally terminated traffic whose outer source address is not
+routable from the receiving VRF -- IPinIP / GRE decap and sub-port decap
+being the common cases -- and there is currently no CLI or API to turn
+them off.
 
-    set interface ip source-check <interface> [loose|strict]
-
-The implicit check also breaks legitimate traffic that is terminated
-locally but whose outer source address is not routable from the
-receiving VRF, for example IPinIP / GRE decapsulation where only the
-tunnel endpoints are routed, or any host that is reached via a
-downstream device which does not advertise the source prefix back.
-
-Add a startup config option
-
-    ip {
-        no-local-src-check
-    }
-
-which skips the source lookup result check in ip4_local_check_src(),
-ip4_local_check_src_x2() and ip6_local_inline().  The source lookup
-itself is still performed, so ip.adj_index[VLIB_TX] keeps pointing at
-the source adjacency and ICMP error generation is unaffected.
-
-The sibling IP4_ERROR_SPOOFED_LOCAL_PACKETS check (source address
-resolves to a DPO_RECEIVE, i.e. the packet claims to come from one of
-our own local addresses) is deliberately *not* gated: that is a real
-spoofing indication rather than a reachability assertion.
+Add an 'ip { no-local-src-check }' startup config option that disables
+both checks. The source FIB lookup itself is still performed, so
+vnet_buffer()->ip.adj_index[VLIB_TX] keeps pointing at the source
+adjacency and ICMP error generation from ip4-local is unaffected.
 
 Default behaviour is unchanged.
 
@@ -45,16 +32,14 @@ Type: feature
 
 Signed-off-by: SONiC VPP <sonic-vpp@sonic-net.github.io>
 ---
- src/vnet/fib/ip4_fib.c    |  3 +++
- src/vnet/ip/ip.h          | 14 ++++++++++++
- src/vnet/ip/ip4_forward.c |  7 ++++++
- src/vnet/fib/ip4_fib.c    |  3 +++
- src/vnet/ip/ip.h          | 14 +++++++++++
- src/vnet/ip/ip4_forward.c |  7 ++++++
- src/vnet/ip/ip6_forward.c |  5 ++++
- src/vnet/ip/ip_init.c     |  3 +++
- test/test_ip4.py          | 62 +++++++++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 94 insertions(+)
+ src/vnet/fib/ip4_fib.c    |  3 ++
+ src/vnet/ip/ip.h          | 20 ++++++++++
+ src/vnet/ip/ip4_forward.c | 11 ++++++
+ src/vnet/ip/ip6_forward.c |  5 +++
+ src/vnet/ip/ip_init.c     |  3 ++
+ test/test_ip4.py          | 97 +++++++++++++++++++++++++++++++++++++++++++++++
+ test/test_ip6.py          | 79 ++++++++++++++++++++++++++++++++++++++
+ 7 files changed, 218 insertions(+)
 
 diff --git a/src/vnet/fib/ip4_fib.c b/src/vnet/fib/ip4_fib.c
 index 636d89b4e..500ad51af 100644
@@ -78,22 +63,28 @@ index 636d89b4e..500ad51af 100644
  	    return clib_error_return (0, "unknown input '%U'",
  				      format_unformat_error, input);
 diff --git a/src/vnet/ip/ip.h b/src/vnet/ip/ip.h
-index 1deb4da80..3a4389704 100644
+index 1deb4da80..0be3910a1 100644
 --- a/src/vnet/ip/ip.h
 +++ b/src/vnet/ip/ip.h
-@@ -261,4 +261,18 @@ vlib_buffer_get_ip_fib_index (vlib_buffer_t * b, u8 is_ip4)
+@@ -261,4 +261,24 @@ vlib_buffer_get_ip_fib_index (vlib_buffer_t * b, u8 is_ip4)
  	  : vlib_buffer_get_ip6_fib_index) (b);
  }
  
 +/**
-+ * @brief When non-zero, ip4-local / ip6-local skip the implicit "must have a
-+ *        route back to the source" lookup and no longer drop for-us packets
-+ *        with IP4_ERROR_SRC_LOOKUP_MISS / IP6_ERROR_SRC_LOOKUP_MISS.
++ * @brief When set, ip4-local and ip6-local do not implicitly validate the
++ *        source address of a packet destined for the local stack, i.e. none
++ *        of IP4_ERROR_SRC_LOOKUP_MISS, IP4_ERROR_SPOOFED_LOCAL_PACKETS and
++ *        IP6_ERROR_SRC_LOOKUP_MISS is raised.
 + *
-+ * The check is an unconditional loose uRPF applied to every packet punted to
-+ * the local stack, which is not what most forwarding planes do: anti-spoofing
-+ * is expected to be opt-in. Operators that want it can still enable the
-+ * explicit uRPF feature per interface ("set interface ip source-check").
++ * Those checks amount to an unconditional loose uRPF plus a local-address
++ * anti-spoof applied to every for-us packet, which a hardware forwarding
++ * plane does not do: source validation is expected to be opt-in. With this
++ * set, operators that want it enable the explicit per-interface uRPF feature
++ * ("set interface ip source-check") instead.
++ *
++ * The source FIB lookup itself is still performed, so
++ * vnet_buffer()->ip.adj_index[VLIB_TX] keeps pointing at the source
++ * adjacency and ICMP error generation is unaffected.
 + *
 + * Set via the startup config: ip { no-local-src-check }
 + */
@@ -101,20 +92,21 @@ index 1deb4da80..3a4389704 100644
 +
  #endif /* included_ip_main_h */
 diff --git a/src/vnet/ip/ip4_forward.c b/src/vnet/ip/ip4_forward.c
-index 804544335..1fdb61cdc 100644
+index 804544335..868eabac7 100644
 --- a/src/vnet/ip/ip4_forward.c
 +++ b/src/vnet/ip/ip4_forward.c
-@@ -1529,12 +1529,17 @@ ip4_local_check_src (vlib_buffer_t *b, ip4_header_t *ip0, ip4_local_last_check_t
+@@ -1529,12 +1529,18 @@ ip4_local_check_src (vlib_buffer_t *b, ip4_header_t *ip0, ip4_local_last_check_t
         *    first since it sets a different error code.
         *  - uRPF check for any route to source - accept if passes.
         *  - allow packets destined to the broadcast address from unknown sources
 +       *
-+       * The uRPF check is skipped entirely when 'ip { no-local-src-check }' is
-+       * configured; anti-spoofing is then left to the explicit per-interface
-+       * uRPF feature ("set interface ip source-check").
++       * Both are implicit source validation, which 'ip { no-local-src-check }'
++       * turns off; source validation is then left to the explicit
++       * per-interface uRPF feature ("set interface ip source-check").
         */
  
        *error0 = ((*error0 == IP4_ERROR_UNKNOWN_PROTOCOL
++		  && !ip_local_no_src_check
  		  && dpo0->dpoi_type == DPO_RECEIVE) ?
  		 IP4_ERROR_SPOOFED_LOCAL_PACKETS : *error0);
        *error0 = ((*error0 == IP4_ERROR_UNKNOWN_PROTOCOL
@@ -122,7 +114,13 @@ index 804544335..1fdb61cdc 100644
  		  && !fib_urpf_check_size (lb0->lb_urpf)
  		  && ip0->dst_address.as_u32 != 0xFFFFFFFF) ?
  		 IP4_ERROR_SRC_LOOKUP_MISS : *error0);
-@@ -1628,6 +1633,7 @@ ip4_local_check_src_x2 (vlib_buffer_t **b, ip4_header_t **ip, ip4_local_last_che
+@@ -1624,18 +1630,23 @@ ip4_local_check_src_x2 (vlib_buffer_t **b, ip4_header_t **ip, ip4_local_last_che
+       /* Do not cache result for packets with errors, e.g., invalid csum */
+       last_check->first = error[1] == IP4_ERROR_UNKNOWN_PROTOCOL ? 0 : 1;
+ 
++      /* See ip4_local_check_src() for 'ip { no-local-src-check }'. */
+       error[0] = ((error[0] == IP4_ERROR_UNKNOWN_PROTOCOL &&
++		   !ip_local_no_src_check &&
  		   dpo[0]->dpoi_type == DPO_RECEIVE) ?
  		  IP4_ERROR_SPOOFED_LOCAL_PACKETS : error[0]);
        error[0] = ((error[0] == IP4_ERROR_UNKNOWN_PROTOCOL &&
@@ -130,7 +128,9 @@ index 804544335..1fdb61cdc 100644
  		   !fib_urpf_check_size (lb[0]->lb_urpf) &&
  		   ip[0]->dst_address.as_u32 != 0xFFFFFFFF)
  		  ? IP4_ERROR_SRC_LOOKUP_MISS : error[0]);
-@@ -1636,6 +1642,7 @@ ip4_local_check_src_x2 (vlib_buffer_t **b, ip4_header_t **ip, ip4_local_last_che
+ 
+       error[1] = ((error[1] == IP4_ERROR_UNKNOWN_PROTOCOL &&
++		   !ip_local_no_src_check &&
  		   dpo[1]->dpoi_type == DPO_RECEIVE) ?
  		  IP4_ERROR_SPOOFED_LOCAL_PACKETS : error[1]);
        error[1] = ((error[1] == IP4_ERROR_UNKNOWN_PROTOCOL &&
@@ -182,24 +182,27 @@ index e41284116..365d7d62a 100644
  ip_main_init (vlib_main_t * vm)
  {
 diff --git a/test/test_ip4.py b/test/test_ip4.py
-index 78a053b5f..d305bff99 100644
+index 78a053b5f..43652d152 100644
 --- a/test/test_ip4.py
 +++ b/test/test_ip4.py
-@@ -3750,5 +3750,67 @@ class TestIPv4ClassEDropDefault(VppTestCase):
+@@ -3750,5 +3750,102 @@ class TestIPv4ClassEDropDefault(VppTestCase):
          )
  
  
-+class TestIPv4LocalSrcCheckBase(VppTestCase):
-+    """Shared setup for the ip4-local implicit source check tests."""
++class TestIPLocalNoSrcCheck(VppTestCase):
++    """Verify that 'ip { no-local-src-check }' disables the implicit source
++    address check done by ip4-local.
 +
-+    # not a test case on its own
-+    __test__ = False
++    Neither "no route back to the source" nor "the source is one of our own
++    addresses" is then a drop reason, which is what a hardware forwarding
++    plane does. Anti-spoofing is opt-in via the explicit per-interface uRPF
++    feature."""
 +
-+    SRC_MISS_ERR = "/err/ip4-local/ip4 source lookup miss"
++    extra_vpp_config = ["ip", "{", "no-local-src-check", "}"]
 +
 +    @classmethod
 +    def setUpClass(cls):
-+        super(TestIPv4LocalSrcCheckBase, cls).setUpClass()
++        super(TestIPLocalNoSrcCheck, cls).setUpClass()
 +        cls.create_pg_interfaces(range(1))
 +        for i in cls.pg_interfaces:
 +            i.admin_up()
@@ -211,44 +214,165 @@ index 78a053b5f..d305bff99 100644
 +        for i in cls.pg_interfaces:
 +            i.unconfig_ip4()
 +            i.admin_down()
-+        super(TestIPv4LocalSrcCheckBase, cls).tearDownClass()
++        super(TestIPLocalNoSrcCheck, cls).tearDownClass()
 +
-+    def unroutable_src_pkts(self):
-+        # 198.51.100.1 has no route in the default table
++    def local_pkts(self, src):
 +        return [
 +            (
 +                Ether(src=self.pg0.remote_mac, dst=self.pg0.local_mac)
-+                / IP(src="198.51.100.1", dst=self.pg0.local_ip4)
++                / IP(src=src, dst=self.pg0.local_ip4)
 +                / UDP(sport=1234, dport=1234)
 +                / Raw(b"\xa5" * 100)
 +            )
 +        ] * NUM_PKTS
 +
++    def test_ip4_no_src_lookup_miss(self):
++        """ip4-local accepts for-us packets with an unroutable source"""
++        # 198.51.100.1 has no route in the default table
++        self.pg_send(self.pg0, self.local_pkts("198.51.100.1"))
 +
-+class TestIPv4NoLocalSrcCheck(TestIPv4LocalSrcCheckBase):
-+    """Verify that 'ip { no-local-src-check }' disables the implicit ip4-local
-+    source address FIB lookup."""
++        self.assert_error_counter_equal("/err/ip4-local/src_lookup_miss", 0)
 +
-+    __test__ = True
++    def test_ip4_no_spoofed_local_check(self):
++        """ip4-local accepts for-us packets sourced from a local address"""
++        # the source resolves to a DPO_RECEIVE: one of our own addresses
++        self.pg_send(self.pg0, self.local_pkts(self.pg0.local_ip4))
++
++        self.assert_error_counter_equal("/err/ip4-local/spoofed_local_packets", 0)
++
++
++class TestIPLocalSrcCheckDefault(VppTestCase):
++    """Verify that without 'ip { no-local-src-check }' ip4-local still drops
++    for-us packets failing the implicit source address check."""
++
++    @classmethod
++    def setUpClass(cls):
++        super(TestIPLocalSrcCheckDefault, cls).setUpClass()
++        cls.create_pg_interfaces(range(1))
++        for i in cls.pg_interfaces:
++            i.admin_up()
++            i.config_ip4()
++            i.resolve_arp()
++
++    @classmethod
++    def tearDownClass(cls):
++        for i in cls.pg_interfaces:
++            i.unconfig_ip4()
++            i.admin_down()
++        super(TestIPLocalSrcCheckDefault, cls).tearDownClass()
++
++    def local_pkts(self, src):
++        return [
++            (
++                Ether(src=self.pg0.remote_mac, dst=self.pg0.local_mac)
++                / IP(src=src, dst=self.pg0.local_ip4)
++                / UDP(sport=1234, dport=1234)
++                / Raw(b"\xa5" * 100)
++            )
++        ] * NUM_PKTS
++
++    def test_ip4_src_lookup_miss(self):
++        """ip4-local drops for-us packets with an unroutable source"""
++        self.pg_send(self.pg0, self.local_pkts("198.51.100.1"))
++
++        self.assert_error_counter_equal("/err/ip4-local/src_lookup_miss", NUM_PKTS)
++
++    def test_ip4_spoofed_local_check(self):
++        """ip4-local drops for-us packets sourced from a local address"""
++        self.pg_send(self.pg0, self.local_pkts(self.pg0.local_ip4))
++
++        self.assert_error_counter_equal(
++            "/err/ip4-local/spoofed_local_packets", NUM_PKTS
++        )
++
++
+ if __name__ == "__main__":
+     unittest.main(testRunner=VppTestRunner)
+diff --git a/test/test_ip6.py b/test/test_ip6.py
+index 702f0e265..fddd08adb 100644
+--- a/test/test_ip6.py
++++ b/test/test_ip6.py
+@@ -4413,5 +4413,84 @@ class TestIP6InterfaceRx(VppTestCase):
+         self.send_and_expect(self.pg0, pkts_dst, self.pg2)
+ 
+ 
++class TestIP6LocalNoSrcCheck(VppTestCase):
++    """Verify that 'ip { no-local-src-check }' disables the implicit source
++    RPF check done by ip6-local.
++
++    "No route back to the source" is then not a drop reason, which is what a
++    hardware forwarding plane does. Anti-spoofing is opt-in via the explicit
++    per-interface uRPF feature."""
 +
 +    extra_vpp_config = ["ip", "{", "no-local-src-check", "}"]
 +
-+    def test_no_src_lookup_miss(self):
-+        """for-us packets from an unroutable source are not dropped"""
-+        self.send_and_assert_no_replies(self.pg0, self.unroutable_src_pkts())
-+        self.assert_error_counter_equal(self.SRC_MISS_ERR, 0)
++    @classmethod
++    def setUpClass(cls):
++        super(TestIP6LocalNoSrcCheck, cls).setUpClass()
++        cls.create_pg_interfaces(range(1))
++        for i in cls.pg_interfaces:
++            i.admin_up()
++            i.config_ip6()
++            i.resolve_ndp()
++
++    @classmethod
++    def tearDownClass(cls):
++        for i in cls.pg_interfaces:
++            i.unconfig_ip6()
++            i.admin_down()
++        super(TestIP6LocalNoSrcCheck, cls).tearDownClass()
++
++    def local_pkts(self, src):
++        return [
++            (
++                Ether(src=self.pg0.remote_mac, dst=self.pg0.local_mac)
++                / IPv6(src=src, dst=self.pg0.local_ip6)
++                / UDP(sport=1236, dport=1236)
++                / Raw(b"\xa5" * 100)
++            )
++        ] * NUM_PKTS
++
++    def test_ip6_no_src_lookup_miss(self):
++        """ip6-local accepts for-us packets with an unroutable source"""
++        # 2001:db8::1 has no route in the default table
++        self.pg_send(self.pg0, self.local_pkts("2001:db8::1"))
++
++        self.assert_error_counter_equal("/err/ip6-input/src_lookup_miss", 0)
 +
 +
-+class TestIPv4LocalSrcCheckDefault(TestIPv4LocalSrcCheckBase):
-+    """Verify the default behavior: for-us packets with no route back to the
-+    source are dropped with 'ip4 source lookup miss'."""
++class TestIP6LocalSrcCheckDefault(VppTestCase):
++    """Verify that without 'ip { no-local-src-check }' ip6-local still drops
++    for-us packets whose source address is unroutable."""
 +
-+    __test__ = True
++    @classmethod
++    def setUpClass(cls):
++        super(TestIP6LocalSrcCheckDefault, cls).setUpClass()
++        cls.create_pg_interfaces(range(1))
++        for i in cls.pg_interfaces:
++            i.admin_up()
++            i.config_ip6()
++            i.resolve_ndp()
 +
-+    def test_src_lookup_miss(self):
-+        """for-us packets from an unroutable source are dropped by default"""
-+        self.send_and_assert_no_replies(self.pg0, self.unroutable_src_pkts())
-+        self.assert_error_counter_equal(self.SRC_MISS_ERR, NUM_PKTS)
++    @classmethod
++    def tearDownClass(cls):
++        for i in cls.pg_interfaces:
++            i.unconfig_ip6()
++            i.admin_down()
++        super(TestIP6LocalSrcCheckDefault, cls).tearDownClass()
++
++    def test_ip6_src_lookup_miss(self):
++        """ip6-local drops for-us packets with an unroutable source"""
++        pkts = [
++            (
++                Ether(src=self.pg0.remote_mac, dst=self.pg0.local_mac)
++                / IPv6(src="2001:db8::1", dst=self.pg0.local_ip6)
++                / UDP(sport=1236, dport=1236)
++                / Raw(b"\xa5" * 100)
++            )
++        ] * NUM_PKTS
++        self.pg_send(self.pg0, pkts)
++
++        self.assert_error_counter_equal("/err/ip6-input/src_lookup_miss", NUM_PKTS)
 +
 +
  if __name__ == "__main__":
