@@ -12,7 +12,7 @@ VPP_VERSION_BASE = 2606
 # downstream sonic-buildimage builds will silently pull stale debs that
 # pre-date the new patch series/plugin changes and end up with VPP/SAI CRC
 # drift.
-VPP_VERSION = $(VPP_VERSION_BASE)-0.11
+VPP_VERSION = $(VPP_VERSION_BASE)-0.10
 VPP_VERSION_SONIC = $(VPP_VERSION)+b1sonic1
 VPP_SRC_PATH = platform/vpp/vppbld
 
