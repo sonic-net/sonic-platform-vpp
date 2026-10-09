@@ -448,7 +448,9 @@ class TestSonicExtL2Punt(VppTestCase):
                 expected_count=1, timeout=5, filter_out_fn=filter_out_fn
             )
             for member, expect_tagged in flood_to:
-                flooded = member.get_capture(1)
+                # Kernel IPv6 DAD/ND from the LCP taps also reaches the phys
+                # (via the BVI flood or the tap's own xc) at uncontrolled times.
+                flooded = member.get_capture(1, filter_out_fn=filter_out_fn)
                 self._assert_flooded(pkt, flooded[0], member, expect_tagged)
         finally:
             # Nothing else dumps the trace for us: the send_and_expect helpers
