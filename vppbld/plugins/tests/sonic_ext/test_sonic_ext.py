@@ -174,5 +174,63 @@ class TestSonicExtNdPuntStartupOff(SonicExtNdPuntBase):
         self.assert_vpp_answers_ns()
 
 
+class SonicExtCoppBase(VppTestCase):
+    """sonic-ext copp config test base"""
+
+    extra_vpp_plugin_config = SonicExtNdPuntBase.extra_vpp_plugin_config + [
+        "plugin",
+        "linux_cp_unittest_plugin.so",
+        "{",
+        "enable",
+        "}",
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        super(SonicExtCoppBase, cls).setUpClass()
+        cls.create_pg_interfaces(range(2))
+
+    def assert_feature(self, output, name, enabled):
+        features = (line.strip() for line in output.splitlines())
+        self.assertEqual(name in features, enabled)
+
+    def assert_copp_state(self, enabled):
+        self.assertEqual(
+            bool(self.vapi.sonic_ext_feature_get(feature="copp").enabled), enabled
+        )
+
+        features = self.vapi.cli("show interface features local0")
+        self.assert_feature(features, "sonic-ext-copp-ip2me", enabled)
+        self.assert_feature(features, "sonic-ext-copp-ip2me-ip6", enabled)
+
+        self.vapi.cli("test lcp add phy pg0 host pg1")
+        try:
+            features = self.vapi.cli("show interface features pg1")
+            self.assert_feature(features, "sonic-ext-copp-ifout", enabled)
+        finally:
+            self.vapi.cli("test lcp del phy pg0 host pg1")
+
+        self.assertEqual(
+            "sonic-ext-copp-udld" in self.vapi.cli("show node snap-input"),
+            enabled,
+        )
+
+
+class TestSonicExtCoppStartupOff(SonicExtCoppBase):
+    """sonic-ext copp off in startup.conf"""
+
+    extra_vpp_config = ["sonic-ext", "{", "copp", "off", "}"]
+
+    def test_copp_startup_off(self):
+        self.assert_copp_state(False)
+
+
+class TestSonicExtCoppDefault(SonicExtCoppBase):
+    """sonic-ext copp default"""
+
+    def test_copp_defaults_on(self):
+        self.assert_copp_state(True)
+
+
 if __name__ == "__main__":
     unittest.main(testRunner=VppTestRunner)
