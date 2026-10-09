@@ -115,6 +115,7 @@ PBH_NODE6 = "sonic-ext-pbh-ip6"
 ERR_HIT = "packets matched a PBH rule"
 ERR_MISS = "packets matched no PBH rule"
 ERR_UNRESOLVED = "inner header could not be parsed"
+ERR_STALE_PROFILE = "rule referenced a deleted hash profile"
 
 # format_pbh_trace() -- pbh_node.c.  Longest action name first, the
 # alternation is ordered.  The " (load-balance)" suffix marks a steered
@@ -238,6 +239,16 @@ class SonicExtPbhBase(VppTestCase):
     REC_DST6 = "2001:db8:30::5"
     REC_VIA4 = ("20.0.0.5", "21.0.0.5")
     REC_VIA6 = ("2001:db8:20::5", "2001:db8:21::5")
+
+    # Single-recursive leg, built on demand by _setup_single_recursive().
+    # SREC resolves over exactly one via-address, which sits in the two-path
+    # ECMP prefix _setup_bond() already installed.  The first-level load
+    # balance therefore has one bucket, and that bucket is another load
+    # balance -- the shape a bucket-count guard skips straight past.
+    SREC4 = ("31.0.0.0", 24)
+    SREC6 = ("2001:db8:31::", 64)
+    SREC_DST4 = "31.0.0.5"
+    SREC_DST6 = "2001:db8:31::5"
 
     # Subclass knobs: which actions the rules carry.
     WANT_ECMP = True
@@ -457,6 +468,36 @@ class SonicExtPbhBase(VppTestCase):
             self.vapi.cli("show ip%s fib %s" % ("" if af == 4 else "6", rec[0])),
         )
 
+    def _setup_single_recursive(self, af):
+        """Add a prefix reached by a *single* recursive next hop, which in
+        turn resolves to an ECMP set.
+
+        The first-level load balance has one bucket and that bucket is
+        itself a load balance, so nothing is chosen at the first level and
+        everything is chosen at the second.  A guard that bails out on the
+        bucket count before inspecting the bucket would hand the packet to
+        ip4-lookup, which zeroes ip.flow_hash, and the override would be
+        gone before the only decision that matters.
+
+        The via prefix and its neighbours already exist -- _setup_bond()
+        installed them -- so only one route is added here.  Appends to
+        self.routes, which tearDown() drains.
+        """
+        if af == 4:
+            srec, via = self.SREC4, self.OUTER_DST4
+        else:
+            srec, via = self.SREC6, self.OUTER_DST6
+
+        self.routes.append(
+            VppIpRoute(
+                self, srec[0], srec[1], [VppRoutePath(via, NO_INDEX)]
+            ).add_vpp_config()
+        )
+        self.logger.info(
+            "single-recursive fib:\n%s",
+            self.vapi.cli("show ip%s fib %s" % ("" if af == 4 else "6", srec[0])),
+        )
+
     def _setup_lcp(self):
         # The pairs must come after the BVI is bound into the bridge domain:
         # sonic_ext_lcp_pair_add_cb() uses l2_input_is_bvi() to decide whether
@@ -493,6 +534,21 @@ class SonicExtPbhBase(VppTestCase):
     def _add_profile(self, fields):
         r = self._profile_add_del(is_add=True, profile_index=NO_INDEX, fields=fields)
         return r.profile_index
+
+    def _replace_profile(self, index, fields):
+        """Replace a profile's field vector in place.  A non-~0 index on add
+        is what makes it a replace rather than a create."""
+        r = self._profile_add_del(is_add=True, profile_index=index, fields=fields)
+        self.assertEqual(r.profile_index, index, "replace moved the profile")
+
+    def _profile_line(self, index):
+        """The `show sonic-ext pbh profiles` line for one profile, stripped
+        of its index prefix, or None if the profile is gone."""
+        prefix = "  [%u] " % index
+        for line in self.vapi.cli("show sonic-ext pbh profiles").splitlines():
+            if line.startswith(prefix):
+                return line[len(prefix) :]
+        return None
 
     @staticmethod
     def _addr_fields():
@@ -892,6 +948,56 @@ class SonicExtPbhBase(VppTestCase):
             len(macs), 1, "outer variation moved recursive ECMP: macs=%s" % sorted(macs)
         )
 
+    def _assert_single_recursive_ecmp(self, af):
+        """A lone recursive next hop still has to carry the hash downward.
+
+        There is nothing to choose at the first level, so the entire value
+        of PBH on this route shape is that ip.flow_hash survives to the
+        second one.  Two distinct egress MACs means it did; one means the
+        packet went via ip4-lookup, which zeroes the hash on entry and
+        rehashes the outer header -- constant across this stream.
+        """
+        self._setup_single_recursive(af)
+        odst = self.SREC_DST4 if af == 4 else self.SREC_DST6
+
+        # Shape first, on a short traced run: the steered bucket has to be a
+        # load balance, otherwise the spread below would only prove the FIB
+        # had flattened the single-bucket level away.
+        self._send(
+            self.pg0, self._stream("vxlan", af, af, "inner", n=4, odst=odst), trace=True
+        )
+        traces = self._pbh_traces()
+        self.assertEqual(len(traces), 4, "unexpected trace count: %d" % len(traces))
+        for t in traces:
+            self.assertFalse(t["miss"])
+            self.assertIn("set-ecmp-hash", t["action"])
+            self.assertIsNotNone(t["dpo"], "single-bucket route was not steered")
+            self.assertTrue(
+                t["recursive"],
+                "steered a DPO_ADJACENCY; the lone bucket was not a load balance",
+            )
+
+        members, macs, total = self._observe(
+            self.pg0, self._stream("vxlan", af, af, "inner", odst=odst)
+        )
+        self.assertEqual(total, N_PKTS, "lost packets (members=%s)" % members)
+        self.assertEqual(
+            len(macs),
+            2,
+            "hash was lost before the second level: macs=%s" % sorted(macs),
+        )
+
+        # Control: the outer header is what ip4-lookup would have hashed.
+        _, macs, total = self._observe(
+            self.pg0, self._stream("vxlan", af, af, "outer", odst=odst)
+        )
+        self.assertEqual(total, N_PKTS)
+        self.assertEqual(
+            len(macs),
+            1,
+            "outer variation moved the second-level bucket: macs=%s" % sorted(macs),
+        )
+
     def _assert_independence(self, encap, af):
         """The two actions use disjoint profiles, so each must respond only to
         its own fields.  A single test with both actions set is the only way
@@ -983,6 +1089,14 @@ class TestSonicExtPbhEcmpLag(SonicExtPbhBase):
         """PBH set-ecmp-hash reaches both levels of a recursive v6 route"""
         self._assert_recursive_ecmp(6)
 
+    def test_single_recursive_v4_ecmp(self):
+        """PBH set-ecmp-hash survives a lone recursive v4 next hop"""
+        self._assert_single_recursive_ecmp(4)
+
+    def test_single_recursive_v6_ecmp(self):
+        """PBH set-ecmp-hash survives a lone recursive v6 next hop"""
+        self._assert_single_recursive_ecmp(6)
+
     def test_trace_reports_both_actions(self):
         """PBH trace names both actions and the chosen adjacency"""
         pkts = self._stream("vxlan", 4, 4, "inner", n=4)
@@ -1071,6 +1185,49 @@ class TestSonicExtPbhEcmpLag(SonicExtPbhBase):
         self.assertEqual(total, N_PKTS)
         self.assertEqual(
             len(members), 2, "LAG did not recover after re-attach: members=%s" % members
+        )
+
+    def test_profile_replace_reaims_live_rules(self):
+        """Replacing a bound hash profile re-aims the rules that reference it
+
+        SAI models a hash update as a set on an existing object, so the
+        replace has to land at the same profile index without the rules
+        being rewritten.  Swapping the ECMP profile from inner addresses to
+        inner ports inverts which stream moves the ECMP bucket, which no
+        amount of caching could fake, and STALE_PROFILE must stay flat
+        throughout -- the rules never stop pointing at a live profile.
+        """
+        before_stale = self._err(4, ERR_STALE_PROFILE)
+
+        self._replace_profile(self.ecmp_profile, self._port_fields())
+
+        # Inner ports now drive both actions; the LAG profile is untouched.
+        members, macs, total = self._observe(
+            self.pg0, self._stream("vxlan", 4, 4, "ports")
+        )
+        self.assertEqual(total, N_PKTS)
+        self.assertEqual(
+            len(macs), 2, "replaced ECMP profile did not take effect: macs=%s" % macs
+        )
+        self.assertEqual(len(members), 2, "LAG stopped spreading: %s" % members)
+
+        # Inner addresses were in the profile that was replaced away, so they
+        # must no longer move anything.
+        members, macs, total = self._observe(
+            self.pg0, self._stream("vxlan", 4, 4, "addrs")
+        )
+        self.assertEqual(total, N_PKTS)
+        self.assertEqual(
+            len(macs), 1, "dropped hash fields still move ECMP: macs=%s" % macs
+        )
+        self.assertEqual(
+            len(members), 1, "inner addresses leaked into LAG: %s" % members
+        )
+
+        self.assertEqual(
+            self._err(4, ERR_STALE_PROFILE),
+            before_stale,
+            "replace left a window where rules saw no profile",
         )
 
     def test_full_profile(self):
@@ -1328,6 +1485,54 @@ class TestSonicExtPbhApi(SonicExtPbhBase):
         """PBH rejects deleting a hash profile that does not exist"""
         with self.vapi.assert_negative_api_retval():
             self._profile_add_del(is_add=False, profile_index=4096, fields=[])
+
+    def test_profile_replace_keeps_index_and_swaps_fields(self):
+        """Replacing a hash profile keeps its index and installs the new fields
+
+        Rules carry the profile index, so an update that reallocated would
+        strand every rule naming the hash.
+        """
+        index = self._add_profile(self._addr_fields())
+        self.profiles.append(index)
+
+        before = self._profile_line(index)
+        self.assertIn("inner-src-ipv4", before)
+        self.assertNotIn("inner-l4-src-port", before)
+
+        self._replace_profile(index, self._port_fields())
+
+        after = self._profile_line(index)
+        self.assertIn("inner-l4-src-port", after)
+        self.assertNotIn("inner-src-ipv4", after)
+
+    def test_profile_replace_rejects_unknown_index(self):
+        """PBH rejects replacing a hash profile that does not exist"""
+        with self.vapi.assert_negative_api_retval():
+            self._profile_add_del(
+                is_add=True, profile_index=4096, fields=self._addr_fields()
+            )
+
+    def test_profile_replace_leaves_old_fields_on_rejection(self):
+        """A rejected replace leaves the hash profile exactly as it was
+
+        Every way of failing is checked before the old field vector is
+        freed, so a rule pointing at this profile never observes a
+        half-applied update.
+        """
+        index = self._add_profile(self._addr_fields())
+        self.profiles.append(index)
+        before = self._profile_line(index)
+
+        with self.vapi.assert_negative_api_retval():
+            self._profile_add_del(is_add=True, profile_index=index, fields=[])
+        with self.vapi.assert_negative_api_retval():
+            self._profile_add_del(
+                is_add=True,
+                profile_index=index,
+                fields=[{"field": 7, "sequence_id": 1, "mask": MASK_NONE}],
+            )
+
+        self.assertEqual(before, self._profile_line(index))
 
     def test_table_rejects_action_without_encap(self):
         """PBH rejects a rule that has an action but matches no encapsulation

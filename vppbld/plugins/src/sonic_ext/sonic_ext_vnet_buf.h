@@ -17,6 +17,7 @@
 
 #include <vlib/vlib.h>
 #include <vlib/buffer_funcs.h>
+#include <vnet/buffer.h>
 
 /*
  * Plugin-private per-buffer side-band metadata: one slot per buffer,
@@ -26,27 +27,68 @@
  *
  * Why not vnet_buffer2()->unused[]?  sonic_ext already spends all of it on
  * sonic_ext_buffer_opaque_t (the capture cookie), and that array is a
- * scarce resource shared with every other plugin.  Why not a
- * VNET_BUFFER_F_AVAIL bit?  There are only four in the whole system.
- * A feature whose state is genuinely private should not be charged to
- * either budget.
+ * scarce resource shared with every other plugin.  So the payload lives
+ * here and only a one-bit witness is charged to the buffer.
+ *
+ * VALIDITY.  Two things must hold before a consumer trusts a field: the
+ * side-band flag SONIC_EXT_BUFFER_F_VNET_BUF in b->flags, and the field's
+ * own bit in `valid`.  They cover different failure modes and neither is
+ * enough alone.  Both are handled by the accessors below -- claim() sets
+ * the flag, find() tests it -- so no feature has to remember either.
+ *
+ *   b->flags is the per-incarnation witness, shared by every field.  It
+ *   lives in vlib_buffer_template_t, the first cache line that VPP
+ *   documents as "initialized or zeroed on alloc".
+ *   vlib_buffer_free_inline() stamps the pool template over it on the way
+ *   to the free list, and dpdk_device_input() re-stamps it on every packet
+ *   received; between them every buffer source clears it.  That is the
+ *   property the slot cannot have.  A buffer freed by a DPDK PMD goes back
+ *   to the *cached* mempool (dpdk_buffer_pool_init() points every object
+ *   header at it), where a per-lcore cache with room short-circuits the
+ *   backend and so never reaches dpdk_ops_vpp_enqueue() ->
+ *   vlib_buffer_pool_put(), and therefore never reaches the free callback
+ *   that scrubs slots.  Such a buffer re-enters the dataplane with its slot
+ *   still populated; the template reset is what makes that harmless.
+ *
+ *   `valid` is the per-field witness, and gives at-most-once consumption
+ *   within one incarnation: a consumer releases its bit on a hit.
+ *
+ * Note what is deliberately NOT done: nothing here ever clears the flag.
+ * Clearing it on release would be wrong -- one feature's consume would hide
+ * every other feature's field in the same slot, which is precisely what the
+ * per-field `valid` bitmap exists to prevent.  Clearing it in the free
+ * callback would be useless twice over: on VPP's path the template has
+ * already zeroed b->flags before the callback runs, and on the DPDK path
+ * the callback does not run at all -- which is the very gap the flag closes.
+ * Clearing is the buffer template's job, because only the template is on
+ * every path.
  *
  * INVARIANT: a slot is all-zero whenever its buffer index is free.  It is
  * established by the zero fill in sonic_ext_vnet_buf_ref() and restored by
- * the buffer free callback, so every freshly allocated buffer -- including
- * a clone, which gets a fresh index -- starts from a clean slot.  `valid`
- * is therefore a true per-incarnation witness, with no help needed from
- * b->flags.  Every consumer must test its own bit before trusting the
- * matching field.
+ * the buffer free callback, which vlib_buffer_pool_put() runs before the
+ * index reaches either the per-thread cache or bp->buffers.  So every index
+ * vlib_buffer_alloc() can return has been scrubbed -- buffers parked in
+ * DPDK's mempool cache are not on VPP's free list and cannot be handed out
+ * by it.
  *
- * Note the deliberate asymmetry with buffer-resident metadata: b->flags,
- * b->opaque and b->opaque2 ARE inherited by vlib_buffer_clone() /
- * vlib_buffer_copy(); a side-band slot is not.  For the PBH LAG hash that
- * is exactly what we want -- a replicated copy falls back to the configured
- * hash function rather than presenting a validity bit over a slot it never
- * wrote.  A future field that needs inheritance instead must copy itself
- * explicitly at its own duplication sites; VPP offers no clone hook.
+ * That is what keeps clones safe.  b->flags IS inherited by
+ * vlib_buffer_clone() / vlib_buffer_copy() -- their mask keeps every bit
+ * above VLIB_BUFFER_FLAGS_ALL -- but a clone's index comes from
+ * vlib_buffer_alloc(), so it finds `valid` clear and reads no field it
+ * never wrote.  A future field that needs inheritance instead must copy
+ * itself explicitly at its own duplication sites; VPP offers no clone hook.
  */
+
+/*
+ * Buffer flag: this incarnation of the buffer has at least one live
+ * side-band field.  One bit for the whole facility rather than one per
+ * feature -- the AVAIL bits are a nine-deep resource shared with every
+ * other plugin, and `valid` already discriminates between fields.  The cost
+ * of sharing is a false positive: a feature whose own field is absent, but
+ * whose buffer was claimed by some other feature, pays one table load
+ * before missing on `valid`.
+ */
+#define SONIC_EXT_BUFFER_F_VNET_BUF VNET_BUFFER_F_AVAIL2
 
 /* One bit per field below, up to 8 before `valid` must widen. */
 typedef enum
@@ -111,6 +153,10 @@ sonic_ext_vnet_buf_slot (vlib_main_t *vm, vlib_buffer_t *b)
  * Claim field f of b's slot.  No scrub and no conditional: the invariant
  * guarantees the slot was zero when b was allocated, and any other bit that
  * is set belongs to a feature that set it for this same packet.
+ *
+ * The field bit and the buffer flag are written together here and nowhere
+ * else, so a feature cannot acquire the storage without also acquiring the
+ * witness that makes it readable.
  */
 static_always_inline sonic_ext_vnet_buf_t *
 sonic_ext_vnet_buf_claim (vlib_main_t *vm, vlib_buffer_t *b,
@@ -119,24 +165,36 @@ sonic_ext_vnet_buf_claim (vlib_main_t *vm, vlib_buffer_t *b,
   sonic_ext_vnet_buf_t *sb = sonic_ext_vnet_buf_slot (vm, b);
 
   sb->valid |= (u8) f;
+  b->flags |= SONIC_EXT_BUFFER_F_VNET_BUF;
   return sb;
 }
 
-/* b's slot iff field f was written during b's current incarnation, else 0. */
+/*
+ * b's slot iff field f was written during b's current incarnation, else 0.
+ * The flag is tested before the slot address is formed, so a buffer that
+ * claimed nothing costs one bit test against a cache line the caller has
+ * necessarily already touched, and never pulls in the table.
+ */
 static_always_inline sonic_ext_vnet_buf_t *
 sonic_ext_vnet_buf_find (vlib_main_t *vm, vlib_buffer_t *b,
                          sonic_ext_vnet_buf_field_t f)
 {
-  sonic_ext_vnet_buf_t *sb = sonic_ext_vnet_buf_slot (vm, b);
+  sonic_ext_vnet_buf_t *sb;
 
+  if ((b->flags & SONIC_EXT_BUFFER_F_VNET_BUF) == 0)
+    return 0;
+
+  sb = sonic_ext_vnet_buf_slot (vm, b);
   return (sb->valid & (u8) f) ? sb : 0;
 }
 
 /*
  * Give a field up early, without waiting for the buffer to be freed.  Taking
  * the field as an argument is what lets several features share one slot: a
- * per-slot "somebody wrote something" flag would let one feature's consume
- * silently invalidate every other feature's field in the same slot.
+ * per-slot "somebody wrote something" release would let one feature's
+ * consume silently invalidate every other feature's field in the same slot.
+ * For the same reason this does not touch SONIC_EXT_BUFFER_F_VNET_BUF, which
+ * is shared by all fields and is cleared by the buffer template, not here.
  */
 static_always_inline void
 sonic_ext_vnet_buf_release (sonic_ext_vnet_buf_t *sb,

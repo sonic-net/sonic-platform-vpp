@@ -24,16 +24,24 @@ sonic_ext_vnet_buf_main_t sonic_ext_vnet_buf_main;
 
 /*
  * Restore the invariant: a slot is zero whenever its index is free.  VPP
- * calls this at the top of vlib_buffer_pool_put(), which is the sole funnel
- * by which buffers return to a pool, and which is reached only once a
- * buffer's refcount has fallen to zero.  Every index in a given call belongs
- * to the pool named by pool_index, because the caller flushes its queue
- * whenever the pool changes.
+ * calls this at the top of vlib_buffer_pool_put(), before the index reaches
+ * either the per-thread cache or bp->buffers, so every index VPP can hand
+ * back out through vlib_buffer_alloc() has been scrubbed.  Every index in a
+ * given call belongs to the pool named by pool_index, because the caller
+ * flushes its queue whenever the pool changes.
  *
- * Note what this does not do: touch b->flags, or the buffer at all.  By this
- * point vlib_buffer_free_inline() has already reset each buffer's template
- * fields, so the header is both cold and uninformative.  Indices are all we
- * need, and all we use.
+ * This is not, however, the only way a buffer re-enters the dataplane.  One
+ * freed by a DPDK PMD can be recycled entirely inside DPDK's per-lcore
+ * mempool cache, without the backend -- and so without this callback -- ever
+ * running.  Trusting a slot therefore also requires
+ * SONIC_EXT_BUFFER_F_VNET_BUF, which the buffer template clears on every
+ * incarnation.  See the VALIDITY note in sonic_ext_vnet_buf.h.
+ *
+ * Note what this does not do: clear that flag, or touch the buffer at all.
+ * Doing so would be redundant here and absent where it matters -- by this
+ * point vlib_buffer_free_inline() has already stamped the pool template
+ * over each buffer's flags, and on the DPDK path this callback never runs.
+ * Indices are all we need, and all we use.
  *
  * Clearing the whole slot rather than just `valid` costs nothing -- both are
  * in the same cache line -- and leaves the table readable in a debugger.

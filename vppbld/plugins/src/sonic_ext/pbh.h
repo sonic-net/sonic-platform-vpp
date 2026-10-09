@@ -243,7 +243,7 @@ format_function_t format_sonic_ext_pbh_profile;
 format_function_t format_sonic_ext_pbh_rule;
 
 /* Consumer of SONIC_EXT_VNET_BUF_PBH_LAG_HASH, registered into
- * bond_main.lag_hash_override by patch 0021 while a table carrying a
+ * bond_main.lag_hash_override by patch 0022 while a table carrying a
  * SET_LAG_HASH rule exists.  Signature must match
  * bond_lag_hash_override_fn_t; declared here rather than including
  * vnet/bonding/node.h, which the dataplane does not otherwise need. */

@@ -49,6 +49,14 @@ sonic_ext_pbh_field_cmp (void *va, void *vb)
  * The datapath walks the field vector as runs of equal sequence_id, so the
  * sort is not a convenience -- it is what makes the walk correct.  Doing it
  * here means the node never sorts and never re-checks.
+ *
+ * On add, *profile_index selects between create and replace: ~0 allocates a
+ * new profile, anything else replaces the field vector of the profile
+ * already at that index.  Replace exists because SAI models a PBH hash
+ * update as a set on an existing object, and rules carry the profile index
+ * -- reallocating would strand every rule that references the hash.  Safe
+ * without a barrier of its own because the API handler is not mp-safe, so
+ * workers are parked for the duration (api_shared.c).
  */
 int
 sonic_ext_pbh_profile_add_del (sonic_ext_pbh_hash_field_t *fields, int is_add,
@@ -67,6 +75,12 @@ sonic_ext_pbh_profile_add_del (sonic_ext_pbh_hash_field_t *fields, int is_add,
       vec_free (p->fields);
       pool_put (pm->profiles, p);
       return 0;
+    }
+
+  if (*profile_index != ~0 && pool_is_free_index (pm->profiles, *profile_index))
+    {
+      vec_free (fields);
+      return VNET_API_ERROR_NO_SUCH_ENTRY;
     }
 
   if (vec_len (fields) == 0)
@@ -88,7 +102,15 @@ sonic_ext_pbh_profile_add_del (sonic_ext_pbh_hash_field_t *fields, int is_add,
     if (i == 0 || fields[i].seq != fields[i - 1].seq)
       n_groups++;
 
-  pool_get_zero (pm->profiles, p);
+  /* Every way of failing is behind us, so the old vector can go. */
+  if (*profile_index != ~0)
+    {
+      p = pool_elt_at_index (pm->profiles, *profile_index);
+      vec_free (p->fields);
+    }
+  else
+    pool_get_zero (pm->profiles, p);
+
   p->fields = fields;
   p->n_groups = n_groups;
   *profile_index = p - pm->profiles;

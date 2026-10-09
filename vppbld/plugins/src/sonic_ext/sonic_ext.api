@@ -319,8 +319,9 @@ typedef sonic_ext_pbh_hash_field
 
     @param client_index - opaque cookie to identify the sender
     @param context - sender context, to match reply w/ request
-    @param is_add - 1 to create, 0 to destroy
-    @param profile_index - on destroy, the profile to remove; ignored on add
+    @param is_add - 1 to create or replace, 0 to destroy
+    @param profile_index - the profile to destroy, or to replace in place on
+                           add; ~0 on add allocates a new profile
     @param n_fields - number of hash fields
     @param fields - the hash fields, in any order
 */

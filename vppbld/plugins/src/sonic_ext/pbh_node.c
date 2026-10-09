@@ -295,6 +295,16 @@ sonic_ext_pbh_match (const sonic_ext_pbh_table_t *t, const void *l3,
  * -- falls through to the feature arc and reaches ip4-lookup as usual,
  * which handles every case correctly.
  *
+ * The bucket count gates only the adjacency case.  A one-bucket load
+ * balance over an adjacency is not an ECMP set: there is no choice for the
+ * hash to influence, and ip4-lookup does the same work with every corner
+ * case already covered, so it is left alone.  A one-bucket load balance
+ * over another load balance is the opposite -- a single recursive next hop
+ * resolving to an ECMP set.  The choice is made a level down, and it is
+ * made on ip.flow_hash, so bailing out here would hand the packet to
+ * ip4-lookup and lose the override before the only decision PBH exists to
+ * influence.
+ *
  * Counter accounting mirrors the core graph: this node charges the
  * first-level load balance to lbm_to_counters exactly as ip4-lookup does,
  * and ip4-load-balance charges each subsequent level to lbm_via_counters
@@ -319,12 +329,18 @@ sonic_ext_pbh_steer_ip4 (vlib_main_t *vm, vlib_buffer_t *b,
   lbi = ip4_fib_forwarding_lookup (fib_index, &ip4->dst_address);
   lb = load_balance_get (lbi);
 
-  if (PREDICT_FALSE (lb->lb_n_buckets <= 1))
+  /* load_balance_create() accepts zero, and lb_n_buckets_minus_1 is then
+   * 0xffff, so the mask below would index past the inline buckets. */
+  if (PREDICT_FALSE (lb->lb_n_buckets == 0))
     return 0;
 
   dpo = load_balance_get_fwd_bucket (lb, hash & lb->lb_n_buckets_minus_1);
   if (PREDICT_TRUE (dpo->dpoi_type == DPO_ADJACENCY))
-    *steer_next = SONIC_EXT_PBH_NEXT_REWRITE;
+    {
+      if (PREDICT_FALSE (lb->lb_n_buckets == 1))
+        return 0;
+      *steer_next = SONIC_EXT_PBH_NEXT_REWRITE;
+    }
   else if (dpo->dpoi_type == DPO_LOAD_BALANCE)
     *steer_next = SONIC_EXT_PBH_NEXT_LOAD_BALANCE;
   else
@@ -357,12 +373,16 @@ sonic_ext_pbh_steer_ip6 (vlib_main_t *vm, vlib_buffer_t *b,
   lbi = ip6_fib_table_fwding_lookup (fib_index, &ip6->dst_address);
   lb = load_balance_get (lbi);
 
-  if (PREDICT_FALSE (lb->lb_n_buckets <= 1))
+  if (PREDICT_FALSE (lb->lb_n_buckets == 0))
     return 0;
 
   dpo = load_balance_get_fwd_bucket (lb, hash & lb->lb_n_buckets_minus_1);
   if (PREDICT_TRUE (dpo->dpoi_type == DPO_ADJACENCY))
-    *steer_next = SONIC_EXT_PBH_NEXT_REWRITE;
+    {
+      if (PREDICT_FALSE (lb->lb_n_buckets == 1))
+        return 0;
+      *steer_next = SONIC_EXT_PBH_NEXT_REWRITE;
+    }
   else if (dpo->dpoi_type == DPO_LOAD_BALANCE)
     *steer_next = SONIC_EXT_PBH_NEXT_LOAD_BALANCE;
   else
@@ -654,19 +674,26 @@ VNET_FEATURE_INIT (sonic_ext_pbh_ip6, static) = {
 /*
  * SET_LAG_HASH consumer.
  *
- * Registered into bond_main.lag_hash_override (patch 0021) and called from
+ * Registered into bond_main.lag_hash_override (patch 0022) and called from
  * bond_tx_hash() after the configured vnet_hash_fn_t has filled h[], with
  * the frame's buffer array parallel to it.  Entries whose buffer carries a
  * live SONIC_EXT_VNET_BUF_PBH_LAG_HASH are replaced; everything else keeps
  * the configured algorithm's answer.
  *
- * Nothing here writes to b[i]: the slot is located from buffer_pool_index
- * and the buffer index, so the buffer itself is read-only.
+ * sonic_ext_vnet_buf_find() short-circuits on SONIC_EXT_BUFFER_F_VNET_BUF
+ * before it touches the side-band table, so a bond carrying no PBH traffic
+ * stays entirely off that cache line.  The prefetch is gated on the same
+ * flag for the same reason.
  *
- * The bit is released on a hit so the tag is applied at most once.  That is
- * only an optimisation -- the buffer free callback clears the whole slot in
- * any case -- but it keeps a replicated frame from re-consuming a tag that
- * was meant for the original.
+ * Nothing here writes to b[i]: the flag is shared with every other
+ * side-band field and belongs to the buffer template, and the slot is
+ * located from buffer_pool_index and the buffer index, so the buffer itself
+ * is read-only.
+ *
+ * The field bit is released on a hit so the tag is applied at most once.
+ * That keeps a frame replicated after the producer ran from re-consuming a
+ * tag that was meant for the original -- the clone inherits the flag, but
+ * its own slot is clean.
  */
 void
 sonic_ext_pbh_lag_hash_override (vlib_main_t *vm, vlib_buffer_t **b, u32 *h,
@@ -676,7 +703,8 @@ sonic_ext_pbh_lag_hash_override (vlib_main_t *vm, vlib_buffer_t **b, u32 *h,
     {
       sonic_ext_vnet_buf_t *sb;
 
-      if (PREDICT_TRUE (i + 8 < n))
+      if (PREDICT_TRUE (i + 8 < n) &&
+          (b[i + 8]->flags & SONIC_EXT_BUFFER_F_VNET_BUF))
         clib_prefetch_load (sonic_ext_vnet_buf_slot (vm, b[i + 8]));
 
       sb = sonic_ext_vnet_buf_find (vm, b[i],
