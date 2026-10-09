@@ -76,3 +76,5 @@
 #     per-packet payload - the plugin keeps that in its own side-band table
 #     rather than spending a vnet_buffer2 word or a VNET_BUFFER_F_AVAIL bit.
 0022-sonic-pbh-lag-hash.patch
+# 23. ip: 'no-local-src-check' startup config option.
+0023-ip-add-no-local-src-check-startup-config-option.patch
