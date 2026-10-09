@@ -290,3 +290,155 @@ define sonic_ext_copp_ttl_punt_bind_reply
   i32 retval;
 };
 
+/* Policy Based Hashing (SAI PBH)
+ *
+ * SONiC PBH overrides the switch-global flow hash for selected tunnelled
+ * traffic: a classifier picks the packets, and a named hash profile says
+ * which inner fields to hash, separately for the ECMP and the LAG stage.
+ */
+
+/** \brief One field of a PBH hash profile.
+
+    Mirrors SAI_FINE_GRAINED_HASH_FIELD_ATTR_*.  Fields sharing a
+    sequence_id are XOR-folded and are therefore order-independent, which is
+    how symmetric hashing is expressed: give the inner source and
+    destination address the same sequence_id.
+
+    @param field - sonic_ext_pbh_hash_field_id_t; only INNER_* are modelled
+    @param sequence_id - SAI sequence id; equal ids form one fold group
+    @param mask - address mask, network order; ignored for non-address fields
+*/
+typedef sonic_ext_pbh_hash_field
+{
+  u8 field;
+  u32 sequence_id;
+  u8 mask[16];
+};
+
+/** \brief Create or destroy a PBH hash profile.
+
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param is_add - 1 to create or replace, 0 to destroy
+    @param profile_index - the profile to destroy, or to replace in place on
+                           add; ~0 on add allocates a new profile
+    @param n_fields - number of hash fields
+    @param fields - the hash fields, in any order
+*/
+define sonic_ext_pbh_profile_add_del
+{
+  u32 client_index;
+  u32 context;
+  bool is_add;
+  u32 profile_index;
+  u32 n_fields;
+  vl_api_sonic_ext_pbh_hash_field_t fields[n_fields];
+};
+
+define sonic_ext_pbh_profile_add_del_reply
+{
+  u32 context;
+  i32 retval;
+  u32 profile_index;
+};
+
+/** \brief One PBH rule.
+
+    qualifiers is a bitmap of sonic_ext_pbh_qualifier_t saying which of the
+    match fields below are significant; a field whose bit is clear matches
+    anything.  Both actions may be set; ~0 means the action is absent.
+
+    @param rule_id - caller's id, echoed by `show` and the stats segment
+    @param priority - higher wins; first match stops the walk
+    @param qualifiers - bitmap of SONIC_EXT_PBH_Q_*
+    @param ether_type - outer ethertype
+    @param inner_ether_type - ethertype of the encapsulated packet
+    @param l4_dst_port - outer L4 destination port (identifies VXLAN)
+    @param ip_protocol - outer IPv4 protocol
+    @param ipv6_next_header - outer IPv6 next header
+    @param gre_key - GRE key / NVGRE VSID
+    @param gre_key_mask - mask applied to gre_key
+    @param ecmp_profile - hash profile for SET_ECMP_HASH, or ~0
+    @param lag_profile - hash profile for SET_LAG_HASH, or ~0
+    @param flow_counter - 1 to count matches into the table's counters
+*/
+typedef sonic_ext_pbh_rule
+{
+  u32 rule_id;
+  u32 priority;
+  u32 qualifiers;
+  u16 ether_type;
+  u16 inner_ether_type;
+  u16 l4_dst_port;
+  u8 ip_protocol;
+  u8 ipv6_next_header;
+  u32 gre_key;
+  u32 gre_key_mask;
+  u32 ecmp_profile;
+  u32 lag_profile;
+  bool flow_counter;
+};
+
+/** \brief Create a PBH table, or replace its entire rule set.
+
+    Replace is atomic: a packet in flight sees either the old rule set or
+    the new one.  It also resets the per-rule counters, matching SAI, where
+    replacing the entries destroys and recreates them.
+
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param table_index - the table to replace, or ~0 to create a new one
+    @param name - table name, for `show` only
+    @param n_rules - number of rules
+    @param rules - the rules, in any order; sorted by priority on arrival
+*/
+define sonic_ext_pbh_table_add_replace
+{
+  u32 client_index;
+  u32 context;
+  u32 table_index;
+  string name[64];
+  u32 n_rules;
+  vl_api_sonic_ext_pbh_rule_t rules[n_rules];
+};
+
+define sonic_ext_pbh_table_add_replace_reply
+{
+  u32 context;
+  i32 retval;
+  u32 table_index;
+};
+
+/** \brief Destroy a PBH table, detaching it from any interfaces first.
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param table_index - the table to destroy
+*/
+autoreply define sonic_ext_pbh_table_del
+{
+  u32 client_index;
+  u32 context;
+  u32 table_index;
+};
+
+/** \brief Attach or detach a PBH table on an interface.
+
+    An interface has at most one table, as SAI_PORT_ATTR_PBH_* is a single
+    OID; attaching a second replaces the first.  Attaching registers the
+    sonic-ext-pbh-ip4/ip6 features on that interface's ip4/ip6-unicast
+    arcs, so the arc cost is only paid where PBH is actually configured.
+
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param sw_if_index - the interface
+    @param table_index - the table
+    @param is_attach - 1 to attach, 0 to detach
+*/
+autoreply define sonic_ext_pbh_interface_attach_detach
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u32 table_index;
+  bool is_attach;
+};

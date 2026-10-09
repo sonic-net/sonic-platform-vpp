@@ -66,6 +66,12 @@
 #define SONIC_EXT_BUFFER_F_MIRROR_PENDING VNET_BUFFER_F_AVAIL1
 
 /*
+ * AVAIL2 is SONIC_EXT_BUFFER_F_VNET_BUF, defined in sonic_ext_vnet_buf.h
+ * beside the facility it guards.  Noted here so the plugin's claims on the
+ * nine shared AVAIL bits stay visible in one place.
+ */
+
+/*
  * orig_vlan_tag: outermost 802.1Q (or 802.1ad) tag observed on the
  * wire frame at sonic-ext-capture time, stored as raw 4 bytes in
  * network byte order: [TPID (2)] [TCI (2)].  Zero means the frame
@@ -132,7 +138,8 @@ typedef enum
   _ (ND_PUNT, nd_punt, "nd-punt", 1, VPP)                                     \
   _ (IP2ME, ip2me, "ip2me", 1, SAIVPP)                                        \
   _ (L2_TRAP_FIXUP, l2_trap_fixup, "l2-trap-fixup", 1, SAIVPP)                \
-  _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)
+  _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)             \
+  _ (PBH, pbh, "pbh", 1, SAIVPP)
 
 typedef enum
 {

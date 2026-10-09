@@ -28,6 +28,7 @@
 #include <vnet/vnet.h>
 #include <vnet/plugin/plugin.h>
 #include <sonic_ext/sonic_ext.h>
+#include <sonic_ext/pbh.h>
 
 #include <vlibapi/api.h>
 #include <vlibmemory/api.h>
@@ -251,6 +252,145 @@ vl_api_sonic_ext_copp_ttl_punt_bind_t_handler (
   rv = sonic_ext_copp_ttl_punt_bind (mp->is_bind);
 
   REPLY_MACRO (VL_API_SONIC_EXT_COPP_TTL_PUNT_BIND_REPLY);
+}
+
+/*
+ * Policy Based Hashing.
+ *
+ * Handlers live here rather than beside pbh.c because the generated glue
+ * below resolves every handler by name within this translation unit.  They
+ * only unmarshal and validate shape; everything semantic is in pbh.c, so
+ * the CLI reaches exactly the same code.
+ */
+
+static void
+vl_api_sonic_ext_pbh_profile_add_del_t_handler (
+  vl_api_sonic_ext_pbh_profile_add_del_t *mp)
+{
+  vl_api_sonic_ext_pbh_profile_add_del_reply_t *rmp;
+  sonic_ext_pbh_hash_field_t *fields = 0;
+  u32 profile_index = ntohl (mp->profile_index);
+  u32 i, n_fields = ntohl (mp->n_fields);
+  int rv = 0;
+
+  if (!sonic_ext_main.pbh)
+    {
+      rv = VNET_API_ERROR_FEATURE_DISABLED;
+      goto exit;
+    }
+
+  if (mp->is_add)
+    {
+      if (n_fields == 0)
+	{
+	  rv = VNET_API_ERROR_INVALID_VALUE;
+	  goto exit;
+	}
+
+      vec_validate (fields, n_fields - 1);
+
+      for (i = 0; i < n_fields; i++)
+	{
+	  fields[i].field = mp->fields[i].field;
+	  fields[i].seq = ntohl (mp->fields[i].sequence_id);
+	  /* The mask is carried as 16 wire-order bytes whatever the address
+	   * family, so an IPv4 mask simply occupies the first four. */
+	  clib_memcpy (&fields[i].mask, mp->fields[i].mask,
+		       sizeof (fields[i].mask));
+	}
+    }
+
+  rv = sonic_ext_pbh_profile_add_del (fields, mp->is_add ? 1 : 0,
+				      &profile_index);
+
+exit:
+  REPLY_MACRO2 (VL_API_SONIC_EXT_PBH_PROFILE_ADD_DEL_REPLY,
+		({ rmp->profile_index = htonl (profile_index); }));
+}
+
+static void
+vl_api_sonic_ext_pbh_table_add_replace_t_handler (
+  vl_api_sonic_ext_pbh_table_add_replace_t *mp)
+{
+  vl_api_sonic_ext_pbh_table_add_replace_reply_t *rmp;
+  sonic_ext_pbh_rule_t *rules = 0;
+  u32 table_index = ntohl (mp->table_index);
+  u32 i, n_rules = ntohl (mp->n_rules);
+  u8 *name;
+  int rv = 0;
+
+  if (!sonic_ext_main.pbh)
+    {
+      rv = VNET_API_ERROR_FEATURE_DISABLED;
+      goto exit;
+    }
+
+  if (n_rules)
+    vec_validate (rules, n_rules - 1);
+
+  for (i = 0; i < n_rules; i++)
+    {
+      sonic_ext_pbh_rule_t *r = &rules[i];
+      sonic_ext_pbh_match_t *m = &r->match;
+
+      r->rule_id = ntohl (mp->rules[i].rule_id);
+      r->priority = ntohl (mp->rules[i].priority);
+      r->ecmp_profile = ntohl (mp->rules[i].ecmp_profile);
+      r->lag_profile = ntohl (mp->rules[i].lag_profile);
+      r->flow_counter = mp->rules[i].flow_counter ? 1 : 0;
+
+      m->present = ntohl (mp->rules[i].qualifiers);
+      m->ether_type = ntohs (mp->rules[i].ether_type);
+      m->inner_ether_type = ntohs (mp->rules[i].inner_ether_type);
+      m->l4_dst_port = ntohs (mp->rules[i].l4_dst_port);
+      m->ip_protocol = mp->rules[i].ip_protocol;
+      m->ipv6_next_header = mp->rules[i].ipv6_next_header;
+      m->gre_key = ntohl (mp->rules[i].gre_key);
+      m->gre_key_mask = ntohl (mp->rules[i].gre_key_mask);
+
+      r->encap = sonic_ext_pbh_encap_from_match (m);
+    }
+
+  name = format (0, "%s", mp->name);
+  rv = sonic_ext_pbh_table_add_replace (name, rules, &table_index);
+
+exit:
+  REPLY_MACRO2 (VL_API_SONIC_EXT_PBH_TABLE_ADD_REPLACE_REPLY,
+		({ rmp->table_index = htonl (table_index); }));
+}
+
+static void
+vl_api_sonic_ext_pbh_table_del_t_handler (
+  vl_api_sonic_ext_pbh_table_del_t *mp)
+{
+  vl_api_sonic_ext_pbh_table_del_reply_t *rmp;
+  int rv;
+
+  rv = sonic_ext_pbh_table_del (ntohl (mp->table_index));
+
+  REPLY_MACRO (VL_API_SONIC_EXT_PBH_TABLE_DEL_REPLY);
+}
+
+static void
+vl_api_sonic_ext_pbh_interface_attach_detach_t_handler (
+  vl_api_sonic_ext_pbh_interface_attach_detach_t *mp)
+{
+  vnet_interface_main_t *im = &vnet_get_main ()->interface_main;
+  vl_api_sonic_ext_pbh_interface_attach_detach_reply_t *rmp;
+  u32 sw_if_index = ntohl (mp->sw_if_index);
+  int rv = 0;
+
+  if (pool_is_free_index (im->sw_interfaces, sw_if_index))
+    {
+      rv = VNET_API_ERROR_INVALID_SW_IF_INDEX;
+      goto exit;
+    }
+
+  rv = sonic_ext_pbh_interface_attach_detach (
+    sw_if_index, ntohl (mp->table_index), mp->is_attach ? 1 : 0);
+
+exit:
+  REPLY_MACRO (VL_API_SONIC_EXT_PBH_INTERFACE_ATTACH_DETACH_REPLY);
 }
 
 /* API definitions */
