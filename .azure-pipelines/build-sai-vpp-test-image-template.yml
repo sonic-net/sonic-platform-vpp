@@ -23,6 +23,8 @@ jobs:
 - job: BuildSaiVppTestImage
   displayName: Replace VPP
   timeoutInMinutes: ${{ parameters.timeout }}
+  # Show red on the job but end the run partially succeeded, so sairedis can still consume it.
+  continueOnError: true
 
   pool:
     vmImage: ubuntu-22.04

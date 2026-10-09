@@ -92,6 +92,10 @@ The Azure pipeline builds the Trixie VPP packages from the current commit and te
 
 By default, the pipeline selects the latest successful (or partially successful) `Azure.sonic-sairedis` master artifact. Set the optional `sairedis_run_id` pipeline parameter to an Azure build ID to validate against a specific sairedis image. `TestSaiVpp` runs the test container with `--privileged`, so CI for pull requests from forks should only run after maintainer approval.
 
+A failure in `BuildSaiVppTestImage` or `TestSaiVpp` shows as a red check on that job, but does not fail the run: the overall check stays green and the run ends partially succeeded. sairedis selects the latest successful or partially successful platform-vpp master run, so it still picks up VPP changes that break the SAI tests. A red SAI check on a pull request means the change is not compatible with the current sairedis and needs a sairedis follow-up.
+
+For an intentional breaking change, prepare the sairedis fix first and validate the pair before merging: in the sairedis pull request, temporarily set the `vpp_run_id` default in `azure-pipelines.yml` to the platform-vpp pull request's Azure build ID (and, optionally, set `sairedis_run_id` in the platform-vpp pull request to the sairedis pull request's build ID). Remove the `sairedis_run_id` pin, if any, and merge the platform-vpp change, then remove the `vpp_run_id` override from the sairedis pull request so it runs against the new VPP master build.
+
 # Troubleshooting
 
 http(s)_proxy driven make fails sometimes with package download failure. It says hash mismatch. This may be caused
