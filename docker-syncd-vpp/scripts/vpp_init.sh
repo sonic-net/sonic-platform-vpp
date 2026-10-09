@@ -119,10 +119,11 @@ upd_startup "}"
 sed -i -e "s,VPP_STARTUP_CONFIG,$STARTUP_CFG,g" $TMP_FILE
 
 # The virtio PMD frees TX descriptors only when the ring is nearly full, so every
-# port that has sent a ring's worth of packets keeps that many buffers. Budget a
-# full TX ring per port plus room for its rx ring and the host taps, or a busy
-# switch runs the pool dry and stops punting (LACP, ARP, routing to the host).
-PERPORT_BUF=${PERPORT_BUF:=$((VPP_DPDK_NUM_TX_DESC + 1024))}
+# TX queue that has sent a ring's worth of packets keeps that many buffers. Budget a
+# full TX ring per queue per port plus room for its rx ring and the host taps, or a
+# busy switch runs the pool dry and stops punting (LACP, ARP, routing to the host).
+# With VPP_DPDK_NUM_QUEUES=N the pool, and the hugepages behind it, grow N-fold.
+PERPORT_BUF=${PERPORT_BUF:=$(( ${VPP_DPDK_NUM_QUEUES:-1} * (VPP_DPDK_NUM_TX_DESC + 1024) ))}
 TOTBUF=$((PERPORT_BUF * SONIC_NUM_PORTS))
 
 echo "buffers {" >> $TMP_FILE
