@@ -130,6 +130,7 @@ typedef enum
   _ (HOST_XC, host_xc, "host-xc", 1, VPP)                                     \
   _ (DROP_MEMBER_STATS, drop_member_stats, "drop-member-stats", 1, VPP)       \
   _ (ND_PUNT, nd_punt, "nd-punt", 1, VPP)                                     \
+  _ (COPP, copp, "copp", 1, VPP)                                               \
   _ (IP2ME, ip2me, "ip2me", 1, SAIVPP)                                        \
   _ (L2_TRAP_FIXUP, l2_trap_fixup, "l2-trap-fixup", 1, SAIVPP)                \
   _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)
@@ -384,6 +385,7 @@ int sonic_ext_acl_deferred_mirror_stamp (vlib_buffer_t *b, u32 rx_sw_if_index,
  * TAP sw_if_index.
  */
 void sonic_ext_copp_ifout_enable_disable (u32 sw_if_index, int enable);
+void sonic_ext_copp_udld_enable (vlib_main_t *vm);
 
 /*
  * look up an entry by wire ethertype/length value.
