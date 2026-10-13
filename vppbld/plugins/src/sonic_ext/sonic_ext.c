@@ -510,7 +510,7 @@ sonic_ext_lcp_pair_add_cb (lcp_itf_pair_t *lip)
   if (sem->aggr_tap_redirect_enabled
       && sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 1);
-  if (!sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
+  if (sem->copp && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 1);
 }
 
@@ -528,7 +528,7 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
   if (sem->aggr_tap_redirect_enabled
       && sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 0);
-  if (!sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
+  if (sem->copp && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 0);
 }
 
@@ -794,10 +794,6 @@ sonic_ext_init (vlib_main_t *vm)
 
   sonic_ext_register_acl_deferred_mirror ();
 
-  lcp_itf_pair_walk (sonic_ext_copp_ifout_walk_enable_cb, NULL);
-  vnet_feature_enable_disable ("ip4-punt", "sonic-ext-copp-ip2me", 0, 1, 0, 0);
-  vnet_feature_enable_disable ("ip6-punt", "sonic-ext-copp-ip2me-ip6", 0, 1, 0, 0);
-
   return 0;
 }
 
@@ -828,6 +824,16 @@ sonic_ext_apply_config (vlib_main_t *vm)
   if (sem->nd_punt)
     sonic_ext_set_nd_punt (1);
 
+  if (sem->copp)
+    {
+      lcp_itf_pair_walk (sonic_ext_copp_ifout_walk_enable_cb, NULL);
+      vnet_feature_enable_disable ("ip4-punt", "sonic-ext-copp-ip2me", 0, 1,
+                                   0, 0);
+      vnet_feature_enable_disable ("ip6-punt", "sonic-ext-copp-ip2me-ip6", 0,
+                                   1, 0, 0);
+      sonic_ext_copp_udld_enable (vm);
+    }
+
   /* Nothing to wire for these -- saivpp does it, once it has asked.  Logged
    * so an old saivpp that never asks does not make the setting look applied. */
 #define _(symbol, field, name, default_enabled, owner)                        \
@@ -839,4 +845,6 @@ sonic_ext_apply_config (vlib_main_t *vm)
   return 0;
 }
 
-VLIB_MAIN_LOOP_ENTER_FUNCTION (sonic_ext_apply_config);
+VLIB_MAIN_LOOP_ENTER_FUNCTION (sonic_ext_apply_config) = {
+  .runs_before = VLIB_INITS ("start_workers"),
+};

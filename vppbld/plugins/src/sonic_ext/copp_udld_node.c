@@ -31,7 +31,7 @@
  *
  * This node plugs that one dead end: registered via
  * snap_register_input_protocol() (Cisco OUI,
- * unidirectional_link_detection) in sonic_ext_copp_udld_init(), so
+ * unidirectional_link_detection) in sonic_ext_copp_udld_enable(), so
  * only genuine SNAP-encapsulated Cisco UDLD reaches it -- llc-input
  * must first accept LLC_PROTOCOL_snap and hand off to snap-input
  * before this registration is even consulted. On a match, the node:
@@ -229,14 +229,10 @@ VLIB_REGISTER_NODE (sonic_ext_copp_udld_node) = {
  * anything reaching this node must have structurally matched real
  * UDLD's LLC/SNAP/Cisco-OUI framing already.
  */
-static clib_error_t *
-sonic_ext_copp_udld_init (vlib_main_t *vm)
+void
+sonic_ext_copp_udld_enable (vlib_main_t *vm)
 {
   snap_register_input_protocol (vm, "sonic-ext-copp-udld", IEEE_OUI_cisco,
 				SNAP_cisco_unidirectional_link_detection,
 				sonic_ext_copp_udld_node.index);
-
-  return 0;
 }
-
-VLIB_INIT_FUNCTION (sonic_ext_copp_udld_init);

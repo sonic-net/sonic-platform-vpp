@@ -67,3 +67,5 @@
 #     work here: by the time a packet reaches ip4-drop, ip4-icmp-error has
 #     already unconditionally sent the ICMP reply.
 0021-ip4-redirect-ttl-expired-to-copp-punt-hook.patch
+# 23. ip: 'no-local-src-check' startup config option.
+0023-ip-add-no-local-src-check-startup-config-option.patch
