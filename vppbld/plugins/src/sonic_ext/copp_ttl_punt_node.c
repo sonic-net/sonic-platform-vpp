@@ -243,7 +243,7 @@ __clib_export int
 sonic_ext_ttl_error_should_punt (vlib_buffer_t *b)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
-  return sem->copp_ttl_punt_enabled != 0;
+  return sem->copp && sem->copp_ttl_punt_enabled;
 }
 
 int
