@@ -1,0 +1,78 @@
+From d387618cd6f57bf2f96b38f2615e7778ea3f6067 Mon Sep 17 00:00:00 2001
+From: Jerome Tollet <jtollet@cisco.com>
+Date: Sat, 12 Sep 2026 13:56:46 +0200
+Subject: [PATCH] tests: extend BFD peer detection window
+
+The BFD tests emulate the remote peer synchronously in Python. Loaded
+runners have delayed that process by almost two seconds while the
+negotiated detection time was only 900 ms. VPP then correctly marks the
+session down and later assertions report unrelated state, event, and
+discriminator failures.
+
+Use a detection multiplier of ten at both ends of test sessions. This
+gives control packets a three-second detection window and gives echo
+tests more scheduling margin without changing the 300 ms control packet
+interval. Keep the lower multiplier in the test that requires detection
+to precede a three-second transmit interval.
+
+Type: fix
+Change-Id: I5b90b13335b73a01272259881a8f6eeb9489c131
+Signed-off-by: Jerome Tollet <jtollet@cisco.com>
+---
+ test/bfd.py      | 4 +++-
+ test/test_bfd.py | 6 ++++--
+ 2 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/test/bfd.py b/test/bfd.py
+index e37466cd247f..a818158005e8 100644
+--- a/test/bfd.py
++++ b/test/bfd.py
+@@ -21,6 +21,8 @@
+ BFD_UDP_SH_PORT = 3784
+ BFD_UDP_MH_PORT = 4784
+ BFD_UDP_DEFAULT_TOS = 192
++# The synchronous Python peer needs room for runner scheduling delays.
++BFD_TEST_DETECT_MULT = 10
+ 
+ 
+ class BFDDiagCode(NumericConstant):
+@@ -264,7 +266,7 @@ def __init__(
+         af=AF_INET,
+         desired_min_tx=300000,
+         required_min_rx=300000,
+-        detect_mult=3,
++        detect_mult=BFD_TEST_DETECT_MULT,
+         sha1_key=None,
+         bfd_key_id=None,
+         is_tunnel=False,
+diff --git a/test/test_bfd.py b/test/test_bfd.py
+index 82ddda64b8c9..4cbfd886b8ae 100644
+--- a/test/test_bfd.py
++++ b/test/test_bfd.py
+@@ -32,6 +32,7 @@
+     BFD_UDP_SH_PORT,
+     BFD_UDP_MH_PORT,
+     BFD_UDP_DEFAULT_TOS,
++    BFD_TEST_DETECT_MULT,
+ )
+ from framework import VppTestCase
+ from asfframework import (
+@@ -598,7 +599,7 @@ def __init__(
+         test,
+         interface,
+         af,
+-        detect_mult=3,
++        detect_mult=BFD_TEST_DETECT_MULT,
+         sha1_key=None,
+         bfd_key_id=None,
+         our_seq_number=None,
+@@ -1284,7 +1285,8 @@ def test_large_required_min_rx(self):
+         bfd_session_up(self)
+         p = wait_for_bfd_packet(self)
+         interval = 3000000
+-        self.test_session.update(required_min_rx=interval)
++        # Keep the detection timeout below the requested transmit interval.
++        self.test_session.update(required_min_rx=interval, detect_mult=3)
+         self.test_session.send_packet()
+         time_mark = time.time()
+         count = 0
