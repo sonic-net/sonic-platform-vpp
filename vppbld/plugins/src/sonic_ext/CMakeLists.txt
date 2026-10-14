@@ -33,6 +33,8 @@ add_vpp_plugin(sonic_ext
   sonic_ext_vnet_buf.c
   pbh.c
   pbh_node.c
+  ip4_loopback_node.c
+  ip6_loopback_node.c
 
   API_FILES
   sonic_ext.api
