@@ -72,9 +72,6 @@ CONFIGURED_ARCH ?= amd64
 CI_DEST ?= $(CURDIR)/artifacts
 CI_BUILD_STAMP = $(CURDIR)/.ci-build.stamp
 CI_TEST_JOBS ?= 2
-# Re-run only the failed test classes, to absorb upstream infra flakes such as
-# a VPP API connect timeout in setUpClass on a loaded agent.
-CI_TEST_RETRIES ?= 1
 # Fixed so the CI debs and their library names (libvppinfra.so.$(CI_VPP_VERSION))
 # do not change when vpp_version moves; the SAI UT image depends on them.
 CI_VPP_VERSION ?= 1.0.0
@@ -204,7 +201,6 @@ ci-test: ci-build ci-test-deps ci-test-preflight
 	pushd $(VPP_REPO_DIR)
 	env WORKSPACE=$(CI_TEST_LOGS) \
 		make UNATTENDED=y PLATFORM=vpp TEST_JOBS=$(CI_TEST_JOBS) \
-		     RETRIES=$(CI_TEST_RETRIES) \
 		     EXTERN_TESTS=$(CI_PLUGIN_TESTS) \
 		     COMPRESS_FAILED_TEST_LOGS=yes test
 	popd
