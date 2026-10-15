@@ -424,6 +424,23 @@ class TestSonicExtL2Punt(VppTestCase):
             return p[Dot1Q].type != LLDP_ETHERTYPE
         return p[Ether].type != LLDP_ETHERTYPE
 
+    @staticmethod
+    def _not_from(src_mac):
+        """Drop everything not sourced by *src_mac*.
+
+        The Linux side of the LCP taps emits its own traffic -- IPv6 DAD
+        neighbour solicitations for the link-local address, MLD reports, ...
+        -- which VPP receives on the tap and floods through the bridge
+        domain out of the pg members.  is_ipv6_misc(), the pg default
+        filter, does not cover neighbour discovery, so filter on the source
+        MAC of the frame under test instead.
+        """
+
+        def filter_out_fn(p):
+            return p[Ether].src != src_mac
+
+        return filter_out_fn
+
     #
     # helpers
     #
@@ -448,9 +465,9 @@ class TestSonicExtL2Punt(VppTestCase):
                 expected_count=1, timeout=5, filter_out_fn=filter_out_fn
             )
             for member, expect_tagged in flood_to:
-                # Kernel IPv6 DAD/ND from the LCP taps also reaches the phys
-                # (via the BVI flood or the tap's own xc) at uncontrolled times.
-                flooded = member.get_capture(1, filter_out_fn=filter_out_fn)
+                flooded = member.get_capture(
+                    1, filter_out_fn=self._not_from(pkt[Ether].src)
+                )
                 self._assert_flooded(pkt, flooded[0], member, expect_tagged)
         finally:
             # Nothing else dumps the trace for us: the send_and_expect helpers

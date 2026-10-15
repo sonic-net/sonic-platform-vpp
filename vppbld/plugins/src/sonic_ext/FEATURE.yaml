@@ -7,6 +7,7 @@ features:
   - copp-ifout: per-ethertype CoPP rate policing of punted traffic (ARP/LACP/LLDP/UDLD/TTL_ERROR) at linux-cp TAP egress
   - copp-ip2me: CoPP identifier IP2ME/SNMP/SSH traffic on the ip4-punt arc
   - copp-udld: CoPP identifier for UDLD via real LLC/SNAP dispatch
+  - iface-loopback: drop and count routed hairpin packets (RIF loopback packet action) whose egress interface equals their ingress interface
 description: "VPP extensions for SONiC features"
 state: experimental
 properties: [API, CLI]

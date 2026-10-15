@@ -222,6 +222,106 @@ sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable)
 }
 
 /*
+ * RIF loopback (hairpin) packet action. The SAIVPP layer calls this from its
+ * SAI_ROUTER_INTERFACE_ATTR_LOOPBACK_PACKET_ACTION handler. The per-interface
+ * action is stored in loopback_action_by_sw_if_index and the
+ * sonic-ext-ip4/ip6-loopback output-arc nodes are enabled only while the
+ * action is DROP, so a FORWARD (default) interface pays zero per-packet cost.
+ * Gated by the iface_loopback feature toggle, consistent with the other
+ * SAIVPP-owned sonic-ext features.
+ */
+int
+sonic_ext_iface_loopback_set_action (u32 sw_if_index, u8 action)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  int enable = (action == SONIC_EXT_LOOPBACK_ACTION_DROP);
+  u8 prev;
+  int rv;
+
+  /* Reject anything that is not one of the two defined actions, so an
+   * out-of-range value can never be stored and then mis-read as FORWARD. */
+  if (action != SONIC_EXT_LOOPBACK_ACTION_FORWARD &&
+      action != SONIC_EXT_LOOPBACK_ACTION_DROP)
+    return VNET_API_ERROR_INVALID_VALUE;
+
+  /* Feature globally off (sonic-ext { iface-loopback off }): behave like the
+   * other SAIVPP-owned features and do not wire anything. */
+  if (!sem->iface_loopback)
+    {
+      if (enable)
+	clib_warning ("sonic-ext: iface-loopback off, ignoring DROP on "
+		      "sw_if_index %u",
+		      sw_if_index);
+      return 0;
+    }
+
+  /* loopback_action_by_sw_if_index is written only here, from the main/API
+   * thread. The ip4/ip6-loopback nodes read it on worker threads, but
+   * vnet_feature_enable_disable() below performs a worker barrier sync, so the
+   * vector growth/update is visible before the feature (and thus the node) is
+   * enabled on this interface. */
+  vec_validate_init_empty (sem->loopback_action_by_sw_if_index, sw_if_index,
+			   SONIC_EXT_LOOPBACK_ACTION_FORWARD);
+  prev = sem->loopback_action_by_sw_if_index[sw_if_index];
+
+  /* Idempotent: VPP feature enable/disable is ref-counted, so a repeated SET
+   * to the same action (e.g. a SAI attribute replay) would enable the
+   * output-arc feature more than once and a single later disable would leave
+   * the drop node installed. Only toggle the arcs on a real FORWARD<->DROP
+   * transition. */
+  if (prev == action)
+    return 0;
+
+  /* Set the action before enabling so the node sees DROP the moment the arc
+   * is live; on DROP->FORWARD the node keeps forwarding until it is disabled. */
+  sem->loopback_action_by_sw_if_index[sw_if_index] = action;
+
+  rv = vnet_feature_enable_disable ("ip4-output", "sonic-ext-ip4-loopback",
+				    sw_if_index, enable, 0, 0);
+  if (rv)
+    {
+      sem->loopback_action_by_sw_if_index[sw_if_index] = prev;
+      return rv;
+    }
+
+  rv = vnet_feature_enable_disable ("ip6-output", "sonic-ext-ip6-loopback",
+				    sw_if_index, enable, 0, 0);
+  if (rv)
+    {
+      /* Roll back the ip4 arc and the stored action to avoid a half-enabled
+       * state. */
+      vnet_feature_enable_disable ("ip4-output", "sonic-ext-ip4-loopback",
+				   sw_if_index, !enable, 0, 0);
+      sem->loopback_action_by_sw_if_index[sw_if_index] = prev;
+    }
+
+  return rv;
+}
+
+/*
+ * On interface delete, reset the loopback action so a recycled sw_if_index
+ * cannot inherit a stale DROP. The output-arc features themselves are torn
+ * down by VPP when the interface goes away.
+ */
+static clib_error_t *
+sonic_ext_iface_loopback_sw_if_add_del (vnet_main_t *vnm, u32 sw_if_index,
+					u32 is_add)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  (void) vnm;
+
+  if (!is_add
+      && sw_if_index < vec_len (sem->loopback_action_by_sw_if_index))
+    sem->loopback_action_by_sw_if_index[sw_if_index] =
+      SONIC_EXT_LOOPBACK_ACTION_FORWARD;
+
+  return 0;
+}
+
+VNET_SW_INTERFACE_ADD_DEL_FUNCTION (sonic_ext_iface_loopback_sw_if_add_del);
+
+
+/*
  * Is `phy_sw_if_index` a BVI (bridge-virtual interface)?  Used by
  * the aggregate-detection helper.  Distinct from is_aggregate so
  * that future bond support can be added to is_aggregate without
