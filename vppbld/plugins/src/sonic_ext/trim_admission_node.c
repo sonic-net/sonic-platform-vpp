@@ -127,7 +127,11 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
        * below only when we divert a congested eligible packet to trim. */
       vnet_feature_next (&next0, b[0]);
 
-      if (PREDICT_FALSE (!sem->trim_configured))
+      /* Operator force-off (`sonic-ext { trim disable }`) or no global trim
+       * policy pushed yet: bypass at the first check so a disabled feature
+       * costs only this branch. sem->trim defaults on; trimming still only
+       * activates once SAI pushes a policy (sem->trim_configured). */
+      if (PREDICT_FALSE (!sem->trim || !sem->trim_configured))
 	{
 	  n_bypass++;
 	  goto done0;
