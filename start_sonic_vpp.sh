@@ -65,7 +65,8 @@ function start_sonic_vpp_cntr()
     modprobe drop_monitor
 	docker run --rm --init --privileged -e "VPP_DPDK_PORTS=$PORTS" -e "SONIC_NUM_PORTS=${#portlist[@]}" \
 	       -e "DPDK_DISABLE=$DPDK_DISABLE" -e "VPP_CONF_DB=$VPP_CONF_DB" -e "NO_LINUX_NL=$NO_LINUX_NL" \
-	       -e "SONIC_EXT_CONFIG=$SONIC_EXT_CONFIG" --network $netns --name $SONIC_VPP -d $SONIC_VPP_IMG > /dev/null
+	       -e "SONIC_EXT_CONFIG=$SONIC_EXT_CONFIG" -e "VPP_DEFAULT_RX_MODE=$VPP_DEFAULT_RX_MODE" \
+	       --network $netns --name $SONIC_VPP -d $SONIC_VPP_IMG > /dev/null
 #	docker create --rm --init --privileged -e "VPP_DPDK_PORTS=$PORTS" -e "SONIC_NUM_PORTS=${#portlist[@]}" \
 #		-e "DPDK_DISABLE=$DPDK_DISABLE" --network $netns --name $SONIC_VPP $SONIC_VPP_IMG
     fi
@@ -196,6 +197,11 @@ DPDK_DISABLE="y"
 
 UIO_DRV=${UIO_DRV:=vfio-pci}
 NO_LINUX_NL=${NO_LINUX_NL:="y"}
+
+# Empty lets the container's vpp_init.sh use its default (adaptive)
+if [ "x$VPP_DEFAULT_RX_MODE" != "x" ] && ! [[ "$VPP_DEFAULT_RX_MODE" =~ ^(polling|interrupt|adaptive)$ ]]; then
+    error "VPP_DEFAULT_RX_MODE must be polling, interrupt or adaptive, got '$VPP_DEFAULT_RX_MODE'"
+fi
 
 if [ "$CMD" == "start" ]; then
     if [ "$NETPORTS" == "" ]; then
