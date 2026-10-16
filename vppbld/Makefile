@@ -72,6 +72,9 @@ CONFIGURED_ARCH ?= amd64
 CI_DEST ?= $(CURDIR)/artifacts
 CI_BUILD_STAMP = $(CURDIR)/.ci-build.stamp
 CI_TEST_JOBS ?= 2
+# Fixed so the CI debs and their library names (libvppinfra.so.$(CI_VPP_VERSION))
+# do not change when vpp_version moves; the SAI UT image depends on them.
+CI_VPP_VERSION ?= 1.0.0
 
 # Anything that changes what gets built must invalidate the stamp.
 CI_BUILD_INPUTS = vpp_version patches/series $(wildcard patches/*.patch) \
@@ -90,7 +93,7 @@ $(CI_BUILD_STAMP): $(CI_BUILD_INPUTS)
 	pushd $(VPP_REPO_DIR)
 	make UNATTENDED=y PLATFORM=vpp DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n install-dep && \
 	make PLATFORM=vpp DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n install-ext-deps && \
-	make UNATTENDED=y PLATFORM=vpp -j4 DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n pkg-deb
+	CUSTOM_VERSION=$(CI_VPP_VERSION) make UNATTENDED=y PLATFORM=vpp -j4 DPDK_MLX4_PMD=n DPDK_MLX5_PMD=n DPDK_MLX5_COMMON_PMD=n pkg-deb
 	pushd build-root
 	@for target in *_$(CONFIGURED_ARCH).deb; do \
 		cp $$target $(CI_DEST)/; \
