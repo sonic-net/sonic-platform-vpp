@@ -78,3 +78,7 @@
 0022-sonic-pbh-lag-hash.patch
 # 23. ip: 'no-local-src-check' startup config option.
 0023-ip-add-no-local-src-check-startup-config-option.patch
+# 24. tests: give the synchronous BFD peer more scheduling headroom.
+0024-tests-extend-bfd-peer-detection-window.patch
+# 25. tests: tolerate delayed BFD packet capture and event delivery.
+0025-tests-tolerate-delayed-bfd-observations.patch
