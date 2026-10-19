@@ -375,10 +375,10 @@ index 1087190e6..305ab7ae3 100644
    /* Save L2 header position which may be changed due to packet replication */
 diff --git a/test/test_vxlan_decap_any.py b/test/test_vxlan_decap_any.py
 new file mode 100644
-index 000000000..e0b44e618
+index 000000000..439b4d87e
 --- /dev/null
 +++ b/test/test_vxlan_decap_any.py
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,115 @@
 +#!/usr/bin/env python3
 +
 +import unittest
@@ -468,6 +468,7 @@ index 000000000..e0b44e618
 +
 +        decap_any_vni = vni + 1
 +        self._add_tunnel(local, configured_remote, decap_any_vni, decap_any=True)
++        self.send_and_assert_no_replies(self.pg0, [unmatched])
 +        wildcard = self._encapsulate(outer, other_remote, local, decap_any_vni, inner)
 +        received = self.send_and_expect(self.pg0, [wildcard], self.pg1)
 +        self.assertEqual(bytes(received[0]), bytes(inner))
