@@ -1,8 +1,29 @@
+diff --git a/src/plugins/sflow/sflow.api b/src/plugins/sflow/sflow.api
+index 1dc09cb..9b722bc 100644
+--- a/src/plugins/sflow/sflow.api
++++ b/src/plugins/sflow/sflow.api
+@@ -295,3 +295,16 @@ autoreply define sflow_interface_sampling_rate_set {
+     u32 sampling_N [default=10000];
+     vl_api_interface_index_t hw_if_index;
+ };
++
++/** \brief
++    @param client_index - opaque cookie to identify the sender
++    @param context - sender context, to match reply w/ request
++    @param direction - A port's direction
++    @param hw_if_index - hardware interface handle
++*/
++autoreply define sflow_interface_direction_set {
++    u32 client_index;
++    u32 context;
++    u32 direction;
++    vl_api_interface_index_t hw_if_index;
++};
 diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
-index 5b7237c9c..f4283f608 100644
+index 9d7e0d2..d8e371d 100644
 --- a/src/plugins/sflow/sflow.c
 +++ b/src/plugins/sflow/sflow.c
-@@ -792,12 +792,14 @@ void
+@@ -793,12 +793,14 @@ void
  sflow_enable_disable_interface (sflow_main_t *smp,
  				sflow_per_interface_data_t *sfif)
  {
@@ -20,7 +41,7 @@ index 5b7237c9c..f4283f608 100644
    bool drop_on = sfif->sflow_enabled && smp->dropM;
    bool ingress_enabled = (vnet_feature_is_enabled ("device-input", "sflow",
  						   sfif->sw_if_index) == 1);
-@@ -940,6 +942,37 @@ sflow_set_sampling_rate_set (sflow_main_t *smp, u32 sw_if_index, u32 samplingN)
+@@ -941,6 +943,37 @@ sflow_set_sampling_rate_set (sflow_main_t *smp, u32 sw_if_index, u32 samplingN)
  
  }
  
@@ -58,8 +79,28 @@ index 5b7237c9c..f4283f608 100644
  static clib_error_t *
  sflow_sampling_rate_command_fn (vlib_main_t *vm, unformat_input_t *input,
  				vlib_cli_command_t *cmd)
+@@ -1420,6 +1453,19 @@ vl_api_sflow_interface_sampling_rate_set_t_handler (
+   REPLY_MACRO (VL_API_SFLOW_INTERFACE_SAMPLING_RATE_SET_REPLY);
+ }
+ 
++static void
++vl_api_sflow_interface_direction_set_t_handler (
++  vl_api_sflow_interface_direction_set_t *mp)
++{
++  vl_api_sflow_interface_direction_set_reply_t *rmp;
++  sflow_main_t *smp = &sflow_main;
++  int rv;
++
++  rv = sflow_set_direction_set (smp, ntohl (mp->hw_if_index), ntohl (mp->direction));
++
++  REPLY_MACRO (VL_API_SFLOW_INTERFACE_DIRECTION_SET_REPLY);
++}
++
+ static void
+ vl_api_sflow_interface_dump_t_handler (vl_api_sflow_interface_dump_t *mp)
+ {
 diff --git a/src/plugins/sflow/sflow.h b/src/plugins/sflow/sflow.h
-index cf90d9cea..e26896b1a 100644
+index cf90d9c..e26896b 100644
 --- a/src/plugins/sflow/sflow.h
 +++ b/src/plugins/sflow/sflow.h
 @@ -269,4 +269,11 @@ sflow_next_random_skip_if (sflow_main_t *smp, sflow_per_interface_data_t *sfif,
@@ -75,7 +116,7 @@ index cf90d9cea..e26896b1a 100644
 +
  #endif /* __included_sflow_h__ */
 diff --git a/src/plugins/sflow/sflow_common.h b/src/plugins/sflow/sflow_common.h
-index cd73302a8..6055d04f1 100644
+index cd73302..6055d04 100644
 --- a/src/plugins/sflow/sflow_common.h
 +++ b/src/plugins/sflow/sflow_common.h
 @@ -20,6 +20,7 @@ typedef struct
@@ -86,3 +127,234 @@ index cd73302a8..6055d04f1 100644
  } sflow_per_interface_data_t;
  
  /* mirror sflow_direction enum in sflow.api */
+diff --git a/src/plugins/sflow/sflow_test.c b/src/plugins/sflow/sflow_test.c
+index 6c41ffd..675bdd0 100644
+--- a/src/plugins/sflow/sflow_test.c
++++ b/src/plugins/sflow/sflow_test.c
+@@ -362,6 +362,54 @@ api_sflow_interface_sampling_rate_set (vat_main_t *vam)
+   return ret;
+ }
+ 
++static int
++api_sflow_interface_direction_set (vat_main_t *vam)
++{
++  unformat_input_t *i = vam->input;
++  u32 direction = ~0;
++  u32 hw_if_index = ~0;
++  vl_api_sflow_interface_direction_set_t *mp;
++  int ret;
++
++  /* Parse args required to build the message */
++  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
++    {
++      if (unformat (i, "direction rx"))
++	direction = SFLOW_DIRN_INGRESS;
++      else if (unformat (i, "direction tx"))
++	direction = SFLOW_DIRN_EGRESS;
++      else if (unformat (i, "direction both"))
++	direction = SFLOW_DIRN_BOTH;
++      else if (unformat (i, "sw_if_index %d", &hw_if_index))
++	;
++      else
++	break;
++    }
++
++  if (direction == ~0)
++    {
++      errmsg ("missing direction\n");
++      return -99;
++    }
++  if (hw_if_index == ~0)
++    {
++      errmsg ("missing interface\n");
++      return -99;
++    }
++
++  /* Construct the API message */
++  M (SFLOW_INTERFACE_DIRECTION_SET, mp);
++  mp->direction = ntohl (direction);
++  mp->hw_if_index = ntohl (hw_if_index);
++
++  /* send it... */
++  S (mp);
++
++  /* Wait for a reply... */
++  W (ret);
++  return ret;
++}
++
+ static void
+ vl_api_sflow_drop_monitoring_get_reply_t_handler (
+   vl_api_sflow_drop_monitoring_get_reply_t *mp)
+diff --git a/test/test_sflow_interface_direction.py b/test/test_sflow_interface_direction.py
+new file mode 100644
+index 0000000..c28a2f2
+--- /dev/null
++++ b/test/test_sflow_interface_direction.py
+@@ -0,0 +1,166 @@
++#!/usr/bin/env python3
++"""sFlow per-interface sampling direction.
++
++sflow_direction_set() picks one sampling direction for the whole plugin.
++sflow_interface_direction_set() overrides it on a single interface, which is
++what lets one port be sampled on ingress while another is sampled on egress.
++A direction of 0 (undefined) means "no override", i.e. follow the global
++direction again.
++
++Every test forwards a stream pg0 -> pg1, so the ingress arc can only fire on
++pg0 and the egress arc can only fire on pg1.  With the sampling rate pinned
++at 1 the sampled counter is therefore an exact count of the arcs that are
++actually armed.
++"""
++
++import unittest
++from random import randint
++
++from scapy.layers.inet import IP, UDP
++from scapy.layers.l2 import Ether
++from scapy.packet import Raw
++
++from asfframework import VppTestRunner
++from framework import VppTestCase
++
++# mirrors sflow_direction_t in sflow_common.h
++SFLOW_DIRN_UNDEFINED = 0
++SFLOW_DIRN_INGRESS = 1
++SFLOW_DIRN_EGRESS = 2
++SFLOW_DIRN_BOTH = 3
++
++SAMPLE_EVERY_PACKET = 1
++COUNT = 7
++
++
++class SFlowInterfaceDirectionTestCase(VppTestCase):
++    """sFlow per-interface sampling direction"""
++
++    def setUp(self):
++        super().setUp()
++        self.create_pg_interfaces(range(2))
++        for i in self.pg_interfaces:
++            i.admin_up()
++            i.config_ip4()
++            i.resolve_arp()
++        # sample every packet, so the counters below are exact
++        self.vapi.sflow_sampling_rate_set(sampling_N=SAMPLE_EVERY_PACKET)
++        # ... and pin the global direction the overrides are measured against
++        self.vapi.sflow_direction_set(sampling_D=SFLOW_DIRN_INGRESS)
++        for i in self.pg_interfaces:
++            self.vapi.sflow_enable_disable(
++                hw_if_index=i.sw_if_index, enable_disable=True
++            )
++
++    def tearDown(self):
++        for i in self.pg_interfaces:
++            self.vapi.sflow_interface_direction_set(
++                hw_if_index=i.sw_if_index, direction=SFLOW_DIRN_UNDEFINED
++            )
++            self.vapi.sflow_enable_disable(
++                hw_if_index=i.sw_if_index, enable_disable=False
++            )
++            i.admin_down()
++            i.unconfig()
++            i.set_table_ip4(0)
++            i.set_table_ip6(0)
++        super().tearDown()
++
++    def get_sflow_counter(self, counter):
++        """Read one sflow error counter, 0 if it has not been bumped yet."""
++        for line in self.vapi.cli("sh errors").split("\n"):
++            fields = line.split()
++            if len(fields) > 1 and fields[1] == "sflow" and counter in line:
++                return int(fields[0])
++        return 0
++
++    def create_stream(self, src_if, dst_if, count):
++        packets = []
++        for i in range(count):
++            info = self.create_packet_info(src_if, dst_if)
++            payload = self.info_to_payload(info)
++            p = (
++                Ether(dst=src_if.local_mac, src=src_if.remote_mac)
++                / IP(src=src_if.remote_ip4, dst=dst_if.remote_ip4)
++                / UDP(sport=randint(49152, 65535), dport=5678)
++                / Raw(payload)
++            )
++            info.data = p.copy()
++            packets.append(p)
++        return packets
++
++    def forward_and_count_samples(self, count):
++        """Forward *count* packets pg0 -> pg1, return the sampled delta."""
++        ctr_sampled = "sflow packets sampled"
++        sampled = self.get_sflow_counter(ctr_sampled)
++        self.pg0.add_stream(self.create_stream(self.pg0, self.pg1, count))
++        self.pg_enable_capture(self.pg_interfaces)
++        self.pg_start()
++        self.pg1.get_capture(count, timeout=2)
++        # the worker counters are only folded into the node counters by the
++        # sflow-process-samples process, so give it a moment.
++        self.sleep(1.0)
++        return self.get_sflow_counter(ctr_sampled) - sampled
++
++    def test_default_follows_the_global_direction(self):
++        """Without an override only the ingress interface samples"""
++        self.assert_equal(
++            self.forward_and_count_samples(COUNT), COUNT, "sflow packets sampled"
++        )
++
++    def test_egress_override_arms_the_output_interface(self):
++        """A tx override adds egress sampling on the output interface"""
++        self.vapi.sflow_interface_direction_set(
++            hw_if_index=self.pg1.sw_if_index, direction=SFLOW_DIRN_EGRESS
++        )
++        self.assert_equal(
++            self.forward_and_count_samples(COUNT), 2 * COUNT, "sflow packets sampled"
++        )
++
++    def test_egress_override_disarms_the_input_interface(self):
++        """A tx override takes the input interface off the ingress arc"""
++        self.vapi.sflow_interface_direction_set(
++            hw_if_index=self.pg0.sw_if_index, direction=SFLOW_DIRN_EGRESS
++        )
++        self.assert_equal(
++            self.forward_and_count_samples(COUNT), 0, "sflow packets sampled"
++        )
++
++    def test_both_override_arms_the_output_interface(self):
++        """A both override samples the output interface on egress too"""
++        self.vapi.sflow_interface_direction_set(
++            hw_if_index=self.pg1.sw_if_index, direction=SFLOW_DIRN_BOTH
++        )
++        self.assert_equal(
++            self.forward_and_count_samples(COUNT), 2 * COUNT, "sflow packets sampled"
++        )
++
++    def test_undefined_restores_the_global_direction(self):
++        """Clearing the override puts the interface back on the global one"""
++        self.vapi.sflow_interface_direction_set(
++            hw_if_index=self.pg1.sw_if_index, direction=SFLOW_DIRN_EGRESS
++        )
++        self.vapi.sflow_interface_direction_set(
++            hw_if_index=self.pg1.sw_if_index, direction=SFLOW_DIRN_UNDEFINED
++        )
++        self.assert_equal(
++            self.forward_and_count_samples(COUNT), COUNT, "sflow packets sampled"
++        )
++
++    def test_unknown_interface_is_rejected(self):
++        """A direction for a non-existent interface is refused"""
++        with self.vapi.assert_negative_api_retval():
++            self.vapi.sflow_interface_direction_set(
++                hw_if_index=0xFFFF, direction=SFLOW_DIRN_EGRESS
++            )
++
++    def test_unknown_direction_is_rejected(self):
++        """A direction outside the enum is refused"""
++        with self.vapi.assert_negative_api_retval():
++            self.vapi.sflow_interface_direction_set(
++                hw_if_index=self.pg0.sw_if_index, direction=SFLOW_DIRN_BOTH + 1
++            )
++
++
++if __name__ == "__main__":
++    unittest.main(testRunner=VppTestRunner)
