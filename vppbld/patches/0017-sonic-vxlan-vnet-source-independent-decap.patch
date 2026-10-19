@@ -373,3 +373,123 @@ index 1087190e6..305ab7ae3 100644
      }
  
    /* Save L2 header position which may be changed due to packet replication */
+diff --git a/test/test_vxlan_decap_any.py b/test/test_vxlan_decap_any.py
+new file mode 100644
+index 000000000..e0b44e618
+--- /dev/null
++++ b/test/test_vxlan_decap_any.py
+@@ -0,0 +1,114 @@
++#!/usr/bin/env python3
++
++import unittest
++from ipaddress import ip_address
++
++from asfframework import VppTestRunner
++from config import config
++from framework import VppTestCase
++from scapy.layers.inet import IP, UDP
++from scapy.layers.inet6 import IPv6
++from scapy.layers.l2 import Ether
++from scapy.layers.vxlan import VXLAN
++from scapy.packet import Raw
++from vpp_vxlan_tunnel import VppVxlanTunnel
++
++VXLAN_DECAP_ANY_FLAG = 1 << 31
++VXLAN_INPUT_NEXT_L2_INPUT = 1
++VXLAN_DECAP_ANY_L2 = VXLAN_DECAP_ANY_FLAG | VXLAN_INPUT_NEXT_L2_INPUT
++
++
++@unittest.skipIf("vxlan" in config.excluded_plugins, "Exclude VXLAN plugin tests")
++class TestVxlanDecapAny(VppTestCase):
++    """VXLAN source-independent decapsulation"""
++
++    @classmethod
++    def setUpClass(cls):
++        super().setUpClass()
++        try:
++            cls.create_pg_interfaces(range(2))
++
++            for pg in cls.pg_interfaces:
++                pg.admin_up()
++
++            cls.pg0.config_ip4()
++            cls.pg0.resolve_arp()
++            cls.pg0.config_ip6()
++            cls.pg0.resolve_ndp()
++        except Exception:
++            cls.tearDownClass()
++            raise
++
++    def _add_tunnel(self, local, remote, vni, decap_any):
++        tunnel = VppVxlanTunnel(
++            self,
++            src=local,
++            dst=remote,
++            vni=vni,
++            decap_next_index=(
++                VXLAN_DECAP_ANY_L2 if decap_any else VXLAN_INPUT_NEXT_L2_INPUT
++            ),
++        )
++        tunnel.add_vpp_config()
++        tunnel.admin_up()
++        self.vapi.sw_interface_set_l2_xconnect(
++            tunnel.sw_if_index, self.pg1.sw_if_index, enable=1
++        )
++        self.vapi.sw_interface_set_l2_xconnect(
++            self.pg1.sw_if_index, tunnel.sw_if_index, enable=1
++        )
++        return tunnel
++
++    def _encapsulate(self, outer, source, destination, vni, inner):
++        return (
++            Ether(src=self.pg0.remote_mac, dst=self.pg0.local_mac)
++            / outer(src=source, dst=destination)
++            / UDP(sport=12345, dport=4789)
++            / VXLAN(vni=vni, flags=0x8)
++            / inner
++        )
++
++    def _verify_source_independent_decap(self, outer, local, configured_remote, vni):
++        other_remote = str(ip_address(configured_remote) + 1)
++        inner = (
++            Ether(src="00:11:22:33:44:55", dst="00:55:44:33:22:11")
++            / IP(src="192.0.2.1", dst="192.0.2.2")
++            / UDP(sport=1111, dport=2222)
++            / Raw(b"\xa5" * 64)
++        )
++
++        self._add_tunnel(local, configured_remote, vni, decap_any=False)
++        unmatched = self._encapsulate(outer, other_remote, local, vni, inner)
++        self.send_and_assert_no_replies(self.pg0, [unmatched])
++
++        exact = self._encapsulate(outer, configured_remote, local, vni, inner)
++        received = self.send_and_expect(self.pg0, [exact], self.pg1)
++        self.assertEqual(bytes(received[0]), bytes(inner))
++
++        decap_any_vni = vni + 1
++        self._add_tunnel(local, configured_remote, decap_any_vni, decap_any=True)
++        wildcard = self._encapsulate(outer, other_remote, local, decap_any_vni, inner)
++        received = self.send_and_expect(self.pg0, [wildcard], self.pg1)
++        self.assertEqual(bytes(received[0]), bytes(inner))
++
++    def test_ip4_source_independent_decap(self):
++        """IPv4 VXLAN decap-any ignores the outer source"""
++        self._verify_source_independent_decap(
++            IP,
++            self.pg0.local_ip4,
++            self.pg0.remote_ip4,
++            1000,
++        )
++
++    def test_ip6_source_independent_decap(self):
++        """IPv6 VXLAN decap-any ignores the outer source"""
++        self._verify_source_independent_decap(
++            IPv6,
++            self.pg0.local_ip6,
++            self.pg0.remote_ip6,
++            2000,
++        )
++
++
++if __name__ == "__main__":
++    unittest.main(testRunner=VppTestRunner)
