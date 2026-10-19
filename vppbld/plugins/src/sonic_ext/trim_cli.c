@@ -124,6 +124,10 @@ sonic_ext_trim_global_command_fn (vlib_main_t *vm, unformat_input_t *input,
       return 0;
     }
 
+  if (queue != ~0 && queue >= SONIC_EXT_TRIM_MAX_QUEUES)
+    return clib_error_return (0, "queue must be 0..%u",
+			     SONIC_EXT_TRIM_MAX_QUEUES - 1);
+
   if (size != ~0)
     sem->trim_size = size;
   if (dscp != ~0)
@@ -131,7 +135,7 @@ sonic_ext_trim_global_command_fn (vlib_main_t *vm, unformat_input_t *input,
   if (tc != ~0)
     sem->trim_tc = tc;
   if (queue != ~0)
-    sem->trim_queue = queue & (SONIC_EXT_TRIM_MAX_QUEUES - 1);
+    sem->trim_queue = queue;
   if (mode != -1)
     sem->trim_dscp_mode = mode;
   sem->trim_configured = 1;

@@ -65,6 +65,23 @@ sonic_ext_trim_port_get (u32 sw_if_index, int create)
   return vec_elt_at_index (sem->trim_ports, sw_if_index);
 }
 
+static clib_error_t *
+sonic_ext_trim_sw_if_add_del (vnet_main_t *vnm, u32 sw_if_index, u32 is_add)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  (void) vnm;
+
+  /* VPP removes the feature arc; discard our latch and buckets as well so a
+   * recycled interface index starts with no trim configuration. */
+  if (!is_add && sw_if_index < vec_len (sem->trim_ports))
+    clib_memset (&sem->trim_ports[sw_if_index], 0,
+		 sizeof (sem->trim_ports[sw_if_index]));
+
+  return 0;
+}
+
+VNET_SW_INTERFACE_ADD_DEL_FUNCTION (sonic_ext_trim_sw_if_add_del);
+
 int
 sonic_ext_trim_bucket_admit (vlib_main_t *vm, sonic_ext_trim_queue_t *q,
 			     u32 len)
@@ -164,11 +181,17 @@ vl_api_sonic_ext_trim_global_set_t_handler (
 
   if (mp->is_enable)
     {
+      if (mp->trim_queue >= SONIC_EXT_TRIM_MAX_QUEUES)
+	{
+	  rv = VNET_API_ERROR_INVALID_VALUE;
+	  goto done;
+	}
+
       sem->trim_size = ntohs (mp->trim_size);
       sem->trim_dscp_mode = mp->dscp_mode;
       sem->trim_dscp_value = mp->dscp_value & 0x3f;
       sem->trim_tc = mp->tc_value;
-      sem->trim_queue = mp->trim_queue & (SONIC_EXT_TRIM_MAX_QUEUES - 1);
+      sem->trim_queue = mp->trim_queue;
       sem->trim_configured = 1;
     }
   else
@@ -177,6 +200,7 @@ vl_api_sonic_ext_trim_global_set_t_handler (
       sem->trim_size = 0;
     }
 
+done:
   REPLY_MACRO (VL_API_SONIC_EXT_TRIM_GLOBAL_SET_REPLY);
 }
 
@@ -190,9 +214,16 @@ vl_api_sonic_ext_trim_dscp_map_set_t_handler (
   int i;
 
   for (i = 0; i < 64; i++)
-    sem->dscp_to_queue[i] =
-      mp->dscp_to_queue[i] & (SONIC_EXT_TRIM_MAX_QUEUES - 1);
+    if (mp->dscp_to_queue[i] >= SONIC_EXT_TRIM_MAX_QUEUES)
+      {
+	rv = VNET_API_ERROR_INVALID_VALUE;
+	goto done;
+      }
 
+  clib_memcpy (sem->dscp_to_queue, mp->dscp_to_queue,
+	       sizeof (sem->dscp_to_queue));
+
+done:
   REPLY_MACRO (VL_API_SONIC_EXT_TRIM_DSCP_MAP_SET_REPLY);
 }
 

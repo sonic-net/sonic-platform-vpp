@@ -531,6 +531,22 @@ int sonic_ext_trim_bucket_admit (vlib_main_t *vm, sonic_ext_trim_queue_t *q,
  * sonic_ext_init(); sets sonic_ext_main.trim_msg_id_base. */
 clib_error_t *sonic_ext_trim_api_hookup (vlib_main_t *vm);
 
+/* Policy is programmed on physical ports, while VLAN egress keeps the
+ * sub-interface in VLIB_TX. Do not change VLIB_TX: the rewrite/TX path needs it. */
+static_always_inline u32
+sonic_ext_trim_egress_port_sw_if_index (vlib_buffer_t *b)
+{
+  vnet_main_t *vnm = vnet_get_main ();
+  u32 sw_if_index = vnet_buffer (b)->sw_if_index[VLIB_TX];
+
+  if (PREDICT_FALSE (
+	sw_if_index == ~0 ||
+	vnet_get_sw_interface_or_null (vnm, sw_if_index) == 0))
+    return ~0;
+
+  return vnet_get_sup_hw_interface (vnm, sw_if_index)->sw_if_index;
+}
+
 /*
  * ------------------------------------------------------------------
  * Shared L3 classification / DSCP rewrite inlines used by both the

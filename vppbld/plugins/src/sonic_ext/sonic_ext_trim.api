@@ -33,6 +33,8 @@ import "vnet/interface_types.api";
     @param dscp_value - symmetric DSCP applied to the trimmed copy (0..63)
     @param tc_value - traffic class used for the from_tc egress-map lookup
     @param trim_queue - static egress queue used for the trimmed copy (0..7)
+    An enabled policy with an unsupported trim_queue is rejected without
+    changing the previous policy.
 */
 autoreply define sonic_ext_trim_global_set
 {
@@ -52,6 +54,8 @@ autoreply define sonic_ext_trim_global_set
     supplied by SAI-VPP so the plugin does not replicate both maps.  The
     admission shim uses it to classify a packet to its original queue.
     @param dscp_to_queue - 64-entry table, indexed by DSCP, value 0..7
+    The entire table is rejected if any queue is outside 0..7; the previous
+    table remains active.
 */
 autoreply define sonic_ext_trim_dscp_map_set
 {

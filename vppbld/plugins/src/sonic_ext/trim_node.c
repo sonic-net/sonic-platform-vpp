@@ -74,7 +74,8 @@ format_sonic_ext_trim_trace (u8 *s, va_list *args)
 
 #define foreach_sonic_ext_trim_error                                          \
   _ (SENT, "trimmed copies transmitted")                                      \
-  _ (DROP, "trimmed copies dropped (trim queue congested)")
+  _ (DROP, "trimmed copies dropped (trim queue congested)")                    \
+  _ (NO_BUFFERS, "shared packet copy allocation failed")
 
 typedef enum
 {
@@ -96,6 +97,19 @@ typedef enum
   SONIC_EXT_TRIM_NEXT_DROP,
   SONIC_EXT_TRIM_N_NEXT,
 } sonic_ext_trim_next_t;
+
+static_always_inline int
+sonic_ext_trim_buffer_is_shared (vlib_main_t *vm, vlib_buffer_t *b)
+{
+  while (1)
+    {
+      if (b->ref_count > 1)
+	return 1;
+      if (!(b->flags & VLIB_BUFFER_NEXT_PRESENT))
+	return 0;
+      b = vlib_get_buffer (vm, b->next_buffer);
+    }
+}
 
 /* Truncate a (possibly chained) buffer to at most trim_size bytes,
  * freeing any tail buffers. */
@@ -154,7 +168,7 @@ VLIB_NODE_FN (sonic_ext_trim_node)
   u32 n_left_from, *from;
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b;
   u16 nexts[VLIB_FRAME_SIZE], *next;
-  u32 n_sent = 0, n_drop = 0;
+  u32 n_sent = 0, n_drop = 0, n_no_buffers = 0;
   u8 new_dscp = sem->trim_dscp_value;
   u8 trim_queue = sem->trim_queue;
   u16 trim_size = sem->trim_size ? sem->trim_size : 128;
@@ -169,9 +183,29 @@ VLIB_NODE_FN (sonic_ext_trim_node)
     {
       u32 next0 = 0;
       sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b[0]);
-      u32 sw_if_index = vnet_buffer (b[0])->sw_if_index[VLIB_TX];
+      u32 sw_if_index = sonic_ext_trim_egress_port_sw_if_index (b[0]);
       sonic_ext_trim_port_t *port;
       u8 dropped = 0;
+
+      /* A multicast/replicate clone has a private head but shared tail
+       * segments. Take ownership before changing any bytes or chain links. */
+      if (PREDICT_FALSE (sonic_ext_trim_buffer_is_shared (vm, b[0])))
+	{
+	  vlib_buffer_t *copy = vlib_buffer_copy (vm, b[0]);
+	  if (PREDICT_FALSE (copy == 0))
+	    {
+	      dropped = 1;
+	      sem->trim_drop++;
+	      n_no_buffers++;
+	      b[0]->error = node->errors[SONIC_EXT_TRIM_ERROR_NO_BUFFERS];
+	      next0 = SONIC_EXT_TRIM_NEXT_DROP;
+	      goto done0;
+	    }
+	  vlib_buffer_free_one (vm, from[b - bufs]);
+	  from[b - bufs] = vlib_get_buffer_index (vm, copy);
+	  b[0] = copy;
+	  seb = sonic_ext_buffer (copy);
+	}
 
       /* Rewrite DSCP on the full packet, then truncate. */
       sonic_ext_trim_rewrite_dscp (b[0], new_dscp);
@@ -207,6 +241,7 @@ VLIB_NODE_FN (sonic_ext_trim_node)
 	  next0 = SONIC_EXT_TRIM_NEXT_TX;
 	}
 
+    done0:
       next[0] = (u16) next0;
 
       if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
@@ -235,6 +270,9 @@ VLIB_NODE_FN (sonic_ext_trim_node)
   if (n_drop)
     vlib_node_increment_counter (vm, sonic_ext_trim_node.index,
 				 SONIC_EXT_TRIM_ERROR_DROP, n_drop);
+  if (n_no_buffers)
+    vlib_node_increment_counter (vm, sonic_ext_trim_node.index,
+				SONIC_EXT_TRIM_ERROR_NO_BUFFERS, n_no_buffers);
 
   return frame->n_vectors;
 }

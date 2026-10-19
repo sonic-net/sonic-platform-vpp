@@ -137,6 +137,7 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
 	  goto done0;
 	}
 
+      sw_if_index = sonic_ext_trim_egress_port_sw_if_index (b[0]);
       port = sonic_ext_trim_port_get (sw_if_index, 0 /* no create */);
       if (PREDICT_FALSE (port == 0))
 	{
