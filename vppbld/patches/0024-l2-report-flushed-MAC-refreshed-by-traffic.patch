@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Longxiang Lyu <lolv@microsoft.com>
+Date: Mon, 19 Oct 2026 07:20:15 +0000
+Subject: [PATCH] l2: report a flushed MAC refreshed by traffic to the event
+ client
+
+A flush (l2fib_flush_int/bd/all) only bumps a sequence number: the
+entries stay in the L2FIB until the next age scan deletes them and
+reports each deletion to the MAC event client (want_l2_macs_events2).
+Meanwhile l2-fwd already treats them as unknown and floods.
+
+A packet from such a MAC that arrives before the scan reaches its entry
+takes l2-learn's hit-update path instead: the entry gets the current
+sequence number back, so the scan neither deletes nor reports it, and
+nothing else reports it either. A client that drops its copy of the
+L2FIB on a flush, as SONiC does, never learns the MAC again although
+VPP keeps it.
+
+Flag the refreshed entry with LRN_EVT, as a new learn would be, so the
+next scan reports it. Whichever of the scan and the packet comes first,
+the client now ends up with the MAC: either DELETE then ADD, or ADD.
+
+Type: fix
+
+Signed-off-by: Longxiang Lyu <lolv@microsoft.com>
+---
+ src/vnet/l2/l2_learn.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/vnet/l2/l2_learn.c b/src/vnet/l2/l2_learn.c
+index a07d6f02a..c4fc672a4 100644
+--- a/src/vnet/l2/l2_learn.c
++++ b/src/vnet/l2/l2_learn.c
+@@ -139,6 +139,15 @@ l2learn_process (vlib_node_runtime_t * node,
+ 
+       counter_base[L2LEARN_ERROR_HIT_UPDATE] += 1;
+       *count += 1;
++
++      /*
++       * An obsolete sequence number means the entry was flushed and is only
++       * waiting for the ager, which would delete it and report that to the
++       * MAC event client. Refreshing it re-learns the MAC instead, so report
++       * it like a new learn, or the client never hears of the MAC again.
++       */
++      if (dsn && msm->client_pid != 0)
++	l2fib_entry_result_set_LRN_EVT (result0);
+     }
+   else if (result0->raw == ~0)
+     {
+-- 
+2.34.1
+
