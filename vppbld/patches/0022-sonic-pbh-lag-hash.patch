@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yue Gao <yuega2@cisco.com>
+Date: Thu, 2 Oct 2026 00:00:00 -0700
+Subject: bonding: optional per-packet LAG hash override hook
+
+SONiC Policy-Based Hashing computes a member-selection hash from a
+rule-selected set of (possibly inner-header) fields at ingress, and needs
+to hand that value to the bond TX path for a PortChannel next hop.
+
+There is no existing channel for that. bond_tx_hash() materialises an
+array of vlib_buffer_get_current(b) pointers and calls
+bif->hash_func (ptd->data, h, n); the vnet_hash_fn_t signature is
+void (*)(void **p, u32 *h, u32 n) -- no vlib_buffer_t, so a feature-arc
+node upstream cannot communicate with it. Registering a new hash function
+does not help either: bond_create_if() resolves hash_func by hard-coded
+name string per bif->lb enum.
+
+Unlike patch 0011, which adds a whole new hash *algorithm*, PBH needs an
+*override* that keeps the configured algorithm as the fallback: only the
+packets a PBH rule actually matched get a substituted hash.
+
+The hook is deliberately payload-free. sonic_ext is an out-of-tree plugin
+and vlib_buffer_t metadata is a shared, upstream-owned resource:
+vnet_buffer_opaque2_t.unused[] and the VNET_BUFFER_F_AVAIL bits are a
+common pool that upstream features consume over time, so a plugin that
+takes a word or a bit from it has to re-litigate the claim at every uprev
+and can collide with whoever claims it next. The plugin therefore keeps
+its per-packet state in storage it owns outright, and this patch reduces
+to a registration hook: one function pointer and one call site.
+buffer.h is untouched, and so are bond.api and its CRC.
+
+Properties:
+
+  - NULL by default, so stock behaviour is byte-for-byte unchanged and
+    the call site is a permanently predicted-false branch unless a plugin
+    registers.
+  - The guard is evaluated once per *frame*, not once per packet.
+  - hash-eth-l34 and every other registered hash function still run and
+    still produce h[]; the override only replaces selected entries.
+  - No API, no ABI, no CRC change.
+
+b is advanced by the gather loops, so the original base is saved as b0
+and handed to the callback parallel to h[].
+
+Signed-off-by: Yue Gao <yuega2@cisco.com>
+---
+--- a/src/vnet/bonding/node.h
++++ b/src/vnet/bonding/node.h
+@@ -365,6 +365,15 @@
+   u32 actor_state;
+ } lacp_stats_t;
+
++/* Optional LAG-hash override.  The registered vnet_hash_fn_t is handed only
++   packet data pointers, so a feature that has already computed a per-packet
++   member-selection hash upstream has no channel by which to deliver it.  A
++   plugin may register here to substitute entries of h[] after the configured
++   hash function has run; NULL (the default) preserves stock behaviour
++   exactly.  b[] is the frame's buffer array, parallel to h[]. */
++typedef void (*bond_lag_hash_override_fn_t) (vlib_main_t *vm,
++					     vlib_buffer_t **b, u32 *h, u32 n);
++
+ typedef struct
+ {
+   /* pool of bonding interfaces */
+@@ -393,6 +402,9 @@
+   bond_per_thread_data_t *per_thread_data;
+
+   lacp_stats_t **stats;
++
++  /* see bond_lag_hash_override_fn_t */
++  bond_lag_hash_override_fn_t lag_hash_override;
+ } bond_main_t;
+
+ /* bond packet trace capture */
+--- a/src/vnet/bonding/device.c
++++ b/src/vnet/bonding/device.c
+@@ -207,6 +207,7 @@
+ {
+   u32 n_left_from = n_left;
+   void **data;
++  vlib_buffer_t **b0 = b;
+
+   ASSERT (bif->hash_func != 0);
+
+@@ -240,6 +241,12 @@
+     }
+
+   bif->hash_func (ptd->data, h, n_left_from);
++
++  /* Let a registered plugin substitute per-packet hashes.  Inert unless
++     something registered: one predicted-false test per frame. */
++  if (PREDICT_FALSE (bond_main.lag_hash_override != 0))
++    bond_main.lag_hash_override (vm, b0, h, n_left_from);
++
+   vec_reset_length (ptd->data);
+ }
+
