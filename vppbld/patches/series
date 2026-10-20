@@ -82,5 +82,6 @@
 #     deletes it to the MAC event client (want_l2_macs_events2), like a new
 #     learn. Otherwise SONiC, which drops flushed MACs from its FDB, never
 #     learns the MAC again although VPP keeps it (e.g. after
-#     "sonic-clear fdb all").
+#     "sonic-clear fdb all"). Includes a test in test_l2_fib.py.
+#     Upstream: https://gerrit.fd.io/r/c/vpp/+/47191
 0024-l2-report-flushed-MAC-refreshed-by-traffic.patch

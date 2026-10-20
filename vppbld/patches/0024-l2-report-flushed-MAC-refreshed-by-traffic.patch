@@ -1,31 +1,39 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Longxiang Lyu <lolv@microsoft.com>
 Date: Mon, 19 Oct 2026 07:20:15 +0000
-Subject: [PATCH] l2: report a flushed MAC refreshed by traffic to the event
- client
+Subject: [PATCH] l2: report flushed MACs refreshed by traffic
 
-A flush (l2fib_flush_int/bd/all) only bumps a sequence number: the
-entries stay in the L2FIB until the next age scan deletes them and
-reports each deletion to the MAC event client (want_l2_macs_events2).
-Meanwhile l2-fwd already treats them as unknown and floods.
+A flush (l2fib_flush_int/bd/all) only obsoletes the entries' sequence
+number: the entries stay in the L2FIB until the next age scan deletes
+them and reports each deletion to the MAC event client
+(want_l2_macs_events2). Meanwhile l2-fwd already treats them as unknown
+and floods.
 
 A packet from such a MAC that arrives before the scan reaches its entry
 takes l2-learn's hit-update path instead: the entry gets the current
 sequence number back, so the scan neither deletes nor reports it, and
-nothing else reports it either. A client that drops its copy of the
-L2FIB on a flush, as SONiC does, never learns the MAC again although
-VPP keeps it.
+nothing else reports it either. A client that forgets the MACs it
+flushes, as SONiC's FDB does, never hears of such a MAC again although
+VPP keeps it. The scan walks every bucket and pauses every 20 us, so
+this catches most MACs that keep sending.
 
 Flag the refreshed entry with LRN_EVT, as a new learn would be, so the
 next scan reports it. Whichever of the scan and the packet comes first,
 the client now ends up with the MAC: either DELETE then ADD, or ADD.
 
+The test keeps 30 MACs sending across a bridge domain flush and checks
+that every MAC the bridge domain has afterwards was reported as learned
+after the flush. Without the fix, it fails for the MACs whose stale
+entry was refreshed before the scan reached it.
+
 Type: fix
 
+Change-Id: I4909c59889b6faf09bac91da4acc1d2343182629
 Signed-off-by: Longxiang Lyu <lolv@microsoft.com>
 ---
- src/vnet/l2/l2_learn.c | 9 +++++++++
- 1 file changed, 9 insertions(+)
+ src/vnet/l2/l2_learn.c |  9 ++++++
+ test/test_l2_fib.py    | 64 ++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 73 insertions(+)
 
 diff --git a/src/vnet/l2/l2_learn.c b/src/vnet/l2/l2_learn.c
 index a07d6f02a..c4fc672a4 100644
@@ -47,6 +55,81 @@ index a07d6f02a..c4fc672a4 100644
      }
    else if (result0->raw == ~0)
      {
+diff --git a/test/test_l2_fib.py b/test/test_l2_fib.py
+index fb964ec8a..2c8c41757 100644
+--- a/test/test_l2_fib.py
++++ b/test/test_l2_fib.py
+@@ -607,6 +607,70 @@ class TestL2fib(VppTestCase):
+             self.assertLess(len(e), ev_macs * 10)
+         self.assertEqual(len(learned_macs ^ macs), 0)
+ 
++    def test_l2_fib_mac_learn_evs_flush(self):
++        """L2 FIB - mac learning events for MACs refreshed after a flush"""
++        bd1 = 1
++        hosts = self.create_hosts(10, subnet=41)
++        macs = {
++            h.bin_mac
++            for swif in self.bd_ifs(bd1)
++            for h in hosts[self.pg_interfaces[swif].sw_if_index]
++        }
++        action = VppEnum.vl_api_mac_event_action_t.MAC_EVENT_ACTION_API_ADD
++
++        def collect_learned(expected):
++            learned = set()
++            for _ in range(10):
++                self.virtual_sleep(1)
++                learned |= {
++                    e.mac[i].mac_addr.packed
++                    for e in self.vapi.collect_events()
++                    for i in range(e.n_macs)
++                    if e.mac[i].action == action
++                }
++                if expected <= learned:
++                    break
++            return learned
++
++        self.vapi.l2fib_set_scan_delay(scan_delay=10)
++        self.vapi.want_l2_macs_events2()
++        self.sleep(1)
++        self.learn_hosts(bd1, hosts)
++        self.assertEqual(macs - collect_learned(macs), set())
++
++        # A flush only obsoletes the entries' sequence number, and the scan
++        # that then deletes them takes a while: keep the hosts sending, so
++        # that most of them refresh their stale entry before the scan gets
++        # to it.
++        for swif in self.bd_ifs(bd1):
++            pg_if = self.pg_interfaces[swif]
++            pg_if.add_stream(
++                [
++                    Ether(dst="ff:ff:ff:ff:ff:ff", src=host.mac)
++                    for host in hosts[pg_if.sw_if_index]
++                ],
++                nb_replays=2000,
++            )
++            self.vapi.cli(
++                "packet-generator configure %s rate 2000" % pg_if.get_cap_name()
++            )
++        self.vapi.cli("packet-generator enable")
++        self.sleep(0.2)
++        self.vapi.l2fib_flush_bd(bd_id=bd1)
++        self.pg_start(trace=False)
++
++        # Every MAC the bridge domain knows after the flush was learned again
++        # after it, so it must have been reported as learned again.
++        fib_macs = macs & {
++            e.mac.packed
++            for e in self.vapi.l2_fib_table_dump(bd_id=bd1)
++            if not e.static_mac
++        }
++        learned_macs = collect_learned(fib_macs)
++        self.vapi.want_l2_macs_events2(enable_disable=0)
++        self.assertEqual(fib_macs, macs)
++        self.assertEqual(fib_macs - learned_macs, set())
++
+ 
+ if __name__ == "__main__":
+     unittest.main(testRunner=VppTestRunner)
 -- 
 2.34.1
 
