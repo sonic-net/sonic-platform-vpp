@@ -134,12 +134,19 @@ echo "}" >> $TMP_FILE
 add_sonic_ext_config
 
 if [ "$DPDK_DISABLE" != "y" ]; then
-    if [ $IDX -le 6 ]; then
-	NHPG=12
-    else
-	NHPG=$((IDX * 2))
+    # Reserve 2 MB hugepages for the buffer pool. With the DPDK plugin a buffer takes
+    # 2496 bytes (the rte_mbuf and mempool header, vlib_buffer_t with its 128 bytes of
+    # headroom, and 2048 of data, rounded to cache lines), and VPP doesn't split one
+    # across pages, so a page holds 840. VPP raises nr_hugepages to fit the pool on its
+    # own, but only by what the pool needs and before DPDK initializes; the extra 32
+    # pages leave room for what DPDK then takes from hugepages (descriptor rings, its
+    # heap). Don't lower a reservation the host already made.
+    HPG_FILE=/sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+    BUF_PER_HPG=$((2097152 / 2496))
+    NHPG=$(( (TOTBUF + BUF_PER_HPG - 1) / BUF_PER_HPG + 32 ))
+    if [ $NHPG -gt $(cat $HPG_FILE) ]; then
+	echo $NHPG > $HPG_FILE
     fi
-    echo $NHPG > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
 fi
 
 cat $TMP_FILE
