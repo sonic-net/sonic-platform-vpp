@@ -78,3 +78,10 @@
 0022-sonic-pbh-lag-hash.patch
 # 23. ip: 'no-local-src-check' startup config option.
 0023-ip-add-no-local-src-check-startup-config-option.patch
+# 24. l2: report a flushed MAC that traffic refreshes before the ager
+#     deletes it to the MAC event client (want_l2_macs_events2), like a new
+#     learn. Otherwise SONiC, which drops flushed MACs from its FDB, never
+#     learns the MAC again although VPP keeps it (e.g. after
+#     "sonic-clear fdb all"). Includes a test in test_l2_fib.py.
+#     Upstream: https://gerrit.fd.io/r/c/vpp/+/47191
+0024-l2-report-flushed-MAC-refreshed-by-traffic.patch
