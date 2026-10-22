@@ -81,11 +81,26 @@ if [ "x$VPP_WORKERS" != "x" ]; then
 fi
 
 IDX=0
+VPP_DPDK_NUM_TX_DESC=${VPP_DPDK_NUM_TX_DESC:=4096}
 upd_startup """dpdk {
 	dev default {
-	    num-tx-desc 4096
+	    num-tx-desc ${VPP_DPDK_NUM_TX_DESC}
 	}
 	"""
+
+# When VPP_DPDK_NUM_QUEUES is set in syncd_vpp_env, emit per-port
+# num-rx-queues / num-tx-queues. Required for QEMU multi-queue tap
+# setups: if the host tap is multi-queue but the guest's DPDK
+# virtio-pmd only opens one queue, ~99% of unicast drops at the
+# host tap layer (broadcasts replicate to all queues, so ARP works
+# but pings don't).
+PER_PORT_QUEUE_OPTS=""
+if [ -n "$VPP_DPDK_NUM_QUEUES" ]; then
+	PER_PORT_QUEUE_OPTS="
+	    num-rx-queues ${VPP_DPDK_NUM_QUEUES}
+	    num-tx-queues ${VPP_DPDK_NUM_QUEUES}"
+fi
+
 for port in ${portlist[@]};
 do
     if eval ip link show type veth dev $port >& /dev/null; then
@@ -94,7 +109,7 @@ do
     fi
     upd_startup """
 	dev $port {
-	    name ${HWIFNAME}${IDX}
+	    name ${HWIFNAME}${IDX}${PER_PORT_QUEUE_OPTS}
 	}
 	"""
     IDX=$((IDX + 1))
@@ -103,7 +118,12 @@ upd_startup "}"
 
 sed -i -e "s,VPP_STARTUP_CONFIG,$STARTUP_CFG,g" $TMP_FILE
 
-PERPORT_BUF=${PERPORT_BUF:=2048}
+# The virtio PMD frees TX descriptors only when the ring is nearly full, so every
+# TX queue that has sent a ring's worth of packets keeps that many buffers. Budget a
+# full TX ring per queue per port plus room for its rx ring and the host taps, or a
+# busy switch runs the pool dry and stops punting (LACP, ARP, routing to the host).
+# With VPP_DPDK_NUM_QUEUES=N the pool, and the hugepages behind it, grow N-fold.
+PERPORT_BUF=${PERPORT_BUF:=$(( ${VPP_DPDK_NUM_QUEUES:-1} * (VPP_DPDK_NUM_TX_DESC + 1024) ))}
 TOTBUF=$((PERPORT_BUF * SONIC_NUM_PORTS))
 
 echo "buffers {" >> $TMP_FILE
@@ -114,12 +134,19 @@ echo "}" >> $TMP_FILE
 add_sonic_ext_config
 
 if [ "$DPDK_DISABLE" != "y" ]; then
-    if [ $IDX -le 6 ]; then
-	NHPG=12
-    else
-	NHPG=$((IDX * 2))
+    # Reserve 2 MB hugepages for the buffer pool. With the DPDK plugin a buffer takes
+    # 2496 bytes (the rte_mbuf and mempool header, vlib_buffer_t with its 128 bytes of
+    # headroom, and 2048 of data, rounded to cache lines), and VPP doesn't split one
+    # across pages, so a page holds 840. VPP raises nr_hugepages to fit the pool on its
+    # own, but only by what the pool needs and before DPDK initializes; the extra 32
+    # pages leave room for what DPDK then takes from hugepages (descriptor rings, its
+    # heap). Don't lower a reservation the host already made.
+    HPG_FILE=/sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+    BUF_PER_HPG=$((2097152 / 2496))
+    NHPG=$(( (TOTBUF + BUF_PER_HPG - 1) / BUF_PER_HPG + 32 ))
+    if [ $NHPG -gt $(cat $HPG_FILE) ]; then
+	echo $NHPG > $HPG_FILE
     fi
-    echo $NHPG > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
 fi
 
 cat $TMP_FILE
