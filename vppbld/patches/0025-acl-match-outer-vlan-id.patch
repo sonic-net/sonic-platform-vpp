@@ -1,0 +1,880 @@
+From: SONiC-VPP maintainers
+Subject: [PATCH] acl: enforce masked outer VLAN ID on ingress and egress
+
+Keep the fixed 48-byte tuple ABI and validate VLAN qualifiers in the
+complete hash collision and linear matchers. Recover membership across
+L2 tag rewrites, including untagged PVIDs, QinQ and routed subinterfaces.
+Reject reflection with VLAN-qualified policies because session keys do
+not include VLAN metadata; never let an older session bypass such a policy.
+
+diff --git a/src/plugins/acl/CMakeLists.txt b/src/plugins/acl/CMakeLists.txt
+--- a/src/plugins/acl/CMakeLists.txt
++++ b/src/plugins/acl/CMakeLists.txt
+@@ -37,6 +37,7 @@
+   acl.h
+   fa_node.h
+   public_inlines.h
++  outer_vlan.h
+   types.h
+   hash_lookup_types.h
+   lookup_context.h
+diff --git a/src/plugins/acl/acl.c b/src/plugins/acl/acl.c
+--- a/src/plugins/acl/acl.c
++++ b/src/plugins/acl/acl.c
+@@ -182,6 +182,9 @@
+ 	  out0 = format (out0, " in-port %U", format_vnet_sw_if_index_name,
+ 			 vnet_get_main (), r->in_sw_if_index);
+ 	}
++      if (r->outer_vlan_id_mask)
++        out0 = format (out0, " outer-vlan %u mask 0x%x",
++                       r->outer_vlan_id, r->outer_vlan_id_mask);
+       out0 = format (out0, "\n");
+       vpr (vm, out0);
+     }
+@@ -357,6 +360,9 @@
+        */
+       if (ntohl (rules[i].in_sw_if_index) > 0xffff)
+ 	return VNET_API_ERROR_INVALID_SW_IF_INDEX;
++      if ((ntohs (rules[i].outer_vlan_id) |
++           ntohs (rules[i].outer_vlan_id_mask)) & ~0xfff)
++        return VNET_API_ERROR_INVALID_VALUE;
+       if (rules[i].is_permit == 3 &&
+ 	  ((ntohl (rules[i].mirror_action) >> ACL_MIRROR_FLAGS_SHIFT) &
+ 	   ~ACL_MIRROR_F_DEFERRED))
+@@ -406,6 +412,35 @@
+       r->in_sw_if_index = ntohl (rules[i].in_sw_if_index);
+       r->mirror_action =
+ 	(rules[i].is_permit == 3) ? ntohl (rules[i].mirror_action) : 0;
++      r->outer_vlan_id_mask = ntohs (rules[i].outer_vlan_id_mask);
++      r->outer_vlan_id = ntohs (rules[i].outer_vlan_id) & r->outer_vlan_id_mask;
++    }
++
++  /* Session keys omit VLAN metadata. Refuse reflect+VLAN combinations
++   * within this ACL and every context affected by a replacement, before
++   * freeing the old rules or changing any live policy. */
++  u32 *one_acl = 0;
++  vec_add1 (one_acl, *acl_list_index);
++  int conflict = acl_check_vlan_reflect_conflict (am, one_acl,
++    *acl_list_index, acl_new_rules, 0);
++  vec_free (one_acl);
++  if (!conflict && *acl_list_index < vec_len (am->lc_index_vec_by_acl))
++    {
++      u32 *lc_index;
++      vec_foreach (lc_index, am->lc_index_vec_by_acl[*acl_list_index])
++        {
++          acl_lookup_context_t *ctx =
++            pool_elt_at_index (am->acl_lookup_contexts, *lc_index);
++          conflict = acl_check_vlan_reflect_conflict (am, ctx->acl_indices,
++            *acl_list_index, acl_new_rules, 0);
++          if (conflict)
++            break;
++        }
++    }
++  if (conflict)
++    {
++      vec_free (acl_new_rules);
++      return conflict;
+     }
+ 
+   if (~0 == *acl_list_index)
+@@ -674,6 +709,9 @@
+     seen_acl_bitmap = clib_bitmap_set (seen_acl_bitmap, *pacln, 1);
+   }
+ 
++  rv = acl_check_vlan_reflect_conflict (am, vec_acl_list_index, ~0, 0, 0);
++  if (rv)
++    goto done;
+ 
+   u32 **pinout_lc_index_by_sw_if_index =
+     is_input ? &am->input_lc_index_by_sw_if_index : &am->
+@@ -1910,6 +1948,13 @@
+ 	    else
+ 	      vec_add1 (out_acl_vec, clib_net_to_host_u32 (mp->acls[i]));
+ 
++
++          /* Validate both directions before either binding is mutated. */
++          rv = acl_check_vlan_reflect_conflict (am, out_acl_vec, ~0, 0, 0);
++          if (!rv)
++            rv = acl_check_vlan_reflect_conflict (am, in_acl_vec, ~0, 0, 0);
++          if (!rv)
++            {
+ 	  rv =
+ 	    acl_interface_set_inout_acl_list (am, sw_if_index, 0, out_acl_vec,
+ 					      &may_clear_sessions);
+@@ -1917,6 +1962,7 @@
+ 	    || acl_interface_set_inout_acl_list (am, sw_if_index, 1,
+ 						 in_acl_vec,
+ 						 &may_clear_sessions);
++            }
+ 	  vec_free (in_acl_vec);
+ 	  vec_free (out_acl_vec);
+ 	}
+@@ -1943,6 +1989,8 @@
+   api_rule->tcp_flags_mask = r->tcp_flags_mask;
+   api_rule->tcp_flags_value = r->tcp_flags_value;
+   api_rule->in_sw_if_index = htonl (r->in_sw_if_index);
++  api_rule->outer_vlan_id = htons (r->outer_vlan_id);
++  api_rule->outer_vlan_id_mask = htons (r->outer_vlan_id_mask);
+ }
+ 
+ static void
+diff --git a/src/plugins/acl/acl.h b/src/plugins/acl/acl.h
+--- a/src/plugins/acl/acl.h
++++ b/src/plugins/acl/acl.h
+@@ -384,6 +384,13 @@
+ 
+ extern acl_main_t acl_main;
+ 
++/* Validate before mutating either an ACL or a binding. Replacing rules
++ * are supplied only while validating an ACL replacement. */
++int acl_check_vlan_reflect_conflict (acl_main_t *am, u32 *acl_indices,
++                                   u32 replacing_index,
++                                   acl_rule_t *replacing_rules,
++                                   u8 *has_outer_vlan_rules);
++
+ typedef enum {
+   ACL_FA_REQ_SESS_RESCHEDULE = 0,
+   ACL_FA_N_REQ,
+diff --git a/src/plugins/acl/acl_types.api b/src/plugins/acl/acl_types.api
+--- a/src/plugins/acl/acl_types.api
++++ b/src/plugins/acl/acl_types.api
+@@ -92,6 +92,15 @@
+  * other action.
+  */
+   u32 mirror_action;
++/*
++ * Match the effective outer VLAN ID, including the PVID of an untagged
++ * bridge member. SONiC bridge domains use the VLAN ID as their bd_id.
++ * Values and masks are 12 bits; mask 0 matches any VLAN (or no VLAN).
++ * Stateful reflection cannot be combined with VLAN matches in a lookup
++ * context because the session key does not include the VLAN ID.
++ */
++  u16 outer_vlan_id;
++  u16 outer_vlan_id_mask;
+ };
+ 
+ 
+diff --git a/src/plugins/acl/dataplane_node.c b/src/plugins/acl/dataplane_node.c
+--- a/src/plugins/acl/dataplane_node.c
++++ b/src/plugins/acl/dataplane_node.c
+@@ -374,6 +374,15 @@
+       u32 match_acl_pos = ~0;
+       u32 match_rule_index = ~0;
+ 
++      lc_index0 = is_input ?
++        am->input_lc_index_by_sw_if_index[sw_if_index[0]] :
++        am->output_lc_index_by_sw_if_index[sw_if_index[0]];
++      /* Existing sessions may predate the addition of a VLAN qualifier.
++       * VLAN-sensitive contexts cannot reflect, and must always classify
++       * the packet rather than trust a VLAN-blind cached session. */
++      int use_cached_session = with_stateful_datapath &&
++        !am->acl_lookup_contexts[lc_index0].has_outer_vlan_rules;
++
+       next[0] = 0;		/* drop by default */
+ 
+       /* Try to match an existing session first */
+@@ -401,7 +410,7 @@
+ 		}
+ 	      /* fallthrough */
+ 	    case 1:
+-	      if (f_sess_id.as_u64 != ~0ULL)
++      if (use_cached_session && f_sess_id.as_u64 != ~0ULL)
+ 		{
+ 		  if (node_trace_on)
+ 		    {
+diff --git a/src/plugins/acl/fa_node.h b/src/plugins/acl/fa_node.h
+--- a/src/plugins/acl/fa_node.h
++++ b/src/plugins/acl/fa_node.h
+@@ -28,13 +28,21 @@
+   u64 as_u64;
+   struct {
+     u32 lc_index;
+-    u16 mask_type_index_lsb;
++    union {
++      u16 mask_type_index_lsb;
++      /* Packet-only value. The hash lookup installs mask_type_index_lsb
++       * in its temporary key, leaving the original tuple intact for the
++       * complete VLAN comparison in the collision verifier. */
++      u16 outer_vlan_id;
++    };
+     u8 tcp_flags;
+     u8 tcp_flags_valid:1;
+     u8 l4_valid:1;
+     u8 is_nonfirst_fragment:1;
+     u8 is_ip6:1;
+-    u8 flags_reserved:4;
++    u8 outer_vlan_valid:1;
++    u8 is_bridged_subif:1;
++    u8 flags_reserved:2;
+   };
+ } fa_packet_info_t;
+ 
+diff --git a/src/plugins/acl/hash_lookup.c b/src/plugins/acl/hash_lookup.c
+--- a/src/plugins/acl/hash_lookup.c
++++ b/src/plugins/acl/hash_lookup.c
+@@ -972,6 +972,12 @@
+   mask->pkt.is_ip6 = 1;
+   hi->match.pkt.is_ip6 = r->is_ipv6;
+ 
++  /* The fixed-size tuple has no independent 12-bit VLAN key field.
++   * VLAN-qualified rules deliberately share the ordinary IP/L4 key;
++   * every candidate goes through single_rule_match_5tuple(), which checks
++   * the full VLAN ID/mask in the original tuple. The temporary hash key
++   * overwrites its packet-only VLAN alias with mask_type_index_lsb. */
++
+   /*
+    * Ingress interface match. lsb_of_sw_if_index is already filled from
+    * VLIB_RX for every packet on the input arc and already lives inside the
+diff --git a/src/plugins/acl/lookup_context.c b/src/plugins/acl/lookup_context.c
+--- a/src/plugins/acl/lookup_context.c
++++ b/src/plugins/acl/lookup_context.c
+@@ -104,6 +104,7 @@
+   acontext->context_user_id = acl_user_id;
+   acontext->user_val1 = val1;
+   acontext->user_val2 = val2;
++  acontext->has_outer_vlan_rules = 0;
+ 
+   u32 new_context_id = acontext - am->acl_lookup_contexts;
+   vec_add1(am->acl_users[acl_user_id].lookup_contexts, new_context_id);
+@@ -203,6 +204,33 @@
+  * Prepare the sequential vector of ACL#s to lookup within a given context.
+  * Any existing list will be overwritten. acl_list is a vector.
+  */
++int
++acl_check_vlan_reflect_conflict (acl_main_t *am, u32 *acl_indices,
++                               u32 replacing_index,
++                               acl_rule_t *replacing_rules,
++                               u8 *has_outer_vlan_rules)
++{
++  u8 has_vlan = 0, has_reflect = 0;
++  u32 *acl_index;
++  vec_foreach (acl_index, acl_indices)
++    {
++      if (*acl_index != replacing_index &&
++          pool_is_free_index (am->acls, *acl_index))
++        return VNET_API_ERROR_NO_SUCH_ENTRY;
++      acl_rule_t *rules = *acl_index == replacing_index ? replacing_rules :
++                          am->acls[*acl_index].rules;
++      acl_rule_t *r;
++      vec_foreach (r, rules)
++        {
++          has_vlan |= r->outer_vlan_id_mask != 0;
++          has_reflect |= r->is_permit == 2;
++        }
++    }
++  if (has_outer_vlan_rules)
++    *has_outer_vlan_rules = has_vlan;
++  return has_vlan && has_reflect ? VNET_API_ERROR_UNSUPPORTED : 0;
++}
++
+ static int acl_plugin_set_acl_vec_for_context (u32 lc_index, u32 *acl_list)
+ {
+   int rv = 0;
+@@ -240,9 +268,16 @@
+     seen_acl_bitmap = clib_bitmap_set (seen_acl_bitmap, *pacln, 1);
+   }
+ 
++  u8 has_outer_vlan_rules = 0;
++  rv = acl_check_vlan_reflect_conflict (am, acl_list, ~0, 0,
++                                      &has_outer_vlan_rules);
++  if (rv)
++    goto done;
++
+   acontext = pool_elt_at_index(am->acl_lookup_contexts, lc_index);
+   u32 *old_acl_vector = acontext->acl_indices;
+   acontext->acl_indices = vec_dup(acl_list);
++  acontext->has_outer_vlan_rules = has_outer_vlan_rules;
+ 
+   unapply_acl_vec(lc_index, old_acl_vector);
+   unlock_acl_vec(lc_index, old_acl_vector);
+@@ -260,6 +295,17 @@
+ void acl_plugin_lookup_context_notify_acl_change(u32 acl_num)
+ {
+   acl_main_t *am = &acl_main;
++  if (acl_num < vec_len (am->lc_index_vec_by_acl))
++    {
++      u32 *lc_index;
++      vec_foreach (lc_index, am->lc_index_vec_by_acl[acl_num])
++        {
++          acl_lookup_context_t *ctx =
++            pool_elt_at_index (am->acl_lookup_contexts, *lc_index);
++          acl_check_vlan_reflect_conflict (am, ctx->acl_indices, ~0, 0,
++                                         &ctx->has_outer_vlan_rules);
++        }
++    }
+   if (acl_plugin_acl_exists(acl_num)) {
+     if (hash_acl_exists(am, acl_num)) {
+         /* this is a modification, clean up the older entries */
+diff --git a/src/plugins/acl/lookup_context.h b/src/plugins/acl/lookup_context.h
+--- a/src/plugins/acl/lookup_context.h
++++ b/src/plugins/acl/lookup_context.h
+@@ -26,6 +26,8 @@
+   u32 user_val1;
+   /* per-instance user value 2 */
+   u32 user_val2;
++  /* VLAN rules use packet metadata absent from the stateful session key. */
++  u8 has_outer_vlan_rules;
+ } acl_lookup_context_t;
+ 
+ void acl_plugin_lookup_context_notify_acl_change(u32 acl_num);
+diff --git a/src/plugins/acl/public_inlines.h b/src/plugins/acl/public_inlines.h
+--- a/src/plugins/acl/public_inlines.h
++++ b/src/plugins/acl/public_inlines.h
+@@ -12,6 +12,7 @@
+ #include "acl.h"
+ #include "fa_node.h"
+ #include "hash_lookup_private.h"
++#include "outer_vlan.h"
+ 
+ #include "exported_types.h"
+ 
+@@ -215,6 +216,7 @@
+   /* Remainder of the key and per-packet non-key data */
+   acl_fill_5tuple_l3_data(am, b0, is_ip6, l3_offset, p5tuple_pkt);
+   acl_fill_5tuple_l4_and_pkt_data(am, sw_if_index0, b0, is_ip6, is_input, l3_offset, &p5tuple_pkt->l4, &p5tuple_pkt->pkt);
++  acl_fill_outer_vlan (b0, is_input, is_l2_path, p5tuple_pkt);
+ }
+ 
+ always_inline void
+@@ -307,8 +309,9 @@
+        * path: non-first fragments fall back to linear matching, so a rule
+        * restricted to an interface would otherwise match on any of them.
+        */
+-      if (r->in_sw_if_index != 0 &&
+-	  pkt_5tuple->l4.lsb_of_sw_if_index != (r->in_sw_if_index & 0xffff))
++
++      if (!acl_match_in_interface (r, pkt_5tuple) ||
++          !acl_match_outer_vlan (r, pkt_5tuple))
+ 	{
+ 	  continue;
+ 	}
+@@ -489,8 +492,8 @@
+    * lsb_of_sw_if_index masked off, which would let the rule match packets
+    * received on any interface.
+    */
+-  if (r->in_sw_if_index != 0 &&
+-      pkt_5tuple->l4.lsb_of_sw_if_index != (r->in_sw_if_index & 0xffff))
++  if (!acl_match_in_interface (r, pkt_5tuple) ||
++      !acl_match_outer_vlan (r, pkt_5tuple))
+     {
+       return 0;
+     }
+@@ -675,12 +678,15 @@
+   fa_5tuple_t * pkt_5tuple_internal = (fa_5tuple_t *)pkt_5tuple;
+   pkt_5tuple_internal->pkt.lc_index = lc_index;
+   if (PREDICT_TRUE(am->use_hash_acl_matching)) {
+-    if (PREDICT_FALSE(pkt_5tuple_internal->pkt.is_nonfirst_fragment)) {
++    if (PREDICT_FALSE(pkt_5tuple_internal->pkt.is_nonfirst_fragment ||
++                      pkt_5tuple_internal->pkt.is_bridged_subif)) {
+       /*
+        * tuplemerge does not take fragments into account,
+        * and in general making fragments first class citizens has
+        * proved more overhead than it's worth - so just fall back to linear
+-       * matching in that case.
++       * matching in that case. A bridged VLAN child can also match a
++       * parent's inherited IN_PORTS rule; the hash key has only the exact
++       * child index, so use the complete matcher for these packets.
+        */
+       return linear_multi_acl_match_5tuple(p_acl_main, lc_index, pkt_5tuple_internal, is_ip6, r_action,
+                                  r_acl_pos_p, r_acl_match_p, r_rule_match_p, trace_bitmap);
+@@ -710,12 +716,14 @@
+   fa_5tuple_t * pkt_5tuple_internal = (fa_5tuple_t *)pkt_5tuple;
+   pkt_5tuple_internal->pkt.lc_index = lc_index;
+   if (PREDICT_TRUE(am->use_hash_acl_matching)) {
+-    if (PREDICT_FALSE(pkt_5tuple_internal->pkt.is_nonfirst_fragment)) {
++    if (PREDICT_FALSE(pkt_5tuple_internal->pkt.is_nonfirst_fragment ||
++                      pkt_5tuple_internal->pkt.is_bridged_subif)) {
+       /*
+        * tuplemerge does not take fragments into account,
+        * and in general making fragments first class citizens has
+        * proved more overhead than it's worth - so just fall back to linear
+-       * matching in that case.
++       * matching in that case. Bridged children additionally need both
++       * their exact interface and their physical parent's IN_PORTS scope.
+        */
+       ret = linear_multi_acl_match_5tuple(p_acl_main, lc_index, pkt_5tuple_internal, is_ip6, r_action,
+                                  r_acl_pos_p, r_acl_match_p, r_rule_match_p, trace_bitmap);
+diff --git a/src/plugins/acl/types.h b/src/plugins/acl/types.h
+--- a/src/plugins/acl/types.h
++++ b/src/plugins/acl/types.h
+@@ -34,6 +34,8 @@
+   u32 in_sw_if_index;
+   /* PERMIT_MIRROR only, 0 for no mirror. See acl_types.api. */
+   u32 mirror_action;
++  u16 outer_vlan_id;
++  u16 outer_vlan_id_mask;
+ } acl_rule_t;
+ 
+ 
+diff --git a/src/plugins/acl/outer_vlan.h b/src/plugins/acl/outer_vlan.h
+new file mode 100644
+--- /dev/null
++++ b/src/plugins/acl/outer_vlan.h
+@@ -0,0 +1,124 @@
++/* SPDX-License-Identifier: Apache-2.0 */
++#ifndef included_acl_outer_vlan_h
++#define included_acl_outer_vlan_h
++
++#include <vnet/l2/l2_input.h>
++#include <vnet/l2/l2_output.h>
++
++/* A bridge/subinterface's classification is retained across tag rewrites.
++ * In particular, after POP_1 a QinQ packet still carries its inner tag; that
++ * tag must not replace the outer VLAN that selected the bridge member. */
++static_always_inline int
++acl_interface_outer_vlan (u32 sw_if_index, int is_input, u16 *vlan_id, u8 *is_bridged_subif)
++{
++  vnet_main_t *vnm = vnet_get_main ();
++  if (!vnet_sw_interface_is_valid (vnm, sw_if_index))
++    return 0;
++
++  vnet_sw_interface_t *si = vnet_get_sw_interface (vnm, sw_if_index);
++  l2_input_config_t *l2 =
++    sw_if_index < vec_len (l2input_main.configs) ? &l2input_main.configs[sw_if_index] : 0;
++  int is_bridge = l2 && (l2->flags & (L2_INPUT_FLAG_BRIDGE | L2_INPUT_FLAG_BVI));
++  *is_bridged_subif = is_bridge && si->type == VNET_SW_INTERFACE_TYPE_SUB;
++
++  if (si->type == VNET_SW_INTERFACE_TYPE_SUB &&
++      (si->sub.eth.flags.one_tag || si->sub.eth.flags.two_tags) &&
++      !si->sub.eth.flags.outer_vlan_id_any)
++    {
++      *vlan_id = si->sub.eth.outer_vlan_id;
++      return 1;
++    }
++
++  if (sw_if_index < vec_len (l2output_main.configs))
++    {
++      l2_output_config_t *out = &l2output_main.configs[sw_if_index];
++      vtr_config_t *vtr = is_input ? &out->input_vtr : &out->output_vtr;
++      if (vtr->push_bytes)
++	{
++	  *vlan_id =
++	    clib_net_to_host_u16 (vtr->tags[vtr->push_bytes == 4 ? 1 : 0].priority_cfi_and_id) &
++	    0xfff;
++	  return 1;
++	}
++    }
++
++  /* SONiC assigns bd_id = VLAN ID, providing the PVID for untagged
++   * members without an artificial tag rewrite on the host interface. */
++  if (is_bridge && l2->bd_index < vec_len (l2input_main.bd_configs))
++    {
++      u32 bd_id = l2input_main.bd_configs[l2->bd_index].bd_id;
++      if (bd_id > 0 && bd_id < 4095)
++	{
++	  *vlan_id = bd_id;
++	  return 1;
++	}
++    }
++  return 0;
++}
++
++static_always_inline void
++acl_fill_outer_vlan (vlib_buffer_t *b, int is_input, int is_l2_path, fa_5tuple_t *tuple)
++{
++  u16 vlan_id = 0;
++  u8 is_bridged_subif = 0;
++  u32 sw_if_index = vnet_buffer (b)->sw_if_index[is_input ? VLIB_RX : VLIB_TX];
++  int valid = acl_interface_outer_vlan (sw_if_index, is_input, &vlan_id, &is_bridged_subif);
++
++  if (!valid)
++    {
++      /* L3 ingress may already have consumed the Ethernet header. L3
++       * output has a fresh rewrite at current_data; its ingress offset
++       * must never be mistaken for the egress Ethernet header. */
++      int l2_offset = b->current_data;
++      int has_l2 = is_l2_path;
++      if (!is_l2_path && is_input && (b->flags & VNET_BUFFER_F_L2_HDR_OFFSET_VALID))
++	{
++	  l2_offset = vnet_buffer (b)->l2_hdr_offset;
++	  has_l2 = 1;
++	}
++      else if (!is_l2_path && !is_input)
++	has_l2 = vnet_buffer (b)->ip.save_rewrite_length >= sizeof (ethernet_header_t);
++
++      if (has_l2 && l2_offset >= -VLIB_BUFFER_PRE_DATA_SIZE &&
++	  l2_offset + sizeof (ethernet_header_t) + sizeof (ethernet_vlan_header_t) <=
++	    b->current_data + b->current_length)
++	{
++	  ethernet_header_t *eth = (void *) (b->data + l2_offset);
++	  if (ethernet_frame_is_tagged (clib_net_to_host_u16 (eth->type)))
++	    {
++	      ethernet_vlan_header_t *tag = (void *) (eth + 1);
++	      vlan_id = clib_net_to_host_u16 (tag->priority_cfi_and_id) & 0xfff;
++	      valid = 1;
++	    }
++	}
++    }
++  tuple->pkt.outer_vlan_id = vlan_id;
++  tuple->pkt.outer_vlan_valid = valid;
++  /* The ingress interface match also needs to preserve parent membership
++   * after a tagged child receives a parent's inherited ACL. */
++  tuple->pkt.is_bridged_subif = is_bridged_subif;
++}
++
++static_always_inline int
++acl_match_outer_vlan (acl_rule_t *r, fa_5tuple_t *tuple)
++{
++  return !r->outer_vlan_id_mask ||
++	 (tuple->pkt.outer_vlan_valid &&
++	  ((tuple->pkt.outer_vlan_id ^ r->outer_vlan_id) & r->outer_vlan_id_mask) == 0);
++}
++
++static_always_inline int
++acl_match_in_interface (acl_rule_t *r, fa_5tuple_t *tuple)
++{
++  if (!r->in_sw_if_index || tuple->l4.lsb_of_sw_if_index == r->in_sw_if_index)
++    return 1;
++  if (tuple->pkt.is_bridged_subif &&
++      vnet_sw_interface_is_valid (vnet_get_main (), tuple->l4.lsb_of_sw_if_index))
++    {
++      vnet_sw_interface_t *si =
++	vnet_get_sup_sw_interface (vnet_get_main (), tuple->l4.lsb_of_sw_if_index);
++      return si->sw_if_index == r->in_sw_if_index;
++    }
++  return 0;
++}
++#endif
+diff --git a/test/acl_outer_vlan_regression.py b/test/acl_outer_vlan_regression.py
+new file mode 100644
+--- /dev/null
++++ b/test/acl_outer_vlan_regression.py
+@@ -0,0 +1,338 @@
++#!/usr/bin/env python3
++"""Focused live ACL regressions, runnable without the full VPP test venv.
++
++Run with the built VPP libraries on LD_LIBRARY_PATH and the VPP Python API
++and Scapy on PYTHONPATH. VPP_BINARY, VPP_PLUGIN_PATH and VPP_API_DIR may
++override the native build locations. All VPP state and packet captures are
++isolated in a temporary directory; no physical/network interfaces are used.
++"""
++
++import os
++from pathlib import Path
++import subprocess
++import tempfile
++import time
++import unittest
++
++from scapy.layers.inet import IP, UDP
++from scapy.layers.inet6 import IPv6, IPv6ExtHdrFragment
++from scapy.layers.l2 import Dot1Q, Dot1AD, Ether
++from scapy.packet import Raw
++from scapy.utils import rdpcap, wrpcap
++from vpp_papi import VPPApiClient
++from vpp_papi.vpp_stats import VPPStats
++
++
++ROOT = Path(__file__).resolve().parents[1]
++BUILD = ROOT / "build-root/build-vpp-native/vpp"
++
++
++class TestAclOuterVlan(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory(prefix="acl-outer-vlan-")
++        self.path = Path(self.temp.name)
++        self.sequence = 0
++        self.pgs = []
++        self.bridge_domains = set()
++        plugins = os.environ.get(
++            "VPP_PLUGIN_PATH", str(BUILD / "lib/x86_64-linux-gnu/vpp_plugins")
++        )
++        config = self.path / "startup.conf"
++        config.write_text(
++            f"unix {{ nodaemon runtime-dir {self.path} log {self.path}/vpp.log "
++            f"cli-listen {self.path}/cli.sock }}\n"
++            f"socksvr {{ socket-name {self.path}/api.sock }}\n"
++            f"statseg {{ socket-name {self.path}/stats.sock size 32m }}\n"
++            f"api-segment {{ prefix acl-vlan-{os.getpid()} }}\n"
++            "memory { main-heap-size 256m }\n"
++            f"cpu {{ main-core {min(os.sched_getaffinity(0))} }}\n"
++            f"plugins {{ path {plugins} plugin default {{ disable }} "
++            "plugin acl_plugin.so { enable } }\n"
++        )
++        self.log = (self.path / "console.log").open("w")
++        self.proc = subprocess.Popen(
++            [os.environ.get("VPP_BINARY", str(BUILD / "bin/vpp")), "-c", str(config)],
++            stdout=self.log,
++            stderr=subprocess.STDOUT,
++        )
++        self.addCleanup(self.stop_vpp)
++        for _ in range(100):
++            if (self.path / "api.sock").exists():
++                break
++            if self.proc.poll() is not None:
++                self.log.flush()
++                self.fail((self.path / "console.log").read_text())
++            time.sleep(0.02)
++        api_dir = Path(os.environ.get("VPP_API_DIR", str(BUILD / "CMakeFiles")))
++        # Other plugins may have stale imported ACL type definitions after
++        # an incremental plugin-only build. Only core and ACL APIs are used.
++        api_files = [str(path) for path in api_dir.rglob("*.api.json")
++                     if "plugins" not in path.parts or path.parent.name == "acl"]
++        self.client = VPPApiClient(
++            apifiles=api_files,
++            server_address=str(self.path / "api.sock"),
++        )
++        self.client.connect("acl-vlan-regression")
++        self.api = self.client.api
++        self.stats = VPPStats(socketname=str(self.path / "stats.sock"))
++        self.stats.connect()
++        self.rpc("acl_stats_intf_counters_enable", enable=1)
++        for i in range(3):
++            pg = self.rpc("pg_create_interface", interface_id=i).sw_if_index
++            self.rpc("sw_interface_set_flags", sw_if_index=pg, flags=1)
++            self.rpc(
++                "sw_interface_set_mac_address",
++                sw_if_index=pg,
++                mac_address=f"02:00:00:00:00:{i + 1:02x}",
++            )
++            self.pgs.append(pg)
++
++    def stop_vpp(self):
++        if hasattr(self, "stats"):
++            self.stats.disconnect()
++        if hasattr(self, "client"):
++            self.client.disconnect()
++        self.proc.terminate()
++        try:
++            self.proc.wait(timeout=5)
++        except subprocess.TimeoutExpired:
++            self.proc.kill()
++            self.proc.wait(timeout=5)
++        self.log.close()
++        self.temp.cleanup()
++
++    def rpc(self, name, **kwargs):
++        try:
++            reply = getattr(self.api, name)(**kwargs)
++        except Exception as error:
++            self.log.flush()
++            raise AssertionError(f"{name}: {error}\n" +
++                                 (self.path / "console.log").read_text()) from error
++        self.assertEqual(reply.retval, 0, (name, kwargs, reply))
++        return reply
++
++    def cli(self, command):
++        return self.rpc("cli_inband", cmd=command).reply
++
++    def bridge(self, interfaces, vlan=100):
++        if vlan not in self.bridge_domains:
++            self.rpc("bridge_domain_add_del_v2", bd_id=vlan, is_add=1,
++                     flood=1, uu_flood=1, learn=0, forward=1)
++            self.bridge_domains.add(vlan)
++        for interface in interfaces:
++            self.rpc("sw_interface_set_l2_bridge", rx_sw_if_index=interface,
++                     bd_id=vlan, enable=1)
++
++    def child(self, parent, vlan=100, dot1ad=False):
++        # A single outer tag classification without exact-match also accepts
++        # QinQ. POP_1 must leave the inner customer tag intact.
++        child = self.rpc("create_subif", sw_if_index=parent, sub_id=vlan,
++                         outer_vlan_id=vlan, sub_if_flags=2 | (8 if dot1ad else 0))
++        self.rpc("sw_interface_set_flags", sw_if_index=child.sw_if_index, flags=1)
++        self.rpc("l2_interface_vlan_tag_rewrite", sw_if_index=child.sw_if_index,
++                 vtr_op=3, push_dot1q=not dot1ad)
++        return child.sw_if_index
++
++    def rule(self, vlan=0, mask=0, action=1, ipv6=False, in_port=0):
++        return dict(is_permit=action, src_prefix="::/0" if ipv6 else "0.0.0.0/0",
++                    dst_prefix="::/0" if ipv6 else "0.0.0.0/0", proto=0,
++                    srcport_or_icmptype_last=65535, dstport_or_icmpcode_last=65535,
++                    outer_vlan_id=vlan, outer_vlan_id_mask=mask,
++                    in_sw_if_index=in_port)
++
++    def acl(self, rules, index=0xffffffff):
++        return self.rpc("acl_add_replace", acl_index=index, count=len(rules),
++                        r=rules, tag="outer-vlan-regression").acl_index
++
++    def bind(self, interface, acl, ingress=True):
++        self.rpc("acl_interface_set_acl_list", sw_if_index=interface,
++                 n_input=int(ingress), count=1, acls=[acl])
++
++    def packet(self, ipv6=False, tags=(), dot1ad=False, fragment=False,
++               routed=False):
++        packet = Ether(src="02:00:00:00:10:01",
++                       dst="02:00:00:00:00:01" if routed else "02:00:00:00:10:02")
++        for i, vlan in enumerate(tags):
++            packet /= Dot1AD(vlan=vlan) if dot1ad and i == 0 else Dot1Q(vlan=vlan)
++        packet /= (IPv6(src="2001:db8:1::2", dst="2001:db8:2::2") if ipv6
++                   else IP(src="192.0.2.2", dst="198.51.100.2"))
++        if fragment:
++            if ipv6:
++                packet /= IPv6ExtHdrFragment(nh=17, offset=1, id=1)
++            else:
++                packet[IP].frag = 1
++                packet[IP].proto = 17
++            packet /= Raw(b"fragment payload" * 4)
++        else:
++            packet /= UDP(sport=12345, dport=23456) / Raw(b"ACL VLAN regression" * 3)
++        return packet
++
++    def transmit(self, packet, expect=1, dst_pg=1):
++        self.sequence += 1
++        source = self.path / f"input{self.sequence}.pcap"
++        target = self.path / f"output{self.sequence}.pcap"
++        wrpcap(str(source), [packet])
++        self.cli(f"packet-generator capture pg{dst_pg} pcap {target}")
++        self.cli(f"packet-generator new pcap {source} source pg0 name stream{self.sequence}")
++        self.cli(f"packet-generator enable-stream stream{self.sequence}")
++        for _ in range(100):
++            if "Yes" not in self.cli("show packet-generator"):
++                break
++            time.sleep(0.01)
++        self.cli(f"packet-generator capture pg{dst_pg} pcap {target} disable")
++        packets = rdpcap(str(target)) if target.exists() and target.stat().st_size > 24 else []
++        self.assertEqual(len(packets), expect,
++                         (self.cli("show errors"), self.cli("show trace")))
++        return packets
++
++    def counter(self, acl, rule):
++        return self.stats[f"/acl/{acl}/matches"][:, rule].sum_packets()
++
++    def test_hash_collisions_masks_wildcard_and_fragments(self):
++        self.bridge(self.pgs[:2])
++        for ipv6 in (False, True):
++            rules = [self.rule(200, 0xfff, ipv6=ipv6),
++                     self.rule(100, 0xfff, action=0, ipv6=ipv6),
++                     self.rule(ipv6=ipv6)]
++            acl = self.acl(rules)
++            self.bind(self.pgs[0], acl)
++            for hashed in (1, 0):
++                self.cli(f"set acl-plugin use-hash-acl-matching {hashed}")
++                self.transmit(self.packet(ipv6), expect=0)
++                # Nonfirst fragments take the linear fallback in hash mode.
++                self.transmit(self.packet(ipv6, fragment=True), expect=0)
++            self.assertEqual(self.counter(acl, 1), 4)
++            # All IP/L4 fields remain identical, only membership/PVID changes.
++            self.bridge(self.pgs[:2], vlan=200)
++            self.cli("set acl-plugin use-hash-acl-matching 1")
++            self.transmit(self.packet(ipv6))
++            self.assertEqual(self.counter(acl, 0), 1)
++            self.bridge(self.pgs[:2], vlan=300)
++            self.transmit(self.packet(ipv6))
++            self.assertEqual(self.counter(acl, 2), 1)
++            # Partial masks retain only the specified VID bits.
++            acl = self.acl([self.rule(0x120, 0xff0, ipv6=ipv6),
++                            self.rule(action=0, ipv6=ipv6)], index=acl)
++            self.bridge(self.pgs[:2], vlan=0x12f)
++            self.transmit(self.packet(ipv6))
++            self.bridge(self.pgs[:2], vlan=0x130)
++            self.transmit(self.packet(ipv6), expect=0)
++            self.assertEqual(self.counter(acl, 0), 1)
++            self.assertEqual(self.counter(acl, 1), 1)
++            self.bridge(self.pgs[:2])
++
++    def test_qinq_ingress_parent_and_exact_child_scope(self):
++        child = self.child(self.pgs[0])
++        self.bridge([child, self.pgs[1]])
++        for ipv6 in (False, True):
++            for in_port in (self.pgs[0], child):
++                acl = self.acl([self.rule(100, 0xfff, ipv6=ipv6, in_port=in_port),
++                                self.rule(action=0, ipv6=ipv6)])
++                self.bind(child, acl)
++                captured = self.transmit(self.packet(ipv6, tags=(100, 10)))
++                self.assertEqual(captured[0][Dot1Q].vlan, 10)
++                self.assertEqual(self.counter(acl, 0), 1)
++        # A different physical parent must still fail its scoped rule.
++        acl = self.acl([self.rule(100, 0xfff, in_port=self.pgs[2]),
++                        self.rule(action=0)])
++        self.bind(child, acl)
++        self.transmit(self.packet(tags=(100, 10)), expect=0)
++        self.assertEqual(self.counter(acl, 1), 1)
++
++    def test_qinq_egress_untagged_pvid_and_tagged_member(self):
++        ingress = self.child(self.pgs[0])
++        self.bridge([ingress, self.pgs[1]])
++        for ipv6 in (False, True):
++            acl = self.acl([self.rule(10, 0xfff, action=0, ipv6=ipv6),
++                            self.rule(100, 0xfff, ipv6=ipv6),
++                            self.rule(action=0, ipv6=ipv6)])
++            self.bind(self.pgs[1], acl, ingress=False)
++            captured = self.transmit(self.packet(ipv6, tags=(100, 10)))
++            self.assertEqual(captured[0][Dot1Q].vlan, 10)
++            self.assertEqual(self.counter(acl, 1), 1)
++        # Output POP_1 is reversed to PUSH_1. The VLAN to be put on the
++        # wire, rather than the surviving inner tag, must select the rule.
++        self.rpc("sw_interface_set_l2_bridge", rx_sw_if_index=self.pgs[1],
++                 bd_id=100, enable=0)
++        egress = self.child(self.pgs[1], vlan=200, dot1ad=True)
++        self.bridge([ingress, egress])
++        for ipv6 in (False, True):
++            acl = self.acl([self.rule(100, 0xfff, action=0, ipv6=ipv6),
++                            self.rule(200, 0xfff, ipv6=ipv6),
++                            self.rule(action=0, ipv6=ipv6)])
++            self.bind(egress, acl, ingress=False)
++            captured = self.transmit(self.packet(ipv6, tags=(100, 10)))
++            self.assertEqual(captured[0][Dot1AD].vlan, 200)
++            self.assertEqual(captured[0][Dot1Q].vlan, 10)
++            self.assertEqual(self.counter(acl, 1), 1)
++
++    def test_routed_subinterface_vlan_metadata(self):
++        ingress = self.rpc("create_vlan_subif", sw_if_index=self.pgs[0],
++                           vlan_id=100).sw_if_index
++        egress = self.rpc("create_vlan_subif", sw_if_index=self.pgs[1],
++                          vlan_id=200).sw_if_index
++        for interface in (ingress, egress):
++            self.rpc("sw_interface_set_flags", sw_if_index=interface, flags=1)
++        for ipv6 in (False, True):
++            for interface, prefix in ((ingress, "2001:db8:1::1/64" if ipv6 else "192.0.2.1/24"),
++                                      (egress, "2001:db8:2::1/64" if ipv6 else "198.51.100.1/24")):
++                self.rpc("sw_interface_add_del_address", sw_if_index=interface,
++                         is_add=1, prefix=prefix)
++            self.rpc("ip_neighbor_add_del", is_add=1,
++                     neighbor=dict(sw_if_index=egress,
++                                   ip_address="2001:db8:2::2" if ipv6 else "198.51.100.2",
++                                   mac_address="02:00:00:00:10:02"))
++            acl_in = self.acl([self.rule(100, 0xfff, ipv6=ipv6),
++                               self.rule(action=0, ipv6=ipv6)])
++            acl_out = self.acl([self.rule(200, 0xfff, ipv6=ipv6),
++                                self.rule(action=0, ipv6=ipv6)])
++            self.bind(ingress, acl_in)
++            self.bind(egress, acl_out, ingress=False)
++            captured = self.transmit(self.packet(ipv6, tags=(100,), routed=True))
++            self.assertEqual(captured[0][Dot1Q].vlan, 200)
++            self.assertEqual(self.counter(acl_in, 0), 1)
++            self.assertEqual(self.counter(acl_out, 0), 1)
++
++    def test_api_dump_and_reflect_conflicts_are_atomic(self):
++        reply = self.api.acl_add_replace(acl_index=0xffffffff, count=1,
++                                         r=[self.rule(100, 0xfff, action=2)])
++        self.assertLess(reply.retval, 0)
++        vlan = self.acl([self.rule(100, 0xfff)])
++        reflect = self.acl([self.rule(action=2)])
++        self.bind(self.pgs[0], reflect)
++        reply = self.api.acl_interface_set_acl_list(sw_if_index=self.pgs[0],
++                                                    n_input=2, count=2,
++                                                    acls=[reflect, vlan])
++        self.assertLess(reply.retval, 0)
++        binding = self.api.acl_interface_list_dump(sw_if_index=self.pgs[0])[0]
++        self.assertEqual(list(binding.acls), [reflect])
++        # Replacing a bound ACL cannot create an incompatible mixed context.
++        wildcard = self.acl([self.rule()])
++        self.rpc("acl_interface_set_acl_list", sw_if_index=self.pgs[0],
++                 n_input=2, count=2, acls=[reflect, wildcard])
++        reply = self.api.acl_add_replace(acl_index=wildcard, count=1,
++                                         r=[self.rule(100, 0xfff)])
++        self.assertLess(reply.retval, 0)
++        self.assertEqual(self.api.acl_dump(acl_index=wildcard)[0].r[0].outer_vlan_id_mask, 0)
++        details = self.api.acl_dump(acl_index=vlan)[0].r[0]
++        self.assertEqual((details.outer_vlan_id, details.outer_vlan_id_mask), (100, 0xfff))
++        for value, mask in ((4096, 0xfff), (100, 4096)):
++            reply = self.api.acl_add_replace(acl_index=vlan, count=1,
++                                             r=[self.rule(value, mask)])
++            self.assertLess(reply.retval, 0)
++
++    def test_old_reflect_session_cannot_bypass_new_vlan_rule(self):
++        self.bridge(self.pgs[:2])
++        acl = self.acl([self.rule(action=2)])
++        self.bind(self.pgs[0], acl)
++        self.transmit(self.packet())
++        sessions = self.cli("show acl-plugin sessions")
++        self.assertRegex(sessions, r"Sessions total: add\s+1 - del\s+0 =\s+1")
++        self.assertRegex(sessions, r"Sessions active: add\s+1 - deact\s+0 =\s+1")
++        self.acl([self.rule(100, 0xfff, action=0), self.rule()], index=acl)
++        self.transmit(self.packet(), expect=0)
++        self.assertEqual(self.counter(acl, 0), 1)
++
++
++if __name__ == "__main__":
++    unittest.main(verbosity=2)

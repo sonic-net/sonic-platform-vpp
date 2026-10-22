@@ -85,3 +85,5 @@
 #     "sonic-clear fdb all"). Includes a test in test_l2_fib.py.
 #     Upstream: https://gerrit.fd.io/r/c/vpp/+/47191
 0024-l2-report-flushed-MAC-refreshed-by-traffic.patch
+# 25. acl: enforce OUTER_VLAN_ID including PVID and post-VTR QinQ metadata.
+0025-acl-match-outer-vlan-id.patch
