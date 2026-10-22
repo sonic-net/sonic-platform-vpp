@@ -2,6 +2,7 @@
 """sonic-ext plugin tests"""
 
 import unittest
+from contextlib import contextmanager
 from socket import AF_INET6, inet_ntop, inet_pton
 
 from framework import VppTestCase
@@ -230,6 +231,141 @@ class TestSonicExtCoppDefault(SonicExtCoppBase):
 
     def test_copp_defaults_on(self):
         self.assert_copp_state(True)
+
+
+class SonicExtArcBase(VppTestCase):
+    """sonic-ext feature arc test base"""
+
+    extra_vpp_plugin_config = SonicExtCoppBase.extra_vpp_plugin_config
+
+    @classmethod
+    def setUpClass(cls):
+        super(SonicExtArcBase, cls).setUpClass()
+        cls.create_pg_interfaces(range(2))
+
+    def assert_feature_get(self, feature, enabled):
+        reply = self.vapi.sonic_ext_feature_get(feature=feature)
+        self.assertEqual(
+            bool(reply.enabled), enabled, "sonic_ext_feature_get %s" % feature
+        )
+
+    def assert_feature(self, itf, name, enabled):
+        output = self.vapi.cli("show interface features %s" % itf)
+        attached = name in (line.strip() for line in output.splitlines())
+        self.assertEqual(attached, enabled, "%s on %s" % (name, itf))
+
+    @contextmanager
+    def lcp_pair(self):
+        """pg1 stands in for pg0's linux-cp host tap"""
+        self.vapi.cli("test lcp add phy pg0 host pg1")
+        try:
+            yield
+        finally:
+            self.vapi.cli("test lcp del phy pg0 host pg1")
+
+
+class SonicExtHostXcBase(SonicExtArcBase):
+    """sonic-ext host-xc test base"""
+
+    def assert_host_xc_state(self, enabled):
+        self.assert_feature_get("host-xc", enabled)
+        with self.lcp_pair():
+            self.assert_feature("pg1", "sonic-ext-host-xc", enabled)
+
+
+class TestSonicExtHostXcStartupOff(SonicExtHostXcBase):
+    """sonic-ext host-xc off in startup.conf"""
+
+    extra_vpp_config = ["sonic-ext", "{", "host-xc", "off", "}"]
+
+    def test_host_xc_startup_off(self):
+        """host-xc off at startup is never attached to a host tap"""
+        self.assert_host_xc_state(False)
+
+
+class TestSonicExtHostXcDefault(SonicExtHostXcBase):
+    """sonic-ext host-xc default"""
+
+    def test_host_xc_defaults_on(self):
+        """host-xc is on by default and attached to a new host tap"""
+        self.assert_host_xc_state(True)
+
+
+class SonicExtDropMemberStatsBase(SonicExtArcBase):
+    """sonic-ext drop-member-stats test base"""
+
+    def assert_drop_member_stats_state(self, enabled):
+        self.assert_feature_get("drop-member-stats", enabled)
+        # local0 exists before the plugin's interface hook, pg0 is created after
+        for itf in ("local0", "pg0"):
+            self.assert_feature(itf, "sonic-ext-drop-member-stats", enabled)
+
+
+class TestSonicExtDropMemberStatsStartupOff(SonicExtDropMemberStatsBase):
+    """sonic-ext drop-member-stats off in startup.conf"""
+
+    extra_vpp_config = ["sonic-ext", "{", "drop-member-stats", "off", "}"]
+
+    def test_drop_member_stats_startup_off(self):
+        """drop-member-stats off at startup stays off the error-drop arc"""
+        self.assert_drop_member_stats_state(False)
+
+
+class TestSonicExtDropMemberStatsDefault(SonicExtDropMemberStatsBase):
+    """sonic-ext drop-member-stats default"""
+
+    def test_drop_member_stats_defaults_on(self):
+        """drop-member-stats is on by default on every interface"""
+        self.assert_drop_member_stats_state(True)
+
+
+class SonicExtPuntViaMemberBase(SonicExtArcBase):
+    """sonic-ext punt-via-member test base"""
+
+    def assert_punt_via_member_state(self, punt_via_member, capture):
+        self.assert_feature_get("punt-via-member", punt_via_member)
+        # capture has no keyword: it runs while punt-via-member or
+        # drop-member-stats, the two consumers of its cookie, is on
+        self.assert_feature_get("capture", capture)
+        self.assert_feature("local0", "sonic-ext-glean-redirect", punt_via_member)
+        with self.lcp_pair():
+            self.assert_feature("pg0", "sonic-ext-capture", capture)
+
+
+class TestSonicExtPuntViaMemberStartupOff(SonicExtPuntViaMemberBase):
+    """sonic-ext punt-via-member off in startup.conf"""
+
+    extra_vpp_config = ["sonic-ext", "{", "punt-via-member", "off", "}"]
+
+    def test_punt_via_member_startup_off(self):
+        """punt-via-member off at startup leaves only capture, for drop-member-stats"""
+        self.assert_punt_via_member_state(False, True)
+
+
+class TestSonicExtCaptureStartupOff(SonicExtPuntViaMemberBase):
+    """sonic-ext punt-via-member and drop-member-stats off in startup.conf"""
+
+    extra_vpp_config = [
+        "sonic-ext",
+        "{",
+        "punt-via-member",
+        "off",
+        "drop-member-stats",
+        "off",
+        "}",
+    ]
+
+    def test_capture_startup_off(self):
+        """with both of its consumers off at startup, capture never runs"""
+        self.assert_punt_via_member_state(False, False)
+
+
+class TestSonicExtPuntViaMemberDefault(SonicExtPuntViaMemberBase):
+    """sonic-ext punt-via-member default"""
+
+    def test_punt_via_member_defaults_on(self):
+        """punt-via-member is on by default with capture and glean redirect"""
+        self.assert_punt_via_member_state(True, True)
 
 
 if __name__ == "__main__":
