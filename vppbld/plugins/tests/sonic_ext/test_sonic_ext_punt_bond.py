@@ -488,34 +488,57 @@ class TestSonicExtBondPunt(VppTestCase):
             self.egress.set_l3_mtu(current_mtu)
 
     def test_ttl_punt_does_not_rewrite_paired_live_packet(self):
-        """The two-packet path punts TTL=1 and normally rewrites TTL=5"""
+        """The paired path punts TTL=1 and normally rewrites live packets"""
         member = self.members[0]
         tap = self.member_taps[0]
-        expired = self._ttl_transit(member, ttl=1)
-        live = self._ttl_transit(member, ttl=5)
 
         self.vapi.sonic_ext_copp_ttl_punt_bind(is_bind=True)
         try:
-            before = self._err(TTL_REDIRECTED)
-            tap.enable_capture()
-            self.pg_enable_capture(self.pg_interfaces)
-            member.add_stream([expired, live])
-            self.pg_start(trace=True)
-            try:
-                host_rx = tap.get_capture(
-                    expected_count=1,
-                    timeout=5,
-                    filter_out_fn=self._not_ttl_transit,
-                )
-                egress_rx = self.egress.get_capture(expected_count=1)
-            finally:
-                self.logger.debug(self.vapi.cli("show trace max 50"))
+            # On amd64, ip4_rewrite_inline() enters its paired loop only with
+            # at least eight packets left.  Put the expired packet in each of
+            # the two lanes so both one-header rewrite branches are exercised.
+            for expired_lane in (0, 1):
+                with self.subTest(expired_lane=expired_lane):
+                    packets = []
+                    live_by_id = {}
+                    for lane in range(8):
+                        pkt = self._ttl_transit(
+                            member, ttl=1 if lane == expired_lane else 5
+                        )
+                        pkt[IP].id = 0x5000 + expired_lane * 0x100 + lane
+                        pkt[Raw].load = bytes([0xA0 + lane]) * len(pkt[Raw].load)
+                        packets.append(pkt)
+                        if lane != expired_lane:
+                            live_by_id[pkt[IP].id] = pkt
 
-            self.assertEqual(self._err(TTL_REDIRECTED), before + 1)
-            self.assertEqual(bytes(host_rx[0]), bytes(expired))
-            self.assertEqual(egress_rx[0][IP].dst, live[IP].dst)
-            self.assertEqual(egress_rx[0][IP].ttl, 4)
-            self.assertEqual(bytes(egress_rx[0][Raw]), bytes(live[Raw]))
+                    expired = packets[expired_lane]
+                    before = self._err(TTL_REDIRECTED)
+                    tap.enable_capture()
+                    self.pg_enable_capture(self.pg_interfaces)
+                    member.add_stream(packets)
+                    self.pg_start(trace=True)
+                    try:
+                        host_rx = tap.get_capture(
+                            expected_count=1,
+                            timeout=5,
+                            filter_out_fn=self._not_ttl_transit,
+                        )
+                        egress_rx = self.egress.get_capture(expected_count=7)
+                    finally:
+                        self.logger.debug(self.vapi.cli("show trace max 50"))
+
+                    self.assertEqual(self._err(TTL_REDIRECTED), before + 1)
+                    self.assertEqual(bytes(host_rx[0]), bytes(expired))
+                    self.assertEqual({pkt[IP].id for pkt in egress_rx}, set(live_by_id))
+                    for rx in egress_rx:
+                        sent = live_by_id[rx[IP].id]
+                        self.assertEqual(rx[Ether].src, self.egress.local_mac)
+                        self.assertEqual(rx[Ether].dst, self.egress.remote_mac)
+                        self.assertEqual(rx[IP].src, sent[IP].src)
+                        self.assertEqual(rx[IP].dst, sent[IP].dst)
+                        self.assertEqual(rx[IP].ttl, sent[IP].ttl - 1)
+                        self.assertEqual(rx[IP].id, sent[IP].id)
+                        self.assertEqual(bytes(rx[Raw]), bytes(sent[Raw]))
         finally:
             self.vapi.sonic_ext_copp_ttl_punt_bind(is_bind=False)
 
