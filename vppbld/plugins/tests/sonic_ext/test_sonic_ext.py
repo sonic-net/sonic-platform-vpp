@@ -26,6 +26,92 @@ from scapy.layers.inet6 import (
 from scapy.utils6 import in6_getnsma, in6_getnsmac
 
 
+class SonicExtAllFeaturesBase(VppTestCase):
+    """sonic-ext feature table test base"""
+
+    # Both plugins are .default_disabled, and sonic-ext's nodes name
+    # linux-cp's, so sonic-ext cannot load without it.
+    extra_vpp_plugin_config = [
+        "plugin",
+        "linux_cp_plugin.so",
+        "{",
+        "enable",
+        "}",
+        "plugin",
+        "sonic_ext_plugin.so",
+        "{",
+        "enable",
+        "}",
+    ]
+
+    # foreach_sonic_ext_feature (sonic_ext.h) with each feature's owner.  The
+    # startup.conf stanza needs the names before VPP runs; show sonic-ext,
+    # generated from the same table, then checks that none is missing.
+    FEATURES = {
+        "punt-via-member": "vpp",
+        "host-xc": "vpp",
+        "drop-member-stats": "vpp",
+        "nd-punt": "vpp",
+        "copp": "vpp",
+        "ip2me": "saivpp",
+        "l2-trap-fixup": "saivpp",
+        "l2-vlan-filter": "saivpp",
+        "pbh": "saivpp",
+        "iface-loopback": "saivpp",
+    }
+
+    def show_features(self):
+        """{feature: owner} as listed by show sonic-ext"""
+        features = {}
+        owner = "vpp"
+        for line in self.vapi.cli("show sonic-ext").splitlines():
+            line = line.strip()
+            if line == "-- saivpp-wired --":
+                owner = "saivpp"
+            elif line == "-- counters --":
+                break
+            else:
+                m = re.match(r"([a-z0-9-]+)\s+:\s+(on|off)$", line)
+                if m:
+                    features[m.group(1)] = owner
+        return features
+
+    def assert_all_features_state(self, enabled):
+        self.assertEqual(self.show_features(), self.FEATURES)
+        # capture has no keyword: it follows punt-via-member and drop-member-stats
+        for feature in list(self.FEATURES) + ["capture"]:
+            reply = self.vapi.sonic_ext_feature_get(feature=feature)
+            self.assertEqual(
+                bool(reply.enabled), enabled, "sonic_ext_feature_get %s" % feature
+            )
+
+
+class TestSonicExtAllFeaturesStartupOff(SonicExtAllFeaturesBase):
+    """every sonic-ext feature off in one startup.conf stanza"""
+
+    extra_vpp_config = (
+        ["sonic-ext", "{"]
+        + [
+            word
+            for feature in SonicExtAllFeaturesBase.FEATURES
+            for word in (feature, "off")
+        ]
+        + ["}"]
+    )
+
+    def test_all_features_startup_off(self):
+        """every feature keyword is accepted in one stanza and reported off"""
+        self.assert_all_features_state(False)
+
+
+class TestSonicExtAllFeaturesDefault(SonicExtAllFeaturesBase):
+    """sonic-ext features default"""
+
+    def test_all_features_defaults_on(self):
+        """every feature is on by default, which an unknown name never is"""
+        self.assert_all_features_state(True)
+
+
 class SonicExtNdPuntBase(VppTestCase):
     """sonic-ext nd-punt test base"""
 
@@ -389,75 +475,6 @@ class TestSonicExtPuntViaMemberDefault(SonicExtPuntViaMemberBase):
     def test_punt_via_member_defaults_on(self):
         """punt-via-member is on by default with capture and glean redirect"""
         self.assert_punt_via_member_state(True, True)
-
-
-class SonicExtAllFeaturesBase(SonicExtArcBase):
-    """sonic-ext feature table test base"""
-
-    # foreach_sonic_ext_feature (sonic_ext.h) with each feature's owner.  The
-    # startup.conf stanza needs the names before VPP runs; show sonic-ext,
-    # generated from the same table, then checks that none is missing.
-    FEATURES = {
-        "punt-via-member": "vpp",
-        "host-xc": "vpp",
-        "drop-member-stats": "vpp",
-        "nd-punt": "vpp",
-        "copp": "vpp",
-        "ip2me": "saivpp",
-        "l2-trap-fixup": "saivpp",
-        "l2-vlan-filter": "saivpp",
-        "pbh": "saivpp",
-        "iface-loopback": "saivpp",
-    }
-
-    def show_features(self):
-        """{feature: owner} as listed by show sonic-ext"""
-        features = {}
-        owner = "vpp"
-        for line in self.vapi.cli("show sonic-ext").splitlines():
-            line = line.strip()
-            if line == "-- saivpp-wired --":
-                owner = "saivpp"
-            elif line == "-- counters --":
-                break
-            else:
-                m = re.match(r"([a-z0-9-]+)\s+:\s+(on|off)$", line)
-                if m:
-                    features[m.group(1)] = owner
-        return features
-
-    def assert_all_features_state(self, enabled):
-        self.assertEqual(self.show_features(), self.FEATURES)
-        for feature in self.FEATURES:
-            self.assert_feature_get(feature, enabled)
-        # capture has no keyword: it follows punt-via-member and drop-member-stats
-        self.assert_feature_get("capture", enabled)
-
-
-class TestSonicExtAllFeaturesStartupOff(SonicExtAllFeaturesBase):
-    """every sonic-ext feature off in one startup.conf stanza"""
-
-    extra_vpp_config = (
-        ["sonic-ext", "{"]
-        + [
-            word
-            for feature in SonicExtAllFeaturesBase.FEATURES
-            for word in (feature, "off")
-        ]
-        + ["}"]
-    )
-
-    def test_all_features_startup_off(self):
-        """every feature keyword is accepted in one stanza and reported off"""
-        self.assert_all_features_state(False)
-
-
-class TestSonicExtAllFeaturesDefault(SonicExtAllFeaturesBase):
-    """sonic-ext features default"""
-
-    def test_all_features_defaults_on(self):
-        """every feature is on by default, which an unknown name never is"""
-        self.assert_all_features_state(True)
 
 
 if __name__ == "__main__":
