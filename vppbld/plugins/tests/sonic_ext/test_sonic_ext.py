@@ -249,10 +249,23 @@ class SonicExtArcBase(VppTestCase):
             bool(reply.enabled), enabled, "sonic_ext_feature_get %s" % feature
         )
 
-    def assert_feature(self, itf, name, enabled):
-        output = self.vapi.cli("show interface features %s" % itf)
-        attached = name in (line.strip() for line in output.splitlines())
-        self.assertEqual(attached, enabled, "%s on %s" % (name, itf))
+    def arc_features(self, itf):
+        """{arc: [feature node, ...]} from show interface features"""
+        arcs = {}
+        arc = None
+        for line in self.vapi.cli("show interface features %s" % itf).splitlines():
+            if line and not line[0].isspace() and line.endswith(":"):
+                arc = arcs.setdefault(line[:-1], [])
+            elif arc is not None and line.strip():
+                arc.append(line.strip())
+        return arcs
+
+    def assert_feature(self, itf, arc, name, enabled):
+        arcs = self.arc_features(itf)
+        # a misspelt arc would otherwise pass every "not attached" check
+        self.assertIn(arc, arcs, "no %s arc on %s" % (arc, itf))
+        attached = name in arcs[arc]
+        self.assertEqual(attached, enabled, "%s on %s %s" % (name, itf, arc))
 
     @contextmanager
     def lcp_pair(self):
@@ -270,7 +283,7 @@ class SonicExtHostXcBase(SonicExtArcBase):
     def assert_host_xc_state(self, enabled):
         self.assert_feature_get("host-xc", enabled)
         with self.lcp_pair():
-            self.assert_feature("pg1", "sonic-ext-host-xc", enabled)
+            self.assert_feature("pg1", "device-input", "sonic-ext-host-xc", enabled)
 
 
 class TestSonicExtHostXcStartupOff(SonicExtHostXcBase):
@@ -298,7 +311,13 @@ class SonicExtDropMemberStatsBase(SonicExtArcBase):
         self.assert_feature_get("drop-member-stats", enabled)
         # local0 exists before the plugin's interface hook, pg0 is created after
         for itf in ("local0", "pg0"):
-            self.assert_feature(itf, "sonic-ext-drop-member-stats", enabled)
+            self.assert_feature(
+                itf, "error-drop", "sonic-ext-drop-member-stats", enabled
+            )
+        # capture keeps running either way, for punt-via-member
+        self.assert_feature_get("capture", True)
+        with self.lcp_pair():
+            self.assert_feature("pg0", "device-input", "sonic-ext-capture", True)
 
 
 class TestSonicExtDropMemberStatsStartupOff(SonicExtDropMemberStatsBase):
@@ -327,9 +346,12 @@ class SonicExtPuntViaMemberBase(SonicExtArcBase):
         # capture has no keyword: it runs while punt-via-member or
         # drop-member-stats, the two consumers of its cookie, is on
         self.assert_feature_get("capture", capture)
-        self.assert_feature("local0", "sonic-ext-glean-redirect", punt_via_member)
+        for arc in ("ip4-drop", "ip6-drop"):
+            self.assert_feature(
+                "local0", arc, "sonic-ext-glean-redirect", punt_via_member
+            )
         with self.lcp_pair():
-            self.assert_feature("pg0", "sonic-ext-capture", capture)
+            self.assert_feature("pg0", "device-input", "sonic-ext-capture", capture)
 
 
 class TestSonicExtPuntViaMemberStartupOff(SonicExtPuntViaMemberBase):
