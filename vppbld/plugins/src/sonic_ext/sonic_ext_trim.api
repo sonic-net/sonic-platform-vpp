@@ -29,12 +29,13 @@ import "vnet/interface_types.api";
 /** \brief Program or clear the global packet-trim policy.
     @param is_enable - false clears/disables trimming globally
     @param trim_size - maximum bytes retained in a trimmed copy
-    @param dscp_mode - 0 = symmetric (dscp_value), 1 = from_tc (tc_value)
+    @param dscp_mode - 0 = symmetric (dscp_value); other modes are unsupported
     @param dscp_value - symmetric DSCP applied to the trimmed copy (0..63)
-    @param tc_value - traffic class used for the from_tc egress-map lookup
+    @param tc_value - reserved traffic class (0..255); from_tc is not implemented
     @param trim_queue - static egress queue used for the trimmed copy (0..7)
-    An enabled policy with an unsupported trim_queue is rejected without
-    changing the previous policy.
+    An enabled policy with an unsupported trim_queue or dscp_mode, or a DSCP
+    above 63, is rejected without changing the previous policy. A disable
+    request ignores the other fields.
 */
 autoreply define sonic_ext_trim_global_set
 {

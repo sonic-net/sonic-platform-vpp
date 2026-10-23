@@ -85,8 +85,9 @@ sonic_ext_trim_global_command_fn (vlib_main_t *vm, unformat_input_t *input,
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
   unformat_input_t _li, *li = &_li;
-  u32 size = ~0, dscp = ~0, tc = ~0, queue = ~0;
-  int mode = -1;
+  u32 size = sem->trim_size, dscp = sem->trim_dscp_value;
+  u32 tc = sem->trim_tc, queue = sem->trim_queue;
+  int mode = sem->trim_dscp_mode;
   int disable = 0;
 
   if (!unformat_user (input, unformat_line_input, li))
@@ -124,28 +125,31 @@ sonic_ext_trim_global_command_fn (vlib_main_t *vm, unformat_input_t *input,
       return 0;
     }
 
-  if (queue != ~0 && queue >= SONIC_EXT_TRIM_MAX_QUEUES)
+  if (size > UINT16_MAX)
+    return clib_error_return (0, "size must be 0..%u", UINT16_MAX);
+  if (dscp > 63)
+    return clib_error_return (0, "dscp must be 0..63");
+  if (tc > UINT8_MAX)
+    return clib_error_return (0, "tc must be 0..%u", UINT8_MAX);
+  if (queue >= SONIC_EXT_TRIM_MAX_QUEUES)
     return clib_error_return (0, "queue must be 0..%u",
 			     SONIC_EXT_TRIM_MAX_QUEUES - 1);
+  if (mode != SONIC_EXT_TRIM_DSCP_MODE_SYMMETRIC)
+    return clib_error_return (0, "only symmetric DSCP mode is supported");
 
-  if (size != ~0)
-    sem->trim_size = size;
-  if (dscp != ~0)
-    sem->trim_dscp_value = dscp & 0x3f;
-  if (tc != ~0)
-    sem->trim_tc = tc;
-  if (queue != ~0)
-    sem->trim_queue = queue;
-  if (mode != -1)
-    sem->trim_dscp_mode = mode;
+  sem->trim_size = (u16) size;
+  sem->trim_dscp_value = (u8) dscp;
+  sem->trim_tc = (u8) tc;
+  sem->trim_queue = (u8) queue;
+  sem->trim_dscp_mode = (u8) mode;
   sem->trim_configured = 1;
   return 0;
 }
 
 VLIB_CLI_COMMAND (sonic_ext_trim_global_command, static) = {
   .path = "sonic-ext trim global",
-  .short_help = "sonic-ext trim global [size <n>] [dscp <0-63>] [tc <n>] "
-		"[queue <0-7>] [mode symmetric|from-tc] [disable]",
+  .short_help = "sonic-ext trim global [size <0-65535>] [dscp <0-63>] "
+		"[tc <0-255>] [queue <0-7>] [mode symmetric] [disable]",
   .function = sonic_ext_trim_global_command_fn,
 };
 

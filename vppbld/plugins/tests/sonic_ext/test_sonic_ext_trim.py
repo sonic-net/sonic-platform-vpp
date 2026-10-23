@@ -62,6 +62,101 @@ class TestSonicExtTrimStartupOff(SonicExtTrimBase):
         self.assertFalse(self.trim_feature_enabled())
 
 
+class TestSonicExtTrimConfig(SonicExtTrimBase):
+    """Global configuration validation and disable semantics."""
+
+    def setUp(self):
+        super().setUp()
+        self.policy = dict(
+            is_enable=True,
+            trim_size=256,
+            dscp_mode=0,
+            dscp_value=48,
+            tc_value=0,
+            trim_queue=6,
+        )
+        self.addCleanup(self.vapi.sonic_ext_trim_global_set, is_enable=False)
+        self.vapi.sonic_ext_trim_global_set(**self.policy)
+
+    def test_cli_global_validation_is_atomic(self):
+        """Reject narrowing, invalid modes, and explicit all-ones inputs."""
+        before = self.vapi.cli("show sonic-ext trim")
+        for invalid in (
+            "size 65536",
+            "size 4294967295",
+            "dscp 64",
+            "dscp 4294967295",
+            "tc 256",
+            "tc 4294967295",
+            "queue 4294967295",
+            "mode from-tc",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(CliFailedCommandError):
+                    self.vapi.cli(
+                        "sonic-ext trim global size 512 dscp 12 tc 3 queue 5 " + invalid
+                    )
+                self.assertEqual(before, self.vapi.cli("show sonic-ext trim"))
+
+    def test_api_global_validation_is_atomic(self):
+        """Invalid DSCP values and unsupported modes preserve every field."""
+        before = self.vapi.cli("show sonic-ext trim")
+        for field, values in (("dscp_value", (64, 255)), ("dscp_mode", (1, 255))):
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    candidate = dict(
+                        self.policy,
+                        trim_size=512,
+                        dscp_value=12,
+                        tc_value=3,
+                        trim_queue=5,
+                    )
+                    candidate[field] = value
+                    with self.vapi.assert_negative_api_retval():
+                        self.vapi.sonic_ext_trim_global_set(**candidate)
+                    self.assertEqual(before, self.vapi.cli("show sonic-ext trim"))
+
+    def test_limits_partial_update_and_disable(self):
+        """Boundary values survive partial updates; disable ignores fields."""
+        self.vapi.cli(
+            "sonic-ext trim global size 65535 dscp 63 tc 255 queue 7 mode symmetric"
+        )
+        self.vapi.cli("sonic-ext trim global dscp 0")
+        state = self.vapi.cli("show sonic-ext trim")
+        for label, value in (
+            ("trim size", 65535),
+            ("dscp value", 0),
+            ("trim tc", 255),
+            ("trim queue", 7),
+        ):
+            self.assertRegex(state, rf"{label}\s*:\s*{value}\b")
+        self.vapi.cli(
+            "sonic-ext trim global disable size 4294967295 dscp 4294967295 "
+            "tc 4294967295 queue 4294967295 mode from-tc"
+        )
+        self.assertRegex(self.vapi.cli("show sonic-ext trim"), r"configured\s*:\s*no")
+        self.vapi.sonic_ext_trim_global_set(
+            is_enable=True,
+            trim_size=65535,
+            dscp_mode=0,
+            dscp_value=63,
+            tc_value=255,
+            trim_queue=7,
+        )
+        self.vapi.sonic_ext_trim_global_set(
+            is_enable=False,
+            trim_size=65535,
+            dscp_mode=255,
+            dscp_value=255,
+            tc_value=255,
+            trim_queue=255,
+        )
+        state = self.vapi.cli("show sonic-ext trim")
+        self.assertRegex(state, r"configured\s*:\s*no")
+        self.assertRegex(state, r"trim size\s*:\s*0\b")
+        self.assertRegex(state, r"dscp value\s*:\s*63\b")
+
+
 class SonicExtTrimDataplaneBase(SonicExtTrimBase):
     """Three routed ports, with queue 0 blocked and trim-eligible on pg1."""
 

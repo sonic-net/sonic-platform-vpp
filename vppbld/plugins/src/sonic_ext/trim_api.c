@@ -181,7 +181,8 @@ vl_api_sonic_ext_trim_global_set_t_handler (
 
   if (mp->is_enable)
     {
-      if (mp->trim_queue >= SONIC_EXT_TRIM_MAX_QUEUES)
+      if (mp->trim_queue >= SONIC_EXT_TRIM_MAX_QUEUES || mp->dscp_value > 63 ||
+	  mp->dscp_mode != SONIC_EXT_TRIM_DSCP_MODE_SYMMETRIC)
 	{
 	  rv = VNET_API_ERROR_INVALID_VALUE;
 	  goto done;
@@ -189,7 +190,7 @@ vl_api_sonic_ext_trim_global_set_t_handler (
 
       sem->trim_size = ntohs (mp->trim_size);
       sem->trim_dscp_mode = mp->dscp_mode;
-      sem->trim_dscp_value = mp->dscp_value & 0x3f;
+      sem->trim_dscp_value = mp->dscp_value;
       sem->trim_tc = mp->tc_value;
       sem->trim_queue = mp->trim_queue;
       sem->trim_configured = 1;

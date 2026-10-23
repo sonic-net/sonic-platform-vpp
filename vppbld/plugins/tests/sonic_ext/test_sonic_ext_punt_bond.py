@@ -40,6 +40,11 @@ punted copy must still surface on the *member* tap -- a routed
 sub-interface of a bond has its own LCP pair, but that tap is an aggregate
 tap just like the master's.
 
+Scenario 3 -- TTL_ERROR.  A routed packet whose TTL expires is diverted
+from ip4-rewrite directly to the ingress member's tap.  Both untagged and
+tagged cases must preserve the complete ingress frame, including MACs,
+VLAN tag, TTL, and checksum.
+
 Every test injects on both members in turn and asserts the punt lands on
 the tap of the member that received it; that is the property the two nodes
 exist to provide.
@@ -76,6 +81,9 @@ NO_COOKIE = (
 DISABLED = (
     "/err/sonic-ext-aggr-tap-redirect/"
     "punt-via-member disabled -- left on aggregate tap"
+)
+TTL_REDIRECTED = (
+    "/err/sonic-ext-copp-ttl-punt/" "transit TTL_ERROR punted to host for CoPP policing"
 )
 
 
@@ -150,9 +158,14 @@ class TestSonicExtBondPunt(VppTestCase):
     def setUp(self):
         super(TestSonicExtBondPunt, self).setUp()
 
-        self.create_pg_interfaces(range(2))
+        self.create_pg_interfaces(range(3))
         for i in self.pg_interfaces:
             i.admin_up()
+        self.members = (self.pg0, self.pg1)
+        self.egress = self.pg2
+        self.egress.config_ip4()
+        self.egress.generate_remote_hosts(1)
+        self.egress.configure_ipv4_neighbors()
 
         self.lcp_pairs = []
 
@@ -172,7 +185,7 @@ class TestSonicExtBondPunt(VppTestCase):
         )
         self.bond.add_vpp_config()
         self.bond.admin_up()
-        for i in self.pg_interfaces:
+        for i in self.members:
             self.bond.add_member_vpp_bond_interface(sw_if_index=i.sw_if_index)
 
         self.vapi.sw_interface_add_del_address(
@@ -225,11 +238,16 @@ class TestSonicExtBondPunt(VppTestCase):
             prefix="%s/%d" % (self.BOND_IP4, self.PREFIX_LEN),
             is_add=0,
         )
-        for i in self.pg_interfaces:
+        for i in self.members:
             self.bond.detach_vpp_bond_interface(sw_if_index=i.sw_if_index)
         self.bond.admin_down()
         self.bond.remove_vpp_config()
 
+        self.vapi.ip_neighbor_flush(
+            af=VppEnum.vl_api_address_family_t.ADDRESS_IP4,
+            sw_if_index=self.egress.sw_if_index,
+        )
+        self.egress.unconfig_ip4()
         for i in self.pg_interfaces:
             i.admin_down()
         super(TestSonicExtBondPunt, self).tearDown()
@@ -278,6 +296,20 @@ class TestSonicExtBondPunt(VppTestCase):
             / Raw(b"\xa5" * 64)
         )
 
+    def _ttl_transit(self, member, tagged=False, ttl=1, size=200):
+        pkt = Ether(src=member.remote_mac, dst=self.bond.local_mac)
+        if tagged:
+            pkt /= Dot1Q(vlan=self.VLAN_ID)
+        return (
+            pkt
+            / IP(
+                src=self.VLAN_REMOTE_IP4 if tagged else self.BOND_REMOTE_IP4,
+                dst=self.egress.remote_hosts[0].ip4,
+                ttl=ttl,
+            )
+            / Raw(b"\xa5" * size)
+        )
+
     #
     # capture filters -- the taps also carry kernel-generated traffic
     #
@@ -289,6 +321,13 @@ class TestSonicExtBondPunt(VppTestCase):
     @staticmethod
     def _not_icmp(p):
         return not p.haslayer(ICMP)
+
+    def _not_ttl_transit(self, p):
+        return not (
+            p.haslayer(IP)
+            and p[IP].dst == self.egress.remote_hosts[0].ip4
+            and p[IP].ttl == 1
+        )
 
     #
     # helpers
@@ -333,7 +372,7 @@ class TestSonicExtBondPunt(VppTestCase):
     def _punt_on_each_member(self, build_pkt, filter_out_fn, tagged):
         """Run the same punt from every bond member and check tap selection."""
         results = []
-        for member, tap in zip(self.pg_interfaces, self.member_taps):
+        for member, tap in zip(self.members, self.member_taps):
             rx = self._punt_on_member(
                 member, tap, build_pkt(member, tagged=tagged), filter_out_fn
             )
@@ -395,6 +434,113 @@ class TestSonicExtBondPunt(VppTestCase):
             self.assertEqual(rx[IP].dst, self.VLAN_IP4)
             self.assertEqual(rx[IP].src, self.VLAN_REMOTE_IP4)
             self.assertEqual(rx[Ether].dst, self.bond.local_mac)
+
+    #
+    # scenario 3 -- TTL_ERROR for routed traffic
+    #
+
+    def _assert_ttl_punt_on_each_member(self, tagged, size=200):
+        self.vapi.sonic_ext_copp_ttl_punt_bind(is_bind=True)
+        try:
+            for member, tap in zip(self.members, self.member_taps):
+                pkt = self._ttl_transit(member, tagged=tagged, size=size)
+                before = self._err(TTL_REDIRECTED)
+
+                tap.enable_capture()
+                self.pg_enable_capture(self.pg_interfaces)
+                member.add_stream([pkt])
+                self.pg_start(trace=True)
+                try:
+                    rxs = tap.get_capture(
+                        expected_count=1,
+                        timeout=5,
+                        filter_out_fn=self._not_ttl_transit,
+                    )
+                    self.egress.assert_nothing_captured()
+                finally:
+                    self.logger.debug(self.vapi.cli("show trace max 50"))
+
+                self.assertEqual(len(rxs), 1)
+                self.assertEqual(self._err(TTL_REDIRECTED), before + 1)
+                self.assertEqual(bytes(rxs[0]), bytes(pkt))
+        finally:
+            self.vapi.sonic_ext_copp_ttl_punt_bind(is_bind=False)
+
+    def test_untagged_ttl_error_to_member_tap(self):
+        """TTL_ERROR keeps the untagged frame and true ingress member"""
+        self._assert_ttl_punt_on_each_member(tagged=False)
+
+    def test_tagged_ttl_error_to_member_tap(self):
+        """TTL_ERROR keeps the tagged frame and true ingress member"""
+        self._assert_ttl_punt_on_each_member(tagged=True)
+
+    def test_ttl_error_wins_over_egress_mtu(self):
+        """An oversized TTL_ERROR punt is not replaced by the MTU path"""
+        current_mtu = next(
+            i.mtu[0]
+            for i in self.vapi.sw_interface_dump(sw_if_index=self.egress.sw_if_index)
+            if i.sw_if_index == self.egress.sw_if_index
+        )
+        self.egress.set_l3_mtu(576)
+        try:
+            self._assert_ttl_punt_on_each_member(tagged=False, size=1000)
+        finally:
+            self.egress.set_l3_mtu(current_mtu)
+
+    def test_ttl_punt_does_not_rewrite_paired_live_packet(self):
+        """The paired path punts TTL=1 and normally rewrites live packets"""
+        member = self.members[0]
+        tap = self.member_taps[0]
+
+        self.vapi.sonic_ext_copp_ttl_punt_bind(is_bind=True)
+        try:
+            # On amd64, ip4_rewrite_inline() enters its paired loop only with
+            # at least eight packets left.  Put the expired packet in each of
+            # the two lanes so both one-header rewrite branches are exercised.
+            for expired_lane in (0, 1):
+                with self.subTest(expired_lane=expired_lane):
+                    packets = []
+                    live_by_id = {}
+                    for lane in range(8):
+                        pkt = self._ttl_transit(
+                            member, ttl=1 if lane == expired_lane else 5
+                        )
+                        pkt[IP].id = 0x5000 + expired_lane * 0x100 + lane
+                        pkt[Raw].load = bytes([0xA0 + lane]) * len(pkt[Raw].load)
+                        packets.append(pkt)
+                        if lane != expired_lane:
+                            live_by_id[pkt[IP].id] = pkt
+
+                    expired = packets[expired_lane]
+                    before = self._err(TTL_REDIRECTED)
+                    tap.enable_capture()
+                    self.pg_enable_capture(self.pg_interfaces)
+                    member.add_stream(packets)
+                    self.pg_start(trace=True)
+                    try:
+                        host_rx = tap.get_capture(
+                            expected_count=1,
+                            timeout=5,
+                            filter_out_fn=self._not_ttl_transit,
+                        )
+                        egress_rx = self.egress.get_capture(expected_count=7)
+                    finally:
+                        self.logger.debug(self.vapi.cli("show trace max 50"))
+
+                    self.assertEqual(self._err(TTL_REDIRECTED), before + 1)
+                    self.assertEqual(bytes(host_rx[0]), bytes(expired))
+                    self.assertEqual({pkt[IP].id for pkt in egress_rx}, set(live_by_id))
+                    for rx in egress_rx:
+                        sent = live_by_id[rx[IP].id]
+                        self.assertEqual(rx[Ether].src, self.egress.local_mac)
+                        self.assertEqual(rx[Ether].dst, self.egress.remote_mac)
+                        self.assertEqual(rx[IP].src, sent[IP].src)
+                        self.assertEqual(rx[IP].dst, sent[IP].dst)
+                        self.assertEqual(rx[IP].ttl, sent[IP].ttl - 1)
+                        self.assertEqual(rx[IP].id, sent[IP].id)
+                        self.assertEqual(bytes(rx[Raw]), bytes(sent[Raw]))
+        finally:
+            self.vapi.sonic_ext_copp_ttl_punt_bind(is_bind=False)
 
     #
     # negative control

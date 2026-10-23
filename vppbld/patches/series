@@ -21,12 +21,12 @@
 #     scope.  Existing hash-eth-l34 and IP_FLOW_HASH_DEFAULT are byte-for-byte
 #     unchanged.
 0011-sonic-inner-aware-flow-hash.patch
-# 12. sflow: native per-port sample rate
+# 12. sflow: native per-port sample rate, including the
+#     sflow_interface_sampling_rate_set API and its test
 0012-sflow-per-port-sample-rate.patch
-# 13. Adding per port direction
+# 13. sflow: per-port sampling direction, including the
+#     sflow_interface_direction_set API and its test
 0013-sflow-per-port-direction.patch
-# 14. Adding new VPP API handlers for per port and direction patches
-0014-sflow-per-port-api.patch
 # 15. VXLAN encap inner-aware flow hash: hash inner IP 5-tuple on L3 VXLAN
 #     encap so inner flows spread across underlay ECMP / LAG paths
 0015-vxlan-encap-inner-aware-flow-hash.patch
@@ -78,3 +78,10 @@
 0022-sonic-pbh-lag-hash.patch
 # 23. ip: 'no-local-src-check' startup config option.
 0023-ip-add-no-local-src-check-startup-config-option.patch
+# 24. l2: report a flushed MAC that traffic refreshes before the ager
+#     deletes it to the MAC event client (want_l2_macs_events2), like a new
+#     learn. Otherwise SONiC, which drops flushed MACs from its FDB, never
+#     learns the MAC again although VPP keeps it (e.g. after
+#     "sonic-clear fdb all"). Includes a test in test_l2_fib.py.
+#     Upstream: https://gerrit.fd.io/r/c/vpp/+/47191
+0024-l2-report-flushed-MAC-refreshed-by-traffic.patch
