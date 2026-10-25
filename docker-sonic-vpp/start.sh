@@ -11,9 +11,20 @@ ln -sf /usr/share/sonic/device/$PLATFORM/$HWSKU /usr/share/sonic/hwsku
 pushd /usr/share/sonic/hwsku
 
 # filter available front panel ports in lanemap.ini
+#
+# The Nth port passed to the container (VPP_DPDK_PORTS) is EthernetN-1, as in
+# platform.json and sonic_vpp_ifmap.ini, so it gets the lanes of the Nth
+# lanemap.ini entry under its own interface name: saivpp drops lane map
+# entries whose interface doesn't exist in the container, so the ports used to
+# work only if they were named eth1, eth2, ... in that order.
 [ -f lanemap.ini.orig ] || cp lanemap.ini lanemap.ini.orig
-for p in $(ip link show | grep -oE "eth[0-9]+" | grep -v eth0); do
-    grep ^$p: lanemap.ini.orig
+IFS=',' read -r -a ports <<< "$VPP_DPDK_PORTS"
+idx=0
+for p in "${ports[@]}"; do
+    idx=$((idx + 1))
+    lanes=$(sed -n "${idx}p" lanemap.ini.orig | cut -d: -f2)
+    [ -n "$lanes" ] && ip link show dev "$p" &> /dev/null || continue
+    echo "$p:$lanes"
 done > lanemap.ini
 
 # filter available sonic front panel ports in port_config.ini
