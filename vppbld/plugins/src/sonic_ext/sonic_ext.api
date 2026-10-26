@@ -462,3 +462,28 @@ autoreply define sonic_ext_pbh_interface_attach_detach
   u32 table_index;
   bool is_attach;
 };
+
+/** \brief Bind or unbind the semantic NEIGHBOR_MISS reason to a CoPP
+    policer. Unlike sonic_ext_copp_ifout_bind, this is not keyed by a wire
+    ethertype: glean-redirect marks successfully redirected BVI/SVI neighbor
+    misses in sonic_ext's per-buffer side-band and copp-ifout consumes that
+    reason before examining the restored Ethernet frame.
+
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param policer_name - name of an existing VPP policer object
+    @param is_bind - 1 to add/replace the singleton binding, 0 to remove it
+*/
+define sonic_ext_copp_neighbor_miss_bind
+{
+  u32 client_index;
+  u32 context;
+  string policer_name[64];
+  bool is_bind;
+};
+
+define sonic_ext_copp_neighbor_miss_bind_reply
+{
+  u32 context;
+  i32 retval;
+};

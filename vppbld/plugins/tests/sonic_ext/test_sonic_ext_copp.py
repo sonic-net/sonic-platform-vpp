@@ -8,7 +8,8 @@ against a named VPP policer and drop what the policer says to drop.
   sonic-ext-copp-ifout
       interface-output feature on each phy's linux-cp host tap.  Matches
       by ethertype (ARP/LACP/LLDP...), structurally for UDLD, and by
-      "IPv4 with TTL <= 1" for TTL_ERROR.
+      "IPv4 with TTL <= 1" for TTL_ERROR. NEIGHBOR_MISS uses a dedicated
+      semantic row selected only by sonic_ext's per-buffer CoPP reason.
 
   sonic-ext-copp-ip2me / sonic-ext-copp-ip2me-ip6
       ip4-punt / ip6-punt features.  IPv4 matches a destination-address
@@ -253,6 +254,14 @@ class SonicExtCoppDataplaneBase(VppTestCase):
             match_ip4_ttl_expiring=ttl_expiring,
         )
 
+    def bind_neighbor_miss(self, pol):
+        self.vapi.sonic_ext_copp_neighbor_miss_bind(policer_name=pol.name, is_bind=True)
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_neighbor_miss_bind,
+            policer_name=pol.name,
+            is_bind=False,
+        )
+
     def add_ip2me_addr(self, addr):
         # sonic-ext keeps the address in network byte order and PAPI sends a
         # u32 big-endian, so the integer form of the address is what to pass.
@@ -444,6 +453,53 @@ class TestSonicExtCoppIfout(SonicExtCoppDataplaneBase):
         self.assert_unpoliced(
             self.lldp(), pol, lambda: self.ifout_counters(LACP_ETHERTYPE)
         )
+
+    def test_neighbor_miss_row_does_not_match_wire_traffic(self):
+        """The semantic reason row must not classify an ordinary frame"""
+        pol = self.policer(conform=DROP)
+        self.bind_neighbor_miss(pol)
+
+        native_before = self.native(pol)
+        rx = self.send_and_capture_host(self.lldp())
+
+        self.assertEqual(len(rx), self.N_PKTS)
+        self.assertEqual(self.native(pol), native_before)
+        self.assertIn("neighbor-miss", self.vapi.cli("show sonic-ext copp-ifout"))
+
+    def test_neighbor_miss_bind_replace_unbind_reuses_one_slot(self):
+        """The singleton semantic row is replaced and its slot is reusable"""
+        first = self.policer(conform=DROP, name="copp-neighbor-miss-first")
+        second = self.policer(conform=DROP, name="copp-neighbor-miss-second")
+
+        self.vapi.sonic_ext_copp_neighbor_miss_bind(
+            policer_name=first.name, is_bind=True
+        )
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_neighbor_miss_bind,
+            policer_name=first.name,
+            is_bind=False,
+        )
+        self.vapi.sonic_ext_copp_neighbor_miss_bind(
+            policer_name=second.name, is_bind=True
+        )
+        show = self.vapi.cli("show sonic-ext copp-ifout")
+        self.assertNotIn(first.name, show)
+        rows = [line for line in show.splitlines() if second.name in line]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("neighbor-miss", rows[0])
+
+        for _ in range(17):
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name=second.name, is_bind=False
+            )
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name=second.name, is_bind=True
+            )
+
+        self.vapi.sonic_ext_copp_neighbor_miss_bind(
+            policer_name=second.name, is_bind=False
+        )
+        self.assertNotIn("neighbor-miss", self.vapi.cli("show sonic-ext copp-ifout"))
 
     def test_drop_action_honored_for_conforming(self):
         """The configured per-color action decides, not the color itself"""
