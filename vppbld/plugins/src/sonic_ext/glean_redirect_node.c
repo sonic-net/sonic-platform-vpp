@@ -13,6 +13,7 @@
  * limitations under the License.
  */
 #include <sonic_ext/sonic_ext.h>
+#include <sonic_ext/sonic_ext_vnet_buf.h>
 
 #include <vlib/vlib.h>
 #include <vnet/vnet.h>
@@ -73,6 +74,7 @@ typedef struct
   u32 host_tap_sw_if_index;
   u16 pushed_vlan_id;
   u8 redirected;
+  u8 neighbor_miss;
 } sonic_ext_glean_redirect_trace_t;
 
 static u8 *
@@ -84,9 +86,10 @@ format_sonic_ext_glean_redirect_trace (u8 *s, va_list *args)
     va_arg (*args, sonic_ext_glean_redirect_trace_t *);
 
   s = format (s,
-	      "SONIC-EXT-GLEAN-REDIRECT: orig-rx %u host-tap %u vlan %u %s",
+	      "SONIC-EXT-GLEAN-REDIRECT: orig-rx %u host-tap %u vlan %u %s%s",
 	      t->orig_rx_sw_if_index, t->host_tap_sw_if_index,
-	      t->pushed_vlan_id, t->redirected ? "REDIRECTED" : "passthru");
+	      t->pushed_vlan_id, t->redirected ? "REDIRECTED" : "passthru",
+	      t->neighbor_miss ? " NEIGHBOR_MISS" : "");
   return s;
 }
 
@@ -215,7 +218,7 @@ sonic_ext_glean_from_nbr_node (vlib_main_t *vm, vlib_buffer_t *b)
  * packet reaches the kernel Vlan<id> netdev which ARPs and bridges out.
  */
 static_always_inline int
-sonic_ext_glean_should_redirect (u32 adj_index)
+sonic_ext_glean_should_redirect (u32 adj_index, u32 *egress_sw_if_index)
 {
   vnet_main_t *vnm = vnet_get_main ();
   ip_adjacency_t *adj;
@@ -234,6 +237,8 @@ sonic_ext_glean_should_redirect (u32 adj_index)
   swo = vnet_get_sw_interface_or_null (vnm, egress_sw);
   if (!swo)
     return 0;
+
+  *egress_sw_if_index = egress_sw;
 
   return 1;
 }
@@ -266,9 +271,11 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
       u32 adj_index0 = vnet_buffer (b[0])->ip.adj_index[VLIB_TX];
       u32 orig_rx = ~0;
       u32 host_tap = ~0;
+      u32 egress_sw = ~0;
       u16 pushed_tpid = 0;
       u16 pushed_vlan_id = 0;
       int did_redirect = 0;
+      int is_neighbor_miss = 0;
       u64 key;
 
       /* Default: continue down the drop arc (real drop). */
@@ -296,7 +303,7 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	  goto trace0;
 	}
 
-      if (!sonic_ext_glean_should_redirect (adj_index0))
+      if (!sonic_ext_glean_should_redirect (adj_index0, &egress_sw))
 	{
 	  n_not_glean++;
 	  goto trace0;
@@ -327,6 +334,21 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	  goto trace0;
 	}
 
+      /*
+       * The NEIGHBOR_MISS trap is the subnet-hit case whose unresolved
+       * connected adjacency exits through the VLAN's BVI/SVI.  Preserve that
+       * reason across the existing redirect to the ingress member TAP so the
+       * common copp-ifout node can select queue1_group3's policer.
+       */
+      if (PREDICT_FALSE (
+	    sonic_ext_phy_is_bvi (egress_sw) &&
+	    sonic_ext_copp_neighbor_miss_is_bound (sem)))
+	{
+	  sonic_ext_vnet_buf_claim (
+	    vm, b[0], SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS);
+	  is_neighbor_miss = 1;
+	}
+
       next[0] = SONIC_EXT_GLEAN_REDIRECT_NEXT_INTERFACE_OUTPUT;
       did_redirect = 1;
       n_redirected++;
@@ -341,6 +363,7 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	  t->host_tap_sw_if_index = host_tap;
 	  t->pushed_vlan_id = pushed_vlan_id;
 	  t->redirected = did_redirect;
+	  t->neighbor_miss = is_neighbor_miss;
 	}
 
       b += 1;

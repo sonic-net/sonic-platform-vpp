@@ -283,28 +283,86 @@ VLIB_CLI_COMMAND (sonic_ext_copp_ifout_bind_command, static) = {
 };
 
 static clib_error_t *
+sonic_ext_copp_neighbor_miss_bind_command_fn (vlib_main_t *vm,
+					      unformat_input_t *input,
+					      vlib_cli_command_t *cmd)
+{
+  u8 *policer_name = 0;
+  int is_bind = 1;
+  clib_error_t *error = 0;
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (input, "policer %s", &policer_name))
+	;
+      else if (unformat (input, "del"))
+	is_bind = 0;
+      else
+	{
+	  error = clib_error_return (0, "unknown input `%U'",
+				    format_unformat_error, input);
+	  goto done;
+	}
+    }
+
+  if (is_bind && !policer_name)
+    {
+      error = clib_error_return (
+	0, "usage: sonic-ext copp-neighbor-miss bind policer <name> [del]");
+      goto done;
+    }
+
+  {
+    int rv = sonic_ext_copp_neighbor_miss_bind (
+      policer_name ? (char *) policer_name : "", is_bind);
+    if (rv)
+      error = clib_error_return (0, "bind failed: rv %d", rv);
+  }
+
+done:
+  vec_free (policer_name);
+  return error;
+}
+
+VLIB_CLI_COMMAND (sonic_ext_copp_neighbor_miss_bind_command, static) = {
+  .path = "sonic-ext copp-neighbor-miss bind",
+  .short_help = "sonic-ext copp-neighbor-miss bind policer <name> [del]",
+  .function = sonic_ext_copp_neighbor_miss_bind_command_fn,
+};
+
+static clib_error_t *
 show_sonic_ext_copp_ifout_command_fn (vlib_main_t *vm,
 				      unformat_input_t *input,
 				      vlib_cli_command_t *cmd)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
 
-  vlib_cli_output (vm, "%-8s %-40s %-12s %10s %10s %10s %s",
-		   "ethtype", "policer-name", "vpp-idx",
-		   "conform", "exceed", "violate", "match");
+  vlib_cli_output (vm, "%-14s %-40s %-12s %10s %10s %10s %s",
+		   "key", "policer-name", "vpp-idx", "conform", "exceed",
+		   "violate", "match");
   for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
     {
       if (!sem->copp_ifout_entries[i].in_use)
 	continue;
-      vlib_cli_output (vm, "0x%04x   %-40s %-12d %10llu %10llu %10llu %s",
-		       sem->copp_ifout_entries[i].ethertype,
-		       sem->copp_ifout_entries[i].name,
-		       (i32) sem->copp_ifout_entries[i].policer_index,
-		       sem->copp_ifout_conform_packets[i],
-		       sem->copp_ifout_exceed_packets[i],
-		       sem->copp_ifout_violate_packets[i],
-		       sem->copp_ifout_entries[i].match_ip4_ttl_expiring ?
-			 "ip4-ttl<=1" : "-");
+      if (sem->copp_ifout_entries[i].match_neighbor_miss)
+	vlib_cli_output (vm, "%-14s %-40s %-12d %10llu %10llu %10llu %s",
+			 "neighbor-miss", sem->copp_ifout_entries[i].name,
+			 (i32) sem->copp_ifout_entries[i].policer_index,
+			 sem->copp_ifout_conform_packets[i],
+			 sem->copp_ifout_exceed_packets[i],
+			 sem->copp_ifout_violate_packets[i], "neighbor-miss");
+      else
+	vlib_cli_output (vm,
+			 "0x%04x         %-40s %-12d %10llu %10llu %10llu %s",
+			 sem->copp_ifout_entries[i].ethertype,
+			 sem->copp_ifout_entries[i].name,
+			 (i32) sem->copp_ifout_entries[i].policer_index,
+			 sem->copp_ifout_conform_packets[i],
+			 sem->copp_ifout_exceed_packets[i],
+			 sem->copp_ifout_violate_packets[i],
+			 sem->copp_ifout_entries[i].match_ip4_ttl_expiring ?
+			   "ip4-ttl<=1" :
+			   "-");
     }
 
   return 0;
