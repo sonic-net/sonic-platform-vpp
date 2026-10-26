@@ -883,6 +883,7 @@ sonic_ext_init (vlib_main_t *vm)
     .pair_del_fn = sonic_ext_lcp_pair_del_cb,
   };
   clib_memset (sem, 0, sizeof (*sem));
+  sem->copp_neighbor_miss_entry_index = ~0;
   lcp_itf_pair_register_vft (&sonic_ext_lcp_vft);
 
   /* Defaults only -- no arcs are touched here, so a "sonic-ext { }" stanza

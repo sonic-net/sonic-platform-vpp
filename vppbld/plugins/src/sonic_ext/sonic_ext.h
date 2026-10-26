@@ -248,7 +248,7 @@ typedef enum
 
 /*
  * sonic-ext-copp-ifout: interface-output CoPP policer for
- * ARP/LACP/LLDP/UDLD/TTL_ERROR.
+ * ARP/LACP/LLDP/UDLD/TTL_ERROR/NEIGHBOR_MISS.
  */
 #define SONIC_EXT_COPP_IFOUT_MAX_ENTRIES 16
 #define SONIC_EXT_COPP_IFOUT_NAME_LEN 64
@@ -271,6 +271,7 @@ typedef struct
   u32 policer_index;
   u8 in_use;
   u8 match_ip4_ttl_expiring; /* TTL_ERROR trap */
+  u8 match_neighbor_miss; /* per-buffer semantic reason, not an ethertype */
   u8 rate_is_pps;
 } sonic_ext_copp_ifout_entry_t;
 
@@ -407,6 +408,7 @@ typedef struct
   /* sonic-ext-copp-ifout: ethertype -> policer binding table. */
   sonic_ext_copp_ifout_entry_t copp_ifout_entries[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
   u32 copp_ifout_n_entries;
+  u32 copp_neighbor_miss_entry_index;
   u64 copp_ifout_conform_packets[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
   u64 copp_ifout_exceed_packets[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
   u64 copp_ifout_violate_packets[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
@@ -694,6 +696,10 @@ int sonic_ext_copp_ifout_find_entry (sonic_ext_main_t *sem, u16 ethertype);
  */
 int sonic_ext_copp_ifout_bind (u16 ethertype, const char *policer_name,
 			       int is_bind, int match_ip4_ttl_expiring);
+
+/* Bind the semantic NEIGHBOR_MISS reason to a copp-ifout policer row. */
+int sonic_ext_copp_neighbor_miss_bind (const char *policer_name, int is_bind);
+int sonic_ext_copp_neighbor_miss_is_bound (sonic_ext_main_t *sem);
 int sonic_ext_copp_ip2me_addr_add_del (u32 addr, int is_add);
 int sonic_ext_copp_ip2me_bind (const char *policer_name, int is_bind);
 int sonic_ext_copp_ip2me_bind_condition (

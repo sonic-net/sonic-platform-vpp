@@ -48,6 +48,7 @@ bridge -- the phy is not a BD member -- so it takes the L3 path through
 ethernet-input's ethertype demux, which requires "lcp ethertype enable".
 """
 
+import time
 import unittest
 
 from scapy.contrib.lldp import (
@@ -58,7 +59,9 @@ from scapy.contrib.lldp import (
 )
 from scapy.layers.dhcp import BOOTP, DHCP
 from scapy.layers.inet import IP, UDP
+from scapy.layers.inet6 import IPv6
 from scapy.layers.l2 import ARP, Dot1Q, Ether
+from scapy.packet import Raw
 
 from asfframework import VppTestRunner, get_testcase_dirname
 from config import config
@@ -66,6 +69,8 @@ from framework import VppTestCase
 from host_interface import HostInterface
 from vpp_bvi_interface import VppBviInterface
 from vpp_l2 import L2_PORT_TYPE, VppBridgeDomain, VppBridgeDomainPort
+from vpp_papi import VppEnum
+from vpp_policer import PolicerAction, VppPolicer
 from vpp_qemu_utils import create_namespace, delete_all_namespaces, set_interface_up
 from vpp_sub_interface import L2_VTR_OP, VppDot1QSubint
 
@@ -85,6 +90,10 @@ NOT_REDIRECTED = (
     "/err/sonic-ext-aggr-tap-redirect/punt-via-member disabled -- left on aggregate tap"
 )
 
+QOS = VppEnum.vl_api_sse2_qos_action_type_t
+RATE = VppEnum.vl_api_sse2_qos_rate_type_t
+DROP = PolicerAction(QOS.SSE2_QOS_ACTION_API_DROP, 0)
+
 
 @unittest.skipIf("linux-cp" in config.excluded_plugins, "Exclude linux-cp plugin tests")
 @unittest.skipIf(
@@ -93,6 +102,8 @@ NOT_REDIRECTED = (
 @unittest.skipIf(config.skip_netns_tests, "netns not available or disabled from cli")
 class SonicExtL2PuntBase(VppTestCase):
     """SONiC-ext L2 punt test base"""
+
+    vpp_worker_count = 0
 
     # Both plugins are .default_disabled, so ask for them explicitly.
     extra_vpp_plugin_config = [
@@ -103,6 +114,11 @@ class SonicExtL2PuntBase(VppTestCase):
         "}",
         "plugin",
         "sonic_ext_plugin.so",
+        "{",
+        "enable",
+        "}",
+        "plugin",
+        "policer_plugin.so",
         "{",
         "enable",
         "}",
@@ -631,6 +647,80 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
             self.assertEqual(self._err(NOT_REDIRECTED), before + 1)
         finally:
             self.vapi.cli("sonic-ext punt-via-member on")
+
+    def _assert_neighbor_miss_semantic_policing(self, prefix, l3):
+        pkt = (
+            Ether(src=self.access_phy.remote_mac, dst=self.bvi.local_mac)
+            / l3
+            / Raw(b"neighbor-miss")
+        )
+        pol = VppPolicer(
+            self,
+            "copp-neighbor-miss-%s" % ("ip6" if isinstance(l3, IPv6) else "ip4"),
+            1000,
+            0,
+            100000,
+            0,
+            rate_type=RATE.SSE2_QOS_RATE_API_KBPS,
+            conform_action=DROP,
+            exceed_action=DROP,
+            violate_action=DROP,
+        )
+
+        self.vapi.sw_interface_add_del_address(
+            sw_if_index=self.bvi.sw_if_index, prefix=prefix
+        )
+        try:
+            pol.add_vpp_config()
+            # Unbound control: the existing neighbor-resolution redirect
+            # remains functional and byte-preserving.
+            rx = self._punt(
+                self.access_phy,
+                pkt,
+                self.access_tap,
+                self._not_from(pkt[Ether].src),
+            )
+            self.assertEqual(bytes(rx), bytes(pkt))
+
+            # The glean redirect has a per-adjacency ~1 ms throttle. Wait
+            # beyond it so this checks CoPP rather than the earlier throttle.
+            time.sleep(0.02)
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name=pol.name, is_bind=True
+            )
+
+            before = pol.get_stats()["conform_packets"]
+            self.access_tap.enable_capture()
+            self.access_phy.add_stream([pkt])
+            self.pg_start(trace=True)
+            self.access_tap.get_capture(
+                expected_count=0,
+                timeout=1,
+                filter_out_fn=self._not_from(pkt[Ether].src),
+            )
+            self.assertEqual(pol.get_stats()["conform_packets"], before + 1)
+        finally:
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name=pol.name, is_bind=False
+            )
+            if pol.query_vpp_config():
+                pol.remove_vpp_config()
+            self.vapi.sw_interface_add_del_address(
+                sw_if_index=self.bvi.sw_if_index, prefix=prefix, is_add=0
+            )
+
+    def test_ip4_neighbor_miss_semantic_row_polices_only_bound_bvi_glean(self):
+        """An IPv4 BVI glean is policed only while NEIGHBOR_MISS is bound."""
+        self._assert_neighbor_miss_semantic_policing(
+            "10.10.10.1/24", IP(src="10.10.10.2", dst="10.10.10.99")
+        )
+
+    def test_ip6_neighbor_miss_semantic_row_polices_only_bound_bvi_glean(self):
+        """An IPv6 BVI glean is policed only while NEIGHBOR_MISS is bound."""
+        self._assert_neighbor_miss_semantic_policing(
+            "2001:db8:10::1/64",
+            IPv6(src="2001:db8:10::2", dst="2001:db8:10::99"),
+        )
 
 
 class TestSonicExtL2PuntStartupOff(SonicExtL2PuntBase):

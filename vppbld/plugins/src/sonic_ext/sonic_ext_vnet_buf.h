@@ -94,6 +94,7 @@
 typedef enum
 {
   SONIC_EXT_VNET_BUF_PBH_LAG_HASH = 1 << 0,
+  SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS = 1 << 1,
 } sonic_ext_vnet_buf_field_t;
 
 typedef struct
@@ -104,6 +105,9 @@ typedef struct
    * struct per buffer position, so widening it is linear in the buffer
    * count. */
 } sonic_ext_vnet_buf_t; /* 8 bytes with padding; 3 bytes spare */
+
+STATIC_ASSERT (sizeof (sonic_ext_vnet_buf_t) == 8,
+	       "sonic-ext side-band slot size changed");
 
 /* Per-pool constants that turn a buffer index into a slot number. */
 typedef struct
