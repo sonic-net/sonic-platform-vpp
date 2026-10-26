@@ -79,6 +79,19 @@ Below are the commands supported by the script
 
 > Note: *docker ps* will list two containers, one with user specified CONTAINER_NAME and the other will be named "CONTAINER-NAME-nss". The second container is just a helper container to bootstrap the interface ports. It does not have any functional processes in it.
 
+### VPP rx-mode
+
+By default VPP puts the rx queues of the interfaces it creates (the linux-cp tap host interfaces) in
+`adaptive` rx-mode, so they are not busy-polled while idle. Set `VPP_DEFAULT_RX_MODE` to
+`polling`, `interrupt` or `adaptive` when starting the container to change it:
+```
+sudo VPP_DEFAULT_RX_MODE=polling ./start_sonic_vpp.sh start -n sonic-vpp -i veth1,veth2
+```
+The setting is applied when VPP starts, i.e. it takes effect for a newly started container. DPDK ports
+start in polling mode and AF_PACKET (veth) ports in interrupt mode, independent of this setting.
+Check the result inside the container with `vppctl show interface default rx-mode` and
+`vppctl show interface rx-placement`.
+
 ## Simple SONiC-VPP Router(container) in action
 [Simple topology](README.simple.topo.md) shows procedure to run a SONiC-VPP container with virtual interfaces. The same applies to PCI based interfaces except that the interfaces passed are physical interfaces(PCI).
 

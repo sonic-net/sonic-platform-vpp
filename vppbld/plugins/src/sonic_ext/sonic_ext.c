@@ -18,6 +18,7 @@
 #include <vnet/plugin/plugin.h>
 #include <vnet/feature/feature.h>
 #include <vnet/interface.h>
+#include <vnet/ip/icmp6.h>
 #include <vnet/l2/l2_input.h>
 #include <vnet/l2/l2_bvi.h>
 #include <vnet/l2/l2_in_out_feat_arc.h>
@@ -221,6 +222,106 @@ sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable)
 }
 
 /*
+ * RIF loopback (hairpin) packet action. The SAIVPP layer calls this from its
+ * SAI_ROUTER_INTERFACE_ATTR_LOOPBACK_PACKET_ACTION handler. The per-interface
+ * action is stored in loopback_action_by_sw_if_index and the
+ * sonic-ext-ip4/ip6-loopback output-arc nodes are enabled only while the
+ * action is DROP, so a FORWARD (default) interface pays zero per-packet cost.
+ * Gated by the iface_loopback feature toggle, consistent with the other
+ * SAIVPP-owned sonic-ext features.
+ */
+int
+sonic_ext_iface_loopback_set_action (u32 sw_if_index, u8 action)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  int enable = (action == SONIC_EXT_LOOPBACK_ACTION_DROP);
+  u8 prev;
+  int rv;
+
+  /* Reject anything that is not one of the two defined actions, so an
+   * out-of-range value can never be stored and then mis-read as FORWARD. */
+  if (action != SONIC_EXT_LOOPBACK_ACTION_FORWARD &&
+      action != SONIC_EXT_LOOPBACK_ACTION_DROP)
+    return VNET_API_ERROR_INVALID_VALUE;
+
+  /* Feature globally off (sonic-ext { iface-loopback off }): behave like the
+   * other SAIVPP-owned features and do not wire anything. */
+  if (!sem->iface_loopback)
+    {
+      if (enable)
+	clib_warning ("sonic-ext: iface-loopback off, ignoring DROP on "
+		      "sw_if_index %u",
+		      sw_if_index);
+      return 0;
+    }
+
+  /* loopback_action_by_sw_if_index is written only here, from the main/API
+   * thread. The ip4/ip6-loopback nodes read it on worker threads, but
+   * vnet_feature_enable_disable() below performs a worker barrier sync, so the
+   * vector growth/update is visible before the feature (and thus the node) is
+   * enabled on this interface. */
+  vec_validate_init_empty (sem->loopback_action_by_sw_if_index, sw_if_index,
+			   SONIC_EXT_LOOPBACK_ACTION_FORWARD);
+  prev = sem->loopback_action_by_sw_if_index[sw_if_index];
+
+  /* Idempotent: VPP feature enable/disable is ref-counted, so a repeated SET
+   * to the same action (e.g. a SAI attribute replay) would enable the
+   * output-arc feature more than once and a single later disable would leave
+   * the drop node installed. Only toggle the arcs on a real FORWARD<->DROP
+   * transition. */
+  if (prev == action)
+    return 0;
+
+  /* Set the action before enabling so the node sees DROP the moment the arc
+   * is live; on DROP->FORWARD the node keeps forwarding until it is disabled. */
+  sem->loopback_action_by_sw_if_index[sw_if_index] = action;
+
+  rv = vnet_feature_enable_disable ("ip4-output", "sonic-ext-ip4-loopback",
+				    sw_if_index, enable, 0, 0);
+  if (rv)
+    {
+      sem->loopback_action_by_sw_if_index[sw_if_index] = prev;
+      return rv;
+    }
+
+  rv = vnet_feature_enable_disable ("ip6-output", "sonic-ext-ip6-loopback",
+				    sw_if_index, enable, 0, 0);
+  if (rv)
+    {
+      /* Roll back the ip4 arc and the stored action to avoid a half-enabled
+       * state. */
+      vnet_feature_enable_disable ("ip4-output", "sonic-ext-ip4-loopback",
+				   sw_if_index, !enable, 0, 0);
+      sem->loopback_action_by_sw_if_index[sw_if_index] = prev;
+    }
+
+  return rv;
+}
+
+/*
+ * On interface delete, reset the loopback action so a recycled sw_if_index
+ * cannot inherit a stale DROP. The output-arc features themselves are torn
+ * down by VPP when the interface goes away.
+ */
+static clib_error_t *
+sonic_ext_iface_loopback_sw_if_add_del (vnet_main_t *vnm, u32 sw_if_index,
+					u32 is_add)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  (void) vnm;
+
+  if (!is_add
+      && sw_if_index < vec_len (sem->loopback_action_by_sw_if_index))
+    sem->loopback_action_by_sw_if_index[sw_if_index] =
+      SONIC_EXT_LOOPBACK_ACTION_FORWARD;
+
+  return 0;
+}
+
+VNET_SW_INTERFACE_ADD_DEL_FUNCTION (sonic_ext_iface_loopback_sw_if_add_del);
+
+
+/*
  * Is `phy_sw_if_index` a BVI (bridge-virtual interface)?  Used by
  * the aggregate-detection helper.  Distinct from is_aggregate so
  * that future bond support can be added to is_aggregate without
@@ -417,6 +518,67 @@ sonic_ext_set_host_xc (u8 is_enable)
 }
 
 /*
+ * nd-punt: hand IPv6 Neighbor Discovery to the kernel, as ARP already is.
+ *
+ * saivpp diverts every ARP packet to the linux-cp host tap, so Linux answers
+ * and learns, and a neighbor reaches VPP only when SONiC creates it through
+ * SAI.  ND has no such diversion: ip6-icmp-input hands RS/RA/NS/NA to VPP's
+ * own ND nodes, which answer solicitations themselves and learn neighbors
+ * SONiC never created.  Such an entry keeps its /128 host route even when
+ * SONiC then creates the same neighbor with NO_HOST_ROUTE, as it does for
+ * dual-ToR mux neighbors.
+ *
+ * Pointing the four ND types at ip6-punt instead sends them where linux-cp
+ * already sends punted IPv6 -- the ingress port's host tap -- which is also
+ * where a hardware switch's ND trap sends them.  Redirect (137) has no VPP
+ * handler, so it is punted already.
+ *
+ * ip6-punt is ip6-icmp-input's existing punt next, so either direction only
+ * rewrites that node's per-type dispatch table: no graph change, no barrier.
+ * VPP's own handlers are registered static, hence looked up by name.
+ */
+static const struct
+{
+  icmp6_type_t type;
+  char *vpp_node;
+} sonic_ext_nd_types[] = {
+  { ICMP6_router_solicitation, "icmp6-router-solicitation" },
+  { ICMP6_router_advertisement, "icmp6-router-advertisement" },
+  { ICMP6_neighbor_solicitation, "icmp6-neighbor-solicitation" },
+  { ICMP6_neighbor_advertisement, "icmp6-neighbor-advertisement" },
+};
+
+void
+sonic_ext_set_nd_punt (u8 is_enable)
+{
+  vlib_main_t *vm = vlib_get_main ();
+  int i;
+
+  for (i = 0; i < ARRAY_LEN (sonic_ext_nd_types); i++)
+    {
+      u32 node_index = ip6_punt_node.index;
+
+      if (!is_enable)
+	{
+	  vlib_node_t *n =
+	    vlib_get_node_by_name (vm, (u8 *) sonic_ext_nd_types[i].vpp_node);
+
+	  if (!n)
+	    {
+	      clib_warning ("sonic-ext: nd-punt: no node %s",
+			    sonic_ext_nd_types[i].vpp_node);
+	      continue;
+	    }
+	  node_index = n->index;
+	}
+
+      icmp6_register_type (vm, sonic_ext_nd_types[i].type, node_index);
+    }
+
+  sonic_ext_main.nd_punt = (is_enable != 0);
+}
+
+/*
  * LCP pair add/del: when a new linux-cp pair appears, enable the per-
  * interface sonic-ext features that apply.
  *
@@ -448,6 +610,8 @@ sonic_ext_lcp_pair_add_cb (lcp_itf_pair_t *lip)
   if (sem->aggr_tap_redirect_enabled
       && sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 1);
+  if (sem->copp && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
+    sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 1);
 }
 
 static void
@@ -464,6 +628,17 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
   if (sem->aggr_tap_redirect_enabled
       && sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 0);
+  if (sem->copp && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
+    sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 0);
+}
+
+static walk_rc_t
+sonic_ext_copp_ifout_walk_enable_cb (index_t lipi, void *ctx)
+{
+  const lcp_itf_pair_t *lip = lcp_itf_pair_get (lipi);
+  if (lip && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
+    sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 1);
+  return WALK_CONTINUE;
 }
 
 static uword
@@ -745,6 +920,20 @@ sonic_ext_apply_config (vlib_main_t *vm)
   if (sem->host_xc)
     sonic_ext_set_host_xc (1);
 
+  /* After ip6_nd_init / ip6_ra_init have registered VPP's own ND handlers. */
+  if (sem->nd_punt)
+    sonic_ext_set_nd_punt (1);
+
+  if (sem->copp)
+    {
+      lcp_itf_pair_walk (sonic_ext_copp_ifout_walk_enable_cb, NULL);
+      vnet_feature_enable_disable ("ip4-punt", "sonic-ext-copp-ip2me", 0, 1,
+                                   0, 0);
+      vnet_feature_enable_disable ("ip6-punt", "sonic-ext-copp-ip2me-ip6", 0,
+                                   1, 0, 0);
+      sonic_ext_copp_udld_enable (vm);
+    }
+
   /* Nothing to wire for these -- saivpp does it, once it has asked.  Logged
    * so an old saivpp that never asks does not make the setting look applied. */
 #define _(symbol, field, name, default_enabled, owner)                        \
@@ -756,4 +945,6 @@ sonic_ext_apply_config (vlib_main_t *vm)
   return 0;
 }
 
-VLIB_MAIN_LOOP_ENTER_FUNCTION (sonic_ext_apply_config);
+VLIB_MAIN_LOOP_ENTER_FUNCTION (sonic_ext_apply_config) = {
+  .runs_before = VLIB_INITS ("start_workers"),
+};

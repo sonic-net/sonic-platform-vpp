@@ -21,12 +21,12 @@
 #     scope.  Existing hash-eth-l34 and IP_FLOW_HASH_DEFAULT are byte-for-byte
 #     unchanged.
 0011-sonic-inner-aware-flow-hash.patch
-# 12. sflow: native per-port sample rate
+# 12. sflow: native per-port sample rate, including the
+#     sflow_interface_sampling_rate_set API and its test
 0012-sflow-per-port-sample-rate.patch
-# 13. Adding per port direction
+# 13. sflow: per-port sampling direction, including the
+#     sflow_interface_direction_set API and its test
 0013-sflow-per-port-direction.patch
-# 14. Adding new VPP API handlers for per port and direction patches
-0014-sflow-per-port-api.patch
 # 15. VXLAN encap inner-aware flow hash: hash inner IP 5-tuple on L3 VXLAN
 #     encap so inner flows spread across underlay ECMP / LAG paths
 0015-vxlan-encap-inner-aware-flow-hash.patch
@@ -57,3 +57,31 @@
 #     adj_l2_rewrite_inline() starts the arc from both adj-l2-midchain and
 #     adj-l2-rewrite but only the former had the arc edges built.
 0020-adj-honour-ethernet-output-features-on-l2-adjacencies.patch
+# 21. ip4: redirect TTL-expired transit packets to a new sonic_ext
+#     "sonic-ext-copp-ttl-punt" node instead of unconditionally sending an
+#     ICMP time-exceeded reply, when the SAI TTL_ERROR trap is installed.
+#     Resolved via vlib_get_plugin_symbol() (same idiom as patch 0019's
+#     mirror-stamp hook) -- no link dependency, byte-for-byte unchanged
+#     behavior when sonic_ext isn't loaded or the trap isn't installed.
+#     ip4-drop-arc redirect (PR #267's glean-redirect pattern) does NOT
+#     work here: by the time a packet reaches ip4-drop, ip4-icmp-error has
+#     already unconditionally sent the ICMP reply.
+0021-ip4-redirect-ttl-expired-to-copp-punt-hook.patch
+# 22. bonding: optional per-packet LAG hash override hook. bond_tx_hash()
+#     hands the registered vnet_hash_fn_t only packet data pointers, so a
+#     feature that computed a member-selection hash upstream (SONiC PBH
+#     SET_LAG_HASH) has no way to deliver it. Adds one function pointer to
+#     bond_main_t and one call site after bif->hash_func(); NULL by default,
+#     so stock behaviour and bond.api's CRC are untouched. Carries no
+#     per-packet payload - the plugin keeps that in its own side-band table
+#     rather than spending a vnet_buffer2 word or a VNET_BUFFER_F_AVAIL bit.
+0022-sonic-pbh-lag-hash.patch
+# 23. ip: 'no-local-src-check' startup config option.
+0023-ip-add-no-local-src-check-startup-config-option.patch
+# 24. l2: report a flushed MAC that traffic refreshes before the ager
+#     deletes it to the MAC event client (want_l2_macs_events2), like a new
+#     learn. Otherwise SONiC, which drops flushed MACs from its FDB, never
+#     learns the MAC again although VPP keeps it (e.g. after
+#     "sonic-clear fdb all"). Includes a test in test_l2_fib.py.
+#     Upstream: https://gerrit.fd.io/r/c/vpp/+/47191
+0024-l2-report-flushed-MAC-refreshed-by-traffic.patch
