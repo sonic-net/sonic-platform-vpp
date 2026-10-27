@@ -270,7 +270,11 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
       vnet_feature_next (&next0, b[0]);
       next[0] = (u16) next0;
 
-      if (PREDICT_FALSE (!sem->punt_via_member))
+      /* An active SAI NEIGHBOR_MISS trap owns this redirect even when the
+       * broader punt-via-member feature is disabled. The bind path ensures
+       * capture and this drop-arc node are attached before publishing it. */
+      if (PREDICT_FALSE (!sem->punt_via_member &&
+			 !sonic_ext_copp_neighbor_miss_is_bound (sem)))
 	{
 	  n_disabled++;
 	  goto trace0;
