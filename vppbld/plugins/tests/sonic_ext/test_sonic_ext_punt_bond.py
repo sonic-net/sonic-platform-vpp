@@ -94,6 +94,7 @@ TTL_REDIRECTED = (
 QOS = VppEnum.vl_api_sse2_qos_action_type_t
 RATE = VppEnum.vl_api_sse2_qos_rate_type_t
 DROP = PolicerAction(QOS.SSE2_QOS_ACTION_API_DROP, 0)
+TRANSMIT = PolicerAction(QOS.SSE2_QOS_ACTION_API_TRANSMIT, 0)
 
 
 @unittest.skipIf("linux-cp" in config.excluded_plugins, "Exclude linux-cp plugin tests")
@@ -457,9 +458,8 @@ class TestSonicExtBondPunt(SonicExtBondPuntBase):
             self.assertEqual(rx[IP].src, self.VLAN_REMOTE_IP4)
             self.assertEqual(rx[Ether].dst, self.bond.local_mac)
 
-    def test_neighbor_miss_binding_does_not_police_bond_glean(self):
-        """The VLAN neighbor-miss row must not change routed bond or
-        bond-subinterface glean redirects (the established T1-LAG path)."""
+    def test_neighbor_miss_policies_bond_glean_before_legacy_throttle(self):
+        """Routed bond misses use CoPP, and a burst reaches that policer."""
         ingress_tap = self._lcp_create(self.egress, "hpg2")
         pol = VppPolicer(
             self,
@@ -469,7 +469,7 @@ class TestSonicExtBondPunt(SonicExtBondPuntBase):
             100000,
             0,
             rate_type=RATE.SSE2_QOS_RATE_API_KBPS,
-            conform_action=DROP,
+            conform_action=TRANSMIT,
             exceed_action=DROP,
             violate_action=DROP,
         )
@@ -485,19 +485,24 @@ class TestSonicExtBondPunt(SonicExtBondPuntBase):
                     / IP(src=self.egress.remote_ip4, dst=dst)
                     / Raw(b"bond-glean-control")
                 )
+                burst = [pkt.copy() for _ in range(4)]
                 ingress_tap.enable_capture()
-                self.egress.add_stream([pkt])
+                self.egress.add_stream(burst)
                 self.pg_start(trace=True)
                 rxs = ingress_tap.get_capture(
-                    expected_count=1,
+                    expected_count=len(burst),
                     timeout=5,
                     filter_out_fn=lambda p, d=dst: not (
                         p.haslayer(IP) and p[IP].dst == d
                     ),
                 )
-                self.assertEqual(bytes(rxs[0]), bytes(pkt))
+                self.assertEqual(len(rxs), len(burst))
+                for rx in rxs:
+                    self.assertEqual(bytes(rx), bytes(pkt))
 
-            self.assertEqual(pol.get_stats()["conform_packets"], before)
+            self.assertEqual(
+                pol.get_stats()["conform_packets"] - before, 8
+            )
         finally:
             self.vapi.sonic_ext_copp_neighbor_miss_bind(
                 policer_name=pol.name, is_bind=False
