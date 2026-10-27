@@ -845,6 +845,41 @@ class TestSonicExtCoppIp2me(SonicExtCoppDataplaneBase):
         )
         self.assertEqual(self.native(bgp_pol), bgp_before)
 
+    def test_same_policer_name_keeps_bgp_and_ip2me_slots_independent(self):
+        """The API operation, not only the name, identifies each slot."""
+        pol = self.policer(conform=DROP, cb=10**6, name="shared-copp")
+        self.add_ip2me_addr(self.phy.local_ip4)
+        self.bind_ip2me(pol)
+        self.bind_ip2me_port(pol)
+
+        self.vapi.sonic_ext_copp_ip2me_bind_condition(
+            policer_name=pol.name, tcp_port=BGP_PORT, is_bind=False
+        )
+        before = self.native(pol)
+        self.assert_dropped(self.ip4_to_me(l4=TCP(sport=40000, dport=22)))
+        self.assertEqual(
+            self.delta(self.native(pol), before)["conform"], self.N_PKTS
+        )
+
+    def test_rebinding_bgp_replaces_the_previous_owner(self):
+        """One semantic BGP slot cannot retain a superseded policer name."""
+        old_pol = self.policer(conform=DROP, cb=10**6, name="old-bgp")
+        new_pol = self.policer(conform=TRANSMIT, cb=10**6, name="new-bgp")
+        self.bind_ip2me_port(old_pol)
+        self.bind_ip2me_port(new_pol)
+
+        old_before = self.native(old_pol)
+        new_before = self.native(new_pol)
+        self.send_and_expect(
+            self.phy,
+            self.ip4_to_me(l4=TCP(sport=40000, dport=BGP_PORT)),
+            self.host,
+        )
+        self.assertEqual(self.native(old_pol), old_before)
+        self.assertEqual(
+            self.delta(self.native(new_pol), new_before)["conform"], self.N_PKTS
+        )
+
     def test_bgp_port_found_after_ip_options(self):
         """The TCP port is located from the IHL, not a fixed offset"""
         pol = self.policer(conform=DROP, cb=10**6)
