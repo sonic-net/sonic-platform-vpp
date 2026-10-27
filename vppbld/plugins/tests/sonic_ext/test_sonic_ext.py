@@ -53,6 +53,7 @@ class SonicExtAllFeaturesBase(VppTestCase):
         "drop-member-stats": "vpp",
         "nd-punt": "vpp",
         "copp": "vpp",
+        "trim": "vpp",
         "ip2me": "saivpp",
         "l2-trap-fixup": "saivpp",
         "l2-vlan-filter": "saivpp",
