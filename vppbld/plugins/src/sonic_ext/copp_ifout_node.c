@@ -625,6 +625,13 @@ sonic_ext_copp_neighbor_miss_bind (const char *policer_name, int is_bind)
   int had_binding = sonic_ext_copp_neighbor_miss_is_bound (sem);
   int rv = 0;
 
+  /* A semantic row is useful only when copp-ifout is wired onto LCP host
+   * TAPs. Refuse to publish one while CoPP is disabled: glean-redirect uses
+   * row presence to bypass its legacy throttle, so accepting this bind would
+   * otherwise leave unresolved-neighbour traffic with no rate limiter. */
+  if (is_bind && !sem->copp)
+    return VNET_API_ERROR_FEATURE_DISABLED;
+
   /* The side-band table is global while its readers run on every worker.
    * Quiesce them around first allocation/final release as well as row
    * replacement so no in-flight marked buffer can outlive the table. */

@@ -152,24 +152,12 @@ static throttle_t sonic_ext_glean_throttle;
  * b->error from their own node before enqueuing to the drop arc, and
  * vlib_error_get_node() maps that back to the node index.
  *
- * ip6-discover-neighbor is DELIBERATELY EXCLUDED.  Unlike its v4
- * counterpart it rewrites the packet in place before dropping it:
- *
- *   if (!is_glean) {
- *       ip0->dst_address.as_u64[0] = adj0->sub_type.nbr.next_hop.ip6.as_u64[0];
- *       ip0->dst_address.as_u64[1] = adj0->sub_type.nbr.next_hop.ip6.as_u64[1];
- *   }
- *
- * (ip6_neighbor.c, ip6_discover_neighbor_inline).  ip4_arp_inline only
- * *reads* ip0->dst_address.  Redirecting a v6 incomplete-adjacency drop
- * would therefore hand the kernel a packet whose destination has been
- * replaced by the next hop, with a stale L4 checksum -- silently
- * mis-delivered transit traffic, and if the next hop is local to the
- * DUT the kernel would consume it.  The original destination is
- * unrecoverable, so v6 is glean-only.  v6 glean does not touch the
- * packet and is safe.
+ * The companion VPP patch makes ip6-discover-neighbor use its adjacency's
+ * next-hop address for ND without rewriting the packet destination. It is
+ * therefore safe to redirect both IPv6 glean and incomplete-adjacency drops
+ * here while preserving the original packet byte-for-byte.
  */
-static u32 sonic_ext_glean_src_nodes[3];
+static u32 sonic_ext_glean_src_nodes[4];
 
 static_always_inline int
 sonic_ext_glean_from_nbr_node (vlib_main_t *vm, vlib_buffer_t *b)
@@ -321,7 +309,7 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
        * connected adjacency, including routed ports, bonds, subinterfaces,
        * and BVIs. Let its configured policer own admission; the legacy fixed
        * glean throttle would otherwise drop packets before CoPP sees them. */
-      is_neighbor_miss =
+      is_neighbor_miss = sem->copp &&
 	sonic_ext_copp_neighbor_miss_is_bound (sem);
 
       /* Without a SAI binding, retain the legacy one-punt-per-window guard
@@ -422,11 +410,9 @@ static clib_error_t *
 sonic_ext_glean_redirect_main_loop_enter (vlib_main_t *vm)
 {
   vlib_thread_main_t *tm = &vlib_thread_main;
-  /* v6 is glean-only on purpose -- ip6-discover-neighbor mangles the
-   * packet's destination address before dropping it.  See the comment
-   * on sonic_ext_glean_src_nodes. */
   static const char *const nbr_node_names[] = { "ip4-arp", "ip4-glean",
-						"ip6-glean" };
+						"ip6-glean",
+						"ip6-discover-neighbor" };
   int i;
 
   STATIC_ASSERT (ARRAY_LEN (nbr_node_names) ==
