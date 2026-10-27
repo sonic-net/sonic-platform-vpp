@@ -158,20 +158,6 @@ vl_api_sonic_ext_copp_ifout_bind_t_handler (
 }
 
 static void
-vl_api_sonic_ext_copp_neighbor_miss_bind_t_handler (
-  vl_api_sonic_ext_copp_neighbor_miss_bind_t *mp)
-{
-  vl_api_sonic_ext_copp_neighbor_miss_bind_reply_t *rmp;
-  int rv;
-  char name[64];
-
-  snprintf (name, sizeof (name), "%s", mp->policer_name);
-  rv = sonic_ext_copp_neighbor_miss_bind (name, mp->is_bind);
-
-  REPLY_MACRO (VL_API_SONIC_EXT_COPP_NEIGHBOR_MISS_BIND_REPLY);
-}
-
-static void
 vl_api_sonic_ext_copp_ifout_get_counters_t_handler (
   vl_api_sonic_ext_copp_ifout_get_counters_t *mp)
 {
