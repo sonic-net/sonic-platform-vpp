@@ -13,13 +13,14 @@
 
 include_directories(${CMAKE_SOURCE_DIR})
 
-# for generated API headers (sonic_ext_trim.api.*):
+# for generated API headers (sonic_ext_copp.api.*, sonic_ext_trim.api.*):
 include_directories(${CMAKE_BINARY_DIR})
 
 add_vpp_plugin(sonic_ext
   SOURCES
   sonic_ext.c
   sonic_ext_api.c
+  copp_api.c
   capture_node.c
   aggr_tap_redirect_node.c
   glean_redirect_node.c
@@ -47,6 +48,7 @@ add_vpp_plugin(sonic_ext
 
   API_FILES
   sonic_ext.api
+  sonic_ext_copp.api
   sonic_ext_trim.api
 
   LINK_LIBRARIES
