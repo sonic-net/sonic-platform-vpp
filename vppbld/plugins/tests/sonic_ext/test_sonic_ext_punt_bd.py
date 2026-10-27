@@ -70,6 +70,7 @@ from host_interface import HostInterface
 from vpp_bvi_interface import VppBviInterface
 from vpp_l2 import L2_PORT_TYPE, VppBridgeDomain, VppBridgeDomainPort
 from vpp_papi import VppEnum
+from vpp_ip_route import VppIpRoute, VppRoutePath
 from vpp_policer import PolicerAction, VppPolicer
 from vpp_qemu_utils import create_namespace, delete_all_namespaces, set_interface_up
 from vpp_sub_interface import L2_VTR_OP, VppDot1QSubint
@@ -721,6 +722,80 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
             "2001:db8:10::1/64",
             IPv6(src="2001:db8:10::2", dst="2001:db8:10::99"),
         )
+
+    def test_ip6_incomplete_neighbor_miss_preserves_and_policies_packet(self):
+        """An IPv6 recursive next-hop miss punts the untouched packet."""
+        prefix = "2001:db8:20::1/64"
+        next_hop = "2001:db8:20::2"
+        destination = "2001:db8:30::99"
+        pkt = (
+            Ether(src=self.access_phy.remote_mac, dst=self.bvi.local_mac)
+            / IPv6(src="2001:db8:40::2", dst=destination)
+            / Raw(b"ip6-incomplete-neighbor-miss")
+        )
+        pol = VppPolicer(
+            self,
+            "copp-neighbor-miss-ip6-incomplete",
+            1000,
+            0,
+            100000,
+            0,
+            rate_type=RATE.SSE2_QOS_RATE_API_KBPS,
+            conform_action=DROP,
+            exceed_action=DROP,
+            violate_action=DROP,
+        )
+        route = VppIpRoute(
+            self,
+            destination,
+            128,
+            [VppRoutePath(next_hop, self.bvi.sw_if_index)],
+        )
+
+        self.vapi.sw_interface_add_del_address(
+            sw_if_index=self.bvi.sw_if_index, prefix=prefix
+        )
+        try:
+            route.add_vpp_config()
+            pol.add_vpp_config()
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name=pol.name, is_bind=True
+            )
+
+            before = pol.get_stats()["conform_packets"]
+            self.access_tap.enable_capture()
+            self.access_phy.add_stream([pkt])
+            self.pg_start(trace=True)
+            self.access_tap.get_capture(
+                expected_count=0,
+                timeout=1,
+                filter_out_fn=self._not_from(pkt[Ether].src),
+            )
+            self.assertEqual(pol.get_stats()["conform_packets"], before + 1)
+
+            # Prove the same incomplete-adjacency path preserves the packet
+            # when admitted, including the original routed destination.
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name=pol.name, is_bind=False
+            )
+            rx = self._punt(
+                self.access_phy,
+                pkt,
+                self.access_tap,
+                self._not_from(pkt[Ether].src),
+            )
+            self.assertEqual(bytes(rx), bytes(pkt))
+        finally:
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name=pol.name, is_bind=False
+            )
+            if pol.query_vpp_config():
+                pol.remove_vpp_config()
+            if route.query_vpp_config():
+                route.remove_vpp_config()
+            self.vapi.sw_interface_add_del_address(
+                sw_if_index=self.bvi.sw_if_index, prefix=prefix, is_add=0
+            )
 
 
 class TestSonicExtL2PuntStartupOff(SonicExtL2PuntBase):
