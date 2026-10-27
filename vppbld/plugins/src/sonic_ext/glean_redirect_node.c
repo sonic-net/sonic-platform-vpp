@@ -317,11 +317,18 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	}
       orig_rx = seb->orig_rx_sw_if_index;
 
-      /* Rate-limit per resolving adjacency: one punt per window is
-       * enough to (re)arm the kernel's own ARP; the rest keep
-       * dropping until the neighbour is programmed via SAI. */
+      /* A configured SAI NEIGHBOR_MISS trap applies to every unresolved
+       * connected adjacency, including routed ports, bonds, subinterfaces,
+       * and BVIs. Let its configured policer own admission; the legacy fixed
+       * glean throttle would otherwise drop packets before CoPP sees them. */
+      is_neighbor_miss =
+	sonic_ext_copp_neighbor_miss_is_bound (sem);
+
+      /* Without a SAI binding, retain the legacy one-punt-per-window guard
+       * that is sufficient to re-arm the kernel's own ARP. */
       key = ((u64) adj_index0 << 32) | orig_rx;
-      if (throttle_check (&sonic_ext_glean_throttle, thread_index, key, seed))
+      if (!is_neighbor_miss &&
+	  throttle_check (&sonic_ext_glean_throttle, thread_index, key, seed))
 	{
 	  n_throttled++;
 	  goto trace0;
@@ -334,19 +341,12 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	  goto trace0;
 	}
 
-      /*
-       * The NEIGHBOR_MISS trap is the subnet-hit case whose unresolved
-       * connected adjacency exits through the VLAN's BVI/SVI.  Preserve that
-       * reason across the existing redirect to the ingress member TAP so the
-       * common copp-ifout node can select queue1_group3's policer.
-       */
-      if (PREDICT_FALSE (
-	    sonic_ext_phy_is_bvi (egress_sw) &&
-	    sonic_ext_copp_neighbor_miss_is_bound (sem)))
+      /* Preserve the semantic reason across redirect to the ingress TAP so
+       * the common copp-ifout node selects the NEIGHBOR_MISS policer. */
+      if (PREDICT_FALSE (is_neighbor_miss))
 	{
 	  sonic_ext_vnet_buf_claim (
 	    vm, b[0], SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS);
-	  is_neighbor_miss = 1;
 	}
 
       next[0] = SONIC_EXT_GLEAN_REDIRECT_NEXT_INTERFACE_OUTPUT;
