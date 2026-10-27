@@ -475,6 +475,7 @@ void sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable);
 
 /* Toggle accessors used by CLI and node fast paths. */
 void sonic_ext_set_punt_via_member (u8 is_enable);
+void sonic_ext_neighbor_miss_enable_redirect (void);
 void sonic_ext_set_host_xc (u8 is_enable);
 void sonic_ext_set_nd_punt (u8 is_enable);
 

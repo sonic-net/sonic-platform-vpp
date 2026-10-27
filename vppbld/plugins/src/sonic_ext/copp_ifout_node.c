@@ -344,6 +344,16 @@ matched:
   *out_matched_idx = idx;
 
   {
+    /* Empty name is the explicit active-but-unpoliced NEIGHBOR_MISS row.
+     * Keep the semantic reason (and thus bypass the legacy glean throttle),
+     * but admit the packet without consulting the policer pool. */
+    if (PREDICT_FALSE (entry->match_neighbor_miss && entry->name[0] == 0))
+      {
+	*out_policer_index = ~0;
+	*out_verdict = POLICE_CONFORM;
+	return SONIC_EXT_COPP_IFOUT_ERROR_PASS;
+      }
+
     u32 policer_index = sonic_ext_copp_ifout_resolve_index (entry);
     *out_policer_index = policer_index;
 
@@ -631,6 +641,9 @@ sonic_ext_copp_neighbor_miss_bind (const char *policer_name, int is_bind)
    * otherwise leave unresolved-neighbour traffic with no rate limiter. */
   if (is_bind && !sem->copp)
     return VNET_API_ERROR_FEATURE_DISABLED;
+
+  if (is_bind)
+    sonic_ext_neighbor_miss_enable_redirect ();
 
   /* The side-band table is global while its readers run on every worker.
    * Quiesce them around first allocation/final release as well as row

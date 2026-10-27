@@ -723,6 +723,70 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
             IPv6(src="2001:db8:10::2", dst="2001:db8:10::99"),
         )
 
+    def test_unpoliced_neighbor_miss_bypasses_legacy_throttle(self):
+        """An active row with no policer admits a burst to the CPU."""
+        prefix = "10.20.20.1/24"
+        pkt = (
+            Ether(src=self.access_phy.remote_mac, dst=self.bvi.local_mac)
+            / IP(src="10.20.20.2", dst="10.20.20.99")
+            / Raw(b"unpoliced-neighbor-miss")
+        )
+        self.vapi.sw_interface_add_del_address(
+            sw_if_index=self.bvi.sw_if_index, prefix=prefix
+        )
+        try:
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name="", is_bind=True
+            )
+            self.access_tap.enable_capture()
+            self.access_phy.add_stream([pkt, pkt, pkt])
+            self.pg_start(trace=True)
+            rxs = self.access_tap.get_capture(
+                expected_count=3,
+                timeout=5,
+                filter_out_fn=self._not_from(pkt[Ether].src),
+            )
+            self.assertEqual([bytes(rx) for rx in rxs], [bytes(pkt)] * 3)
+        finally:
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name="", is_bind=False
+            )
+            self.vapi.sw_interface_add_del_address(
+                sw_if_index=self.bvi.sw_if_index, prefix=prefix, is_add=0
+            )
+
+    def test_neighbor_miss_survives_runtime_punt_via_member_off(self):
+        """The semantic trap owns glean redirect independently at runtime."""
+        prefix = "10.30.30.1/24"
+        pkt = (
+            Ether(src=self.access_phy.remote_mac, dst=self.bvi.local_mac)
+            / IP(src="10.30.30.2", dst="10.30.30.99")
+            / Raw(b"neighbor-miss-punt-via-member-off")
+        )
+        self.vapi.sw_interface_add_del_address(
+            sw_if_index=self.bvi.sw_if_index, prefix=prefix
+        )
+        try:
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name="", is_bind=True
+            )
+            self.vapi.cli("sonic-ext punt-via-member off")
+            rx = self._punt(
+                self.access_phy,
+                pkt,
+                self.access_tap,
+                self._not_from(pkt[Ether].src),
+            )
+            self.assertEqual(bytes(rx), bytes(pkt))
+        finally:
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name="", is_bind=False
+            )
+            self.vapi.cli("sonic-ext punt-via-member on")
+            self.vapi.sw_interface_add_del_address(
+                sw_if_index=self.bvi.sw_if_index, prefix=prefix, is_add=0
+            )
+
     def test_ip6_incomplete_neighbor_miss_preserves_and_policies_packet(self):
         """An IPv6 recursive next-hop miss punts the untouched packet."""
         prefix = "2001:db8:20::1/64"
