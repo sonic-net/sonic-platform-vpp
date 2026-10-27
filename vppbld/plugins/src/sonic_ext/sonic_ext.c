@@ -895,6 +895,14 @@ sonic_ext_init (vlib_main_t *vm)
 
   sonic_ext_register_acl_deferred_mirror ();
 
+  /* Keep new CoPP RPCs in their own API namespace so adding one does not
+   * change the legacy sonic_ext API CRC used by an older sairedis image. */
+  {
+    clib_error_t *error = sonic_ext_copp_api_hookup (vm);
+    if (error)
+      return error;
+  }
+
   /* Register the packet-trim binary API (sets trim_msg_id_base). */
   {
     clib_error_t *error = sonic_ext_trim_api_hookup (vm);

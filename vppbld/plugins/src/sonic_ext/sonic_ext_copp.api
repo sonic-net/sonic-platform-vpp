@@ -1,0 +1,43 @@
+/*
+ * Copyright (c) 2026 SONiC-VPP contributors
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at:
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/** \file
+    \brief Compatibility-isolated SONiC-VPP CoPP control API.
+
+    New CoPP operations live here rather than in sonic_ext.api so a new VPP
+    plugin remains compatible with a sairedis image compiled against the
+    legacy sonic_ext API CRC during provider-first rollouts.
+*/
+
+option version = "1.0.0";
+
+/** \brief Bind or unbind the semantic NEIGHBOR_MISS reason to a CoPP
+    policer. Unlike sonic_ext_copp_ifout_bind, this is not keyed by a wire
+    ethertype: glean-redirect marks successfully redirected BVI/SVI neighbor
+    misses in sonic_ext's per-buffer side-band and copp-ifout consumes that
+    reason before examining the restored Ethernet frame.
+
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param policer_name - name of an existing VPP policer object
+    @param is_bind - 1 to add/replace the singleton binding, 0 to remove it
+*/
+autoreply define sonic_ext_copp_neighbor_miss_bind
+{
+  u32 client_index;
+  u32 context;
+  string policer_name[64];
+  bool is_bind;
+};
