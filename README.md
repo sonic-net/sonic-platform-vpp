@@ -51,7 +51,7 @@ container images). The Docker daemon that runs inside the slave container needs
 the legacy iptables kernel modules loaded on the host:
 
 ```bash
-sudo modprobe ip_tables iptable_nat iptable_filter
+sudo modprobe -a ip_tables iptable_nat iptable_filter
 ```
 
 ### Testing the single container image
