@@ -768,6 +768,9 @@ sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_copy,
   if (is_bind && !sem->copp)
     return VNET_API_ERROR_FEATURE_DISABLED;
 
+  if (is_bind)
+    sonic_ext_copp_dhcp_enable_all ();
+
   /* Feature attachment can itself synchronize worker state. Do it before
    * taking the explicit row-update barrier below. */
   if (is_bind && is_ipv6)
