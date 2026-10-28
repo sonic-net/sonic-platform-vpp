@@ -134,6 +134,12 @@ sonic_ext_ip6_locate_transport (const ip6_header_t *ip6, u32 available,
  * packet (see "Not self-cleaning" above). */
 #define SONIC_EXT_BUFFER_F_CAPTURED VNET_BUFFER_F_AVAIL3
 
+/* A DHCP COPY has already emitted its direct CPU copy. L2 flood clones
+ * inherit this flag, so the BVI receive copy can be discarded on the host
+ * tap before delivery and metering happen a second time. Buffer allocation
+ * clears it through VPP's per-incarnation flags template. */
+#define SONIC_EXT_BUFFER_F_DHCP_CPU_COPIED VNET_BUFFER_F_AVAIL3
+
 /*
  * orig_vlan_tag: outermost 802.1Q (or 802.1ad) tag observed on the
  * wire frame at sonic-ext-capture time, stored as raw 4 bytes in
@@ -407,6 +413,7 @@ typedef struct
   u8 host_xc_enabled;
   u8 glean_redirect_enabled;
   u8 aggr_tap_redirect_enabled;
+  u8 dhcp_l2_enabled;
 
   /* Continue the L2 feature bitmap after validating a native VLAN tag. */
   u32 l2_vlan_filter_feat_next[32];
@@ -543,6 +550,13 @@ int sonic_ext_redirect_to_ingress_tap (vlib_buffer_t *b, u32 orig_rx,
  * wherever such a drop ACL is bound. */
 void sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable);
 
+/* Enable / disable post-VLAN-admission DHCP interception on one L2 port. */
+void sonic_ext_dhcp_enable_disable (u32 sw_if_index, int enable);
+
+/* Suppress a DHCP COPY's later BVI receive copy on an LCP host tap. */
+void sonic_ext_dhcp_copy_suppress_enable_disable (u32 sw_if_index,
+					  int enable);
+
 /* Toggle accessors used by CLI and node fast paths. */
 void sonic_ext_set_punt_via_member (u8 is_enable);
 void sonic_ext_neighbor_miss_enable_redirect (void);
@@ -556,6 +570,10 @@ void sonic_ext_set_nd_punt (u8 is_enable);
  * has no toggle of its own: it is enabled whenever one of the features that
  * consumes its per-buffer cookie is. */
 void sonic_ext_capture_enable_all (void);
+
+/* Enable capture plus the DHCP l2-input-ip4/ip6 features on every existing
+ * interface; the sw-interface callback handles interfaces created later. */
+void sonic_ext_copp_dhcp_enable_all (void);
 
 /* Returns non-zero if phy_sw_if_index is an "aggregate" parent whose
  * LCP host tap should have the aggr-tap-redirect feature enabled --
