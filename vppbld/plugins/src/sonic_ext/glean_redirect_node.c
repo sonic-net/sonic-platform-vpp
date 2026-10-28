@@ -19,6 +19,11 @@
 #include <vnet/vnet.h>
 #include <vnet/feature/feature.h>
 #include <vnet/adj/adj.h>
+#include <vnet/ip/ip.api_enum.h>
+#include <vnet/ip/ip6.h>
+#include <vnet/ip/ip6_inlines.h>
+#include <vnet/ip/ip6_packet.h>
+#include <vnet/udp/udp_packet.h>
 #include <vnet/util/throttle.h>
 
 /*
@@ -75,6 +80,7 @@ typedef struct
   u16 pushed_vlan_id;
   u8 redirected;
   u8 neighbor_miss;
+  u8 dhcp6;
 } sonic_ext_glean_redirect_trace_t;
 
 static u8 *
@@ -86,15 +92,17 @@ format_sonic_ext_glean_redirect_trace (u8 *s, va_list *args)
     va_arg (*args, sonic_ext_glean_redirect_trace_t *);
 
   s = format (s,
-	      "SONIC-EXT-GLEAN-REDIRECT: orig-rx %u host-tap %u vlan %u %s%s",
+	      "SONIC-EXT-GLEAN-REDIRECT: orig-rx %u host-tap %u vlan %u %s%s%s",
 	      t->orig_rx_sw_if_index, t->host_tap_sw_if_index,
 	      t->pushed_vlan_id, t->redirected ? "REDIRECTED" : "passthru",
-	      t->neighbor_miss ? " NEIGHBOR_MISS" : "");
+	      t->neighbor_miss ? " NEIGHBOR_MISS" : "",
+	      t->dhcp6 ? " DHCP6" : "");
   return s;
 }
 
 #define foreach_sonic_ext_glean_redirect_error                                \
   _ (REDIRECTED, "unresolved-nexthop punt redirected to ingress host tap")    \
+  _ (DHCP6_REDIRECTED, "routed DHCPv6 redirected to ingress host tap")        \
   _ (NOT_NBR_NODE, "not dropped by a neighbour-resolution node -- passed "    \
 		   "through")                                                 \
   _ (NOT_GLEAN, "not a glean/arp-incomplete drop -- passed through")          \
@@ -158,6 +166,38 @@ static throttle_t sonic_ext_glean_throttle;
  * here while preserving the original packet byte-for-byte.
  */
 static u32 sonic_ext_glean_src_nodes[4];
+
+static_always_inline int
+sonic_ext_dhcp6_from_mfib_rpf (vlib_main_t *vm, vlib_buffer_t *b)
+{
+  vlib_node_runtime_t *rt =
+    vlib_node_get_runtime (vm, ip6_input_node.index);
+  return b->error == rt->errors[IP6_ERROR_RPF_FAILURE];
+}
+
+static_always_inline int
+sonic_ext_is_dhcp6_packet (vlib_buffer_t *b)
+{
+  static const ip6_address_t dhcp6_dst = {
+    .as_u8 = { 0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2 }
+  };
+  ip6_header_t *ip6;
+  udp_header_t *udp;
+  u32 udp_offset = 0;
+
+  if (b->current_length < sizeof (ip6_header_t))
+    return 0;
+
+  ip6 = vlib_buffer_get_current (b);
+  if (!ip6_address_is_equal (&ip6->dst_address, &dhcp6_dst) ||
+      ip6_locate_header (b, ip6, -1, &udp_offset) != IP_PROTOCOL_UDP ||
+      b->current_length < udp_offset + sizeof (udp_header_t))
+    return 0;
+
+  udp = (udp_header_t *) ((u8 *) ip6 + udp_offset);
+  return clib_net_to_host_u16 (udp->src_port) == 546 &&
+	 clib_net_to_host_u16 (udp->dst_port) == 547;
+}
 
 static_always_inline int
 sonic_ext_glean_from_nbr_node (vlib_main_t *vm, vlib_buffer_t *b)
@@ -239,7 +279,8 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
   u32 n_left_from, *from;
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b;
   u16 nexts[VLIB_FRAME_SIZE], *next;
-  u32 n_redirected = 0, n_not_glean = 0, n_no_cookie = 0, n_no_lcp = 0;
+  u32 n_redirected = 0, n_dhcp6_redirected = 0, n_not_glean = 0;
+  u32 n_no_cookie = 0, n_no_lcp = 0;
   u32 n_throttled = 0, n_disabled = 0, n_not_nbr_node = 0;
   u64 seed;
 
@@ -264,6 +305,7 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
       u16 pushed_vlan_id = 0;
       int did_redirect = 0;
       int is_neighbor_miss = 0;
+      int is_dhcp6 = 0;
       u64 key;
 
       /* Default: continue down the drop arc (real drop). */
@@ -273,10 +315,40 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
       /* An active SAI NEIGHBOR_MISS trap owns this redirect even when the
        * broader punt-via-member feature is disabled. The bind path ensures
        * capture and this drop-arc node are attached before publishing it. */
+      is_dhcp6 = sem->copp && sonic_ext_copp_dhcp_is_bound (sem, 1) &&
+	sonic_ext_dhcp6_from_mfib_rpf (vm, b[0]) &&
+	sonic_ext_is_dhcp6_packet (b[0]);
+
       if (PREDICT_FALSE (!sem->punt_via_member &&
-			 !sonic_ext_copp_neighbor_miss_is_bound (sem)))
+			 !sonic_ext_copp_neighbor_miss_is_bound (sem) &&
+			 !is_dhcp6))
 	{
 	  n_disabled++;
+	  goto trace0;
+	}
+
+      /* DHCPv6 to ff02::1:2 on a routed interface fails VPP's multicast
+	 * RPF check before the ordinary ip6-punt arc. Rescue only this exact
+	 * semantic trap while its SAI policer binding is active. */
+      if (PREDICT_FALSE (is_dhcp6))
+	{
+	  seb = sonic_ext_buffer (b[0]);
+	  if (PREDICT_FALSE (seb->magic != SONIC_EXT_BUFFER_MAGIC))
+	    {
+	      n_no_cookie++;
+	      goto trace0;
+	    }
+	  orig_rx = seb->orig_rx_sw_if_index;
+	  if (PREDICT_FALSE (!sonic_ext_redirect_to_ingress_tap (
+		b[0], orig_rx, ~0, &host_tap, &pushed_tpid, &pushed_vlan_id)))
+	    {
+	      n_no_lcp++;
+	      goto trace0;
+	    }
+
+	  next[0] = SONIC_EXT_GLEAN_REDIRECT_NEXT_INTERFACE_OUTPUT;
+	  did_redirect = 1;
+	  n_dhcp6_redirected++;
 	  goto trace0;
 	}
 
@@ -356,6 +428,7 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	  t->pushed_vlan_id = pushed_vlan_id;
 	  t->redirected = did_redirect;
 	  t->neighbor_miss = is_neighbor_miss;
+	  t->dhcp6 = is_dhcp6;
 	}
 
       b += 1;
@@ -370,6 +443,7 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
   vlib_node_increment_counter (vm, sonic_ext_glean_redirect_node.index,       \
 			       SONIC_EXT_GLEAN_REDIRECT_ERROR_##SYM, N)
   _inc (REDIRECTED, n_redirected);
+  _inc (DHCP6_REDIRECTED, n_dhcp6_redirected);
   _inc (NOT_NBR_NODE, n_not_nbr_node);
   _inc (NOT_GLEAN, n_not_glean);
   _inc (NO_COOKIE, n_no_cookie);
