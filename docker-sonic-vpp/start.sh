@@ -23,6 +23,20 @@ for lanes in $(awk -F ':' '{print $2}' lanemap.ini); do
     grep -E "\s$lanes\s" port_config.ini.orig
 done >> port_config.ini
 
+# Name the ports the way platform.json does (Ethernet0, Ethernet1, ...), as
+# CONFIG_DB and sonic_vpp_ifmap.ini do. saivpp maps a port to its VPP interface
+# by lanes -> port_config.ini name -> sonic_vpp_ifmap.ini, so keeping the
+# Force10-S6000 names here (Ethernet0, Ethernet4, ...) leaves every port but the
+# first without a VPP interface.
+if [ -f /usr/share/sonic/platform/platform.json ]; then
+    jq -r '.interfaces | to_entries[] | "\(.value.lanes) \(.key)"' \
+        /usr/share/sonic/platform/platform.json > port_names.tmp
+    awk 'NR == FNR { name[$1] = $2; next } !/^#/ && ($2 in name) { $1 = name[$2] } { print }' \
+        port_names.tmp port_config.ini > port_config.ini.tmp
+    mv port_config.ini.tmp port_config.ini
+    rm -f port_names.tmp
+fi
+
 popd
 
 [ -d /etc/sonic ] || mkdir -p /etc/sonic
