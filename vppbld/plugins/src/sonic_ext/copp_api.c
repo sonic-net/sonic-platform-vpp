@@ -49,7 +49,8 @@ vl_api_sonic_ext_copp_dhcp_bind_t_handler (
 
   clib_memcpy (name, mp->policer_name, sizeof (mp->policer_name));
   name[sizeof (mp->policer_name)] = 0;
-  rv = sonic_ext_copp_dhcp_bind (name, mp->is_ipv6, mp->is_bind);
+  rv = sonic_ext_copp_dhcp_bind (name, mp->is_ipv6, mp->is_copy,
+				 mp->is_bind);
 
   REPLY_MACRO (VL_API_SONIC_EXT_COPP_DHCP_BIND_REPLY);
 }
