@@ -41,3 +41,40 @@ autoreply define sonic_ext_copp_neighbor_miss_bind
   string policer_name[64];
   bool is_bind;
 };
+
+/** \brief Bind or unbind the DHCP or DHCPv6 trap-group policer.
+
+    The plugin owns the fixed SAI packet predicates (DHCPv4 UDP 67/68 and
+    DHCPv6 UDP 546/547). Punted packets from both routed interfaces and VLAN
+    members converge on copp-ifout, where this binding is enforced.
+
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param policer_name - name of an existing VPP policer object
+    @param is_ipv6 - 0 for DHCPv4, 1 for DHCPv6
+    @param is_bind - 1 to add/replace the family binding, 0 to remove it
+*/
+autoreply define sonic_ext_copp_dhcp_bind
+{
+  u32 client_index;
+  u32 context;
+  string policer_name[64];
+  bool is_ipv6;
+  bool is_bind;
+};
+
+define sonic_ext_copp_dhcp_get_counters
+{
+  u32 client_index;
+  u32 context;
+  bool is_ipv6;
+};
+
+define sonic_ext_copp_dhcp_get_counters_reply
+{
+  u32 context;
+  i32 retval;
+  u64 conform_packets;
+  u64 exceed_packets;
+  u64 violate_packets;
+};

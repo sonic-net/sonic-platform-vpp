@@ -362,6 +362,10 @@ show_sonic_ext_copp_ifout_command_fn (vlib_main_t *vm,
 			 sem->copp_ifout_violate_packets[i],
 			 sem->copp_ifout_entries[i].match_ip4_ttl_expiring ?
 			   "ip4-ttl<=1" :
+			 sem->copp_ifout_entries[i].match_dhcp4 ?
+			   "dhcp4-udp/67,68" :
+			 sem->copp_ifout_entries[i].match_dhcp6 ?
+			   "dhcp6-udp/546,547" :
 			   "-");
     }
 
