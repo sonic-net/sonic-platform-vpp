@@ -677,6 +677,28 @@ class TestSonicExtCoppDhcp(SonicExtCoppDataplaneBase):
 
         self.assert_policed(self.dhcp4_to_me(), ip2me, self.ip2me_counters)
 
+    def test_active_unpoliced_dhcp4_bypasses_ip2me(self):
+        """An active trap without a policer does not inherit IP2ME"""
+        ip2me = self.policer(conform=DROP, cb=10**6, name="dhcp-unpoliced-ip2me")
+        self.add_ip2me_addr(self.phy.local_ip4)
+        self.bind_ip2me(ip2me)
+        self.vapi.sonic_ext_copp_dhcp_bind(policer_name="", is_ipv6=False, is_bind=True)
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_dhcp_bind,
+            policer_name="",
+            is_ipv6=False,
+            is_bind=False,
+        )
+
+        ip2me_before = self.native(ip2me)
+        dhcp_before = self.dhcp_counters(False)
+        self.send_and_expect(self.phy, self.dhcp4_to_me(), self.host)
+        self.assertEqual(self.native(ip2me), ip2me_before)
+        self.assertEqual(
+            self.delta(self.dhcp_counters(False), dhcp_before)["conform"],
+            self.N_PKTS,
+        )
+
     def test_routed_limited_broadcast_uses_dhcp_policer(self):
         """Ryan's local /32 route converges on the specific DHCP row"""
         route = VppIpRoute(
@@ -756,6 +778,22 @@ class TestSonicExtCoppDhcp(SonicExtCoppDataplaneBase):
             self.dhcp4_to_me(ttl=64), dhcp, lambda: self.dhcp_counters(False)
         )
         self.assertEqual(sum(self.native(ttl).values()), 0)
+
+    def test_dhcp_has_priority_over_ttl_for_ttl_one(self):
+        """A DHCP packet matching TTL_ERROR is still debited only as DHCP"""
+        ttl = self.policer(conform=DROP, cb=10**6, name="ttl-dhcp-priority")
+        dhcp = self.policer(name="dhcp-ttl-one")
+        # Bind TTL first to prove table insertion order is irrelevant.
+        self.bind_ifout(IP4_ETHERTYPE, ttl, ttl_expiring=True)
+        self.bind_dhcp(dhcp)
+
+        ttl_before = self.native(ttl)
+        self.assert_policed(
+            self.dhcp4_to_me(ttl=1),
+            dhcp,
+            lambda: self.dhcp_counters(False),
+        )
+        self.assertEqual(self.native(ttl), ttl_before)
 
     def test_stale_owner_cannot_unbind_replacement(self):
         """An old trap owner cannot remove a newer family binding"""
