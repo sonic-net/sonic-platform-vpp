@@ -86,6 +86,11 @@
 #     "sonic-clear fdb all"). Includes a test in test_l2_fib.py.
 #     Upstream: https://gerrit.fd.io/r/c/vpp/+/47191
 0024-l2-report-flushed-MAC-refreshed-by-traffic.patch
+# 25. ip6: do not rewrite an incomplete-adjacency packet's destination while
+#     generating neighbor discovery. The next-hop is needed only as the ND
+#     target; preserving the original packet lets the NEIGHBOR_MISS drop-arc
+#     consumer punt it byte-for-byte like IPv4.
+0025-ip6-preserve-packet-destination-during-neighbor-discovery.patch
 # 26. nat: with nat44 forwarding enabled and no address pool configured, pass
 #     a new in2out-output flow that matches no static mapping untranslated
 #     instead of dropping it as "out of ports". With static NAT only

@@ -313,6 +313,13 @@ class TestSonicExtCoppStartupOff(SonicExtCoppBase):
     def test_copp_startup_off(self):
         self.assert_copp_state(False)
 
+    def test_neighbor_miss_bind_rejected(self):
+        """A row cannot disable glean throttling when copp-ifout is absent."""
+        with self.vapi.assert_negative_api_retval():
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name="disabled-copp", is_bind=True
+            )
+
 
 class TestSonicExtCoppDefault(SonicExtCoppBase):
     """sonic-ext copp default"""

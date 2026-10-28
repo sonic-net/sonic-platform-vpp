@@ -45,6 +45,10 @@ from ip4-rewrite directly to the ingress member's tap.  Both untagged and
 tagged cases must preserve the complete ingress frame, including MACs,
 VLAN tag, TTL, and checksum.
 
+Scenario 4 -- NEIGHBOR_MISS isolation.  Binding the VLAN/BVI semantic CoPP
+row must not police the pre-existing routed bond and bond-subinterface glean
+redirects; those packets still emerge byte-identically on the ingress tap.
+
 Every test injects on both members in turn and asserts the punt lands on
 the tap of the member that received it; that is the property the two nodes
 exist to provide.
@@ -62,6 +66,7 @@ from framework import VppTestCase
 from host_interface import HostInterface
 from vpp_bond_interface import VppBondInterface
 from vpp_papi import VppEnum
+from vpp_policer import PolicerAction, VppPolicer
 from vpp_qemu_utils import create_namespace, delete_all_namespaces, set_interface_up
 from vpp_sub_interface import VppDot1QSubint
 
@@ -86,6 +91,11 @@ TTL_REDIRECTED = (
     "/err/sonic-ext-copp-ttl-punt/" "transit TTL_ERROR punted to host for CoPP policing"
 )
 
+QOS = VppEnum.vl_api_sse2_qos_action_type_t
+RATE = VppEnum.vl_api_sse2_qos_rate_type_t
+DROP = PolicerAction(QOS.SSE2_QOS_ACTION_API_DROP, 0)
+TRANSMIT = PolicerAction(QOS.SSE2_QOS_ACTION_API_TRANSMIT, 0)
+
 
 @unittest.skipIf("linux-cp" in config.excluded_plugins, "Exclude linux-cp plugin tests")
 @unittest.skipIf(
@@ -104,6 +114,11 @@ class SonicExtBondPuntBase(VppTestCase):
         "}",
         "plugin",
         "sonic_ext_plugin.so",
+        "{",
+        "enable",
+        "}",
+        "plugin",
+        "policer_plugin.so",
         "{",
         "enable",
         "}",
@@ -442,6 +457,61 @@ class TestSonicExtBondPunt(SonicExtBondPuntBase):
             self.assertEqual(rx[IP].dst, self.VLAN_IP4)
             self.assertEqual(rx[IP].src, self.VLAN_REMOTE_IP4)
             self.assertEqual(rx[Ether].dst, self.bond.local_mac)
+
+    def test_neighbor_miss_policies_bond_glean_before_legacy_throttle(self):
+        """Routed bond misses use CoPP, and a burst reaches that policer."""
+        ingress_tap = self._lcp_create(self.egress, "hpg2")
+        pol = VppPolicer(
+            self,
+            "copp-neighbor-miss-bond-control",
+            1000,
+            0,
+            100000,
+            0,
+            rate_type=RATE.SSE2_QOS_RATE_API_KBPS,
+            conform_action=TRANSMIT,
+            exceed_action=DROP,
+            violate_action=DROP,
+        )
+        try:
+            pol.add_vpp_config()
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name=pol.name, is_bind=True
+            )
+            before = pol.get_stats()["conform_packets"]
+            for dst in ("10.10.10.99", "10.10.100.99"):
+                pkt = (
+                    Ether(src=self.egress.remote_mac, dst=self.egress.local_mac)
+                    / IP(src=self.egress.remote_ip4, dst=dst)
+                    / Raw(b"bond-glean-control")
+                )
+                burst = [pkt.copy() for _ in range(4)]
+                ingress_tap.enable_capture()
+                self.egress.add_stream(burst)
+                self.pg_start(trace=True)
+                rxs = ingress_tap.get_capture(
+                    expected_count=len(burst),
+                    timeout=5,
+                    filter_out_fn=lambda p, d=dst: not (
+                        p.haslayer(IP) and p[IP].dst == d
+                    ),
+                )
+                self.assertEqual(len(rxs), len(burst))
+                for rx in rxs:
+                    self.assertEqual(bytes(rx), bytes(pkt))
+
+            self.assertEqual(
+                pol.get_stats()["conform_packets"] - before, 8
+            )
+        finally:
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name=pol.name, is_bind=False
+            )
+            if pol.query_vpp_config():
+                pol.remove_vpp_config()
+            ingress_tap.disable_capture()
+            self.vapi.cli("lcp delete %s" % self.egress)
+            self.lcp_pairs.remove(self.egress)
 
     #
     # scenario 3 -- TTL_ERROR for routed traffic

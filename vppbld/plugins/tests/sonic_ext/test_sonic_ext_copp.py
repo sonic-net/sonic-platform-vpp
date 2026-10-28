@@ -8,7 +8,8 @@ against a named VPP policer and drop what the policer says to drop.
   sonic-ext-copp-ifout
       interface-output feature on each phy's linux-cp host tap.  Matches
       by ethertype (ARP/LACP/LLDP...), structurally for UDLD, and by
-      "IPv4 with TTL <= 1" for TTL_ERROR.
+      "IPv4 with TTL <= 1" for TTL_ERROR. NEIGHBOR_MISS uses a dedicated
+      semantic row selected only by sonic_ext's per-buffer CoPP reason.
 
   sonic-ext-copp-ip2me / sonic-ext-copp-ip2me-ip6
       ip4-punt / ip6-punt features.  IPv4 matches a destination-address
@@ -49,8 +50,8 @@ from scapy.contrib.lldp import (
     LLDPDUPortID,
     LLDPDUTimeToLive,
 )
-from scapy.layers.inet import ICMP, IP, IPOption_Router_Alert, TCP
-from scapy.layers.inet6 import IPv6
+from scapy.layers.inet import ICMP, IP, IPOption_Router_Alert, TCP, UDP
+from scapy.layers.inet6 import IPv6, IPv6ExtHdrHopByHop
 from scapy.layers.l2 import Dot1Q, Dot3, Ether, LLC, SNAP
 from scapy.packet import Raw
 
@@ -58,6 +59,8 @@ from asfframework import VppTestRunner
 from config import config
 from framework import VppTestCase
 from vpp_papi import VppEnum
+from vpp_ip import INVALID_INDEX
+from vpp_ip_route import FibPathType, VppIpRoute, VppRoutePath
 from vpp_policer import PolicerAction, VppPolicer
 from vpp_sub_interface import VppDot1QSubint
 
@@ -253,6 +256,29 @@ class SonicExtCoppDataplaneBase(VppTestCase):
             match_ip4_ttl_expiring=ttl_expiring,
         )
 
+    def bind_neighbor_miss(self, pol):
+        self.vapi.sonic_ext_copp_neighbor_miss_bind(policer_name=pol.name, is_bind=True)
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_neighbor_miss_bind,
+            policer_name=pol.name,
+            is_bind=False,
+        )
+
+    def bind_dhcp(self, pol, is_ipv6=False, is_copy=False):
+        self.vapi.sonic_ext_copp_dhcp_bind(
+            policer_name=pol.name,
+            is_ipv6=is_ipv6,
+            is_copy=is_copy,
+            is_bind=True,
+        )
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_dhcp_bind,
+            policer_name=pol.name,
+            is_ipv6=is_ipv6,
+            is_copy=is_copy,
+            is_bind=False,
+        )
+
     def add_ip2me_addr(self, addr):
         # sonic-ext keeps the address in network byte order and PAPI sends a
         # u32 big-endian, so the integer form of the address is what to pass.
@@ -299,6 +325,10 @@ class SonicExtCoppDataplaneBase(VppTestCase):
 
     def ip2me_counters(self):
         r = self.vapi.sonic_ext_copp_ip2me_get_counters()
+        return {c: getattr(r, "%s_packets" % c) for c in COLORS}
+
+    def dhcp_counters(self, is_ipv6=False):
+        r = self.vapi.sonic_ext_copp_dhcp_get_counters(is_ipv6=is_ipv6)
         return {c: getattr(r, "%s_packets" % c) for c in COLORS}
 
     @staticmethod
@@ -412,6 +442,34 @@ class SonicExtCoppDataplaneBase(VppTestCase):
             / Raw(b"\xa5" * size)
         ) * (n or self.N_PKTS)
 
+    def dhcp4_to_me(self, n=None, sport=68, dport=67, ttl=64):
+        return self.ip4_to_me(n=n, l4=UDP(sport=sport, dport=dport), size=400, ttl=ttl)
+
+    def dhcp6_to_me(self, n=None, sport=546, dport=547, extension=False):
+        l4 = UDP(sport=sport, dport=dport)
+        if extension:
+            l4 = IPv6ExtHdrHopByHop(options=[]) / l4
+        return self.ip6_to_me(l4, n=n, size=400)
+
+    def dhcp4_limited_broadcast(self, n=None):
+        return (
+            Ether(src=self.phy.remote_mac, dst="ff:ff:ff:ff:ff:ff")
+            / IP(src="0.0.0.0", dst="255.255.255.255", ttl=64)
+            / UDP(sport=68, dport=67)
+            / Raw(b"\xa5" * 400)
+        ) * (n or self.N_PKTS)
+
+    def dhcp6_multicast(self, n=None, extension=False):
+        l4 = UDP(sport=546, dport=547)
+        if extension:
+            l4 = IPv6ExtHdrHopByHop(options=[]) / l4
+        return (
+            Ether(src=self.phy.remote_mac, dst="33:33:00:01:00:02")
+            / IPv6(src="::1", dst="ff02::1:2", hlim=64)
+            / l4
+            / Raw(b"\xa5" * 400)
+        ) * (n or self.N_PKTS)
+
     def ip4_transit(self, ttl, n=None):
         return (
             Ether(src=self.phy.remote_mac, dst=self.phy.local_mac)
@@ -444,6 +502,53 @@ class TestSonicExtCoppIfout(SonicExtCoppDataplaneBase):
         self.assert_unpoliced(
             self.lldp(), pol, lambda: self.ifout_counters(LACP_ETHERTYPE)
         )
+
+    def test_neighbor_miss_row_does_not_match_wire_traffic(self):
+        """The semantic reason row must not classify an ordinary frame"""
+        pol = self.policer(conform=DROP)
+        self.bind_neighbor_miss(pol)
+
+        native_before = self.native(pol)
+        rx = self.send_and_capture_host(self.lldp())
+
+        self.assertEqual(len(rx), self.N_PKTS)
+        self.assertEqual(self.native(pol), native_before)
+        self.assertIn("neighbor-miss", self.vapi.cli("show sonic-ext copp-ifout"))
+
+    def test_neighbor_miss_bind_replace_unbind_reuses_one_slot(self):
+        """The singleton semantic row is replaced and its slot is reusable"""
+        first = self.policer(conform=DROP, name="copp-neighbor-miss-first")
+        second = self.policer(conform=DROP, name="copp-neighbor-miss-second")
+
+        self.vapi.sonic_ext_copp_neighbor_miss_bind(
+            policer_name=first.name, is_bind=True
+        )
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_neighbor_miss_bind,
+            policer_name=first.name,
+            is_bind=False,
+        )
+        self.vapi.sonic_ext_copp_neighbor_miss_bind(
+            policer_name=second.name, is_bind=True
+        )
+        show = self.vapi.cli("show sonic-ext copp-ifout")
+        self.assertNotIn(first.name, show)
+        rows = [line for line in show.splitlines() if second.name in line]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("neighbor-miss", rows[0])
+
+        for _ in range(17):
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name=second.name, is_bind=False
+            )
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(
+                policer_name=second.name, is_bind=True
+            )
+
+        self.vapi.sonic_ext_copp_neighbor_miss_bind(
+            policer_name=second.name, is_bind=False
+        )
+        self.assertNotIn("neighbor-miss", self.vapi.cli("show sonic-ext copp-ifout"))
 
     def test_drop_action_honored_for_conforming(self):
         """The configured per-color action decides, not the color itself"""
@@ -554,6 +659,207 @@ class TestSonicExtCoppIfout(SonicExtCoppDataplaneBase):
             for s in (phy_sub, host_sub):
                 s.admin_down()
                 s.remove_vpp_config()
+
+
+class TestSonicExtCoppDhcp(SonicExtCoppDataplaneBase):
+    """sonic-ext CoPP: DHCPv4/DHCPv6 policing on the host-tap path"""
+
+    def test_dhcp4_uses_dhcp_policer_instead_of_ip2me(self):
+        """The specific DHCP row wins and the packet is metered once"""
+        ip2me = self.policer(conform=DROP, cb=10**6, name="dhcp-ip2me-fallback")
+        dhcp = self.policer(name="dhcp4-specific")
+        self.add_ip2me_addr(self.phy.local_ip4)
+        self.bind_ip2me(ip2me)
+        self.bind_dhcp(dhcp)
+
+        ip2me_before = self.native(ip2me)
+        self.assert_policed(self.dhcp4_to_me(), dhcp, lambda: self.dhcp_counters(False))
+        self.assertEqual(self.native(ip2me), ip2me_before)
+
+    def test_dhcp4_falls_back_to_ip2me_without_dhcp_binding(self):
+        """No DHCP trap binding preserves the generic IP2ME behavior"""
+        ip2me = self.policer(name="dhcp-ip2me-only")
+        self.add_ip2me_addr(self.phy.local_ip4)
+        self.bind_ip2me(ip2me)
+
+        self.assert_policed(self.dhcp4_to_me(), ip2me, self.ip2me_counters)
+
+    def test_active_unpoliced_dhcp4_bypasses_ip2me(self):
+        """An active trap without a policer does not inherit IP2ME"""
+        ip2me = self.policer(conform=DROP, cb=10**6, name="dhcp-unpoliced-ip2me")
+        self.add_ip2me_addr(self.phy.local_ip4)
+        self.bind_ip2me(ip2me)
+        self.vapi.sonic_ext_copp_dhcp_bind(
+            policer_name="", is_ipv6=False, is_copy=False, is_bind=True
+        )
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_dhcp_bind,
+            policer_name="",
+            is_ipv6=False,
+            is_copy=False,
+            is_bind=False,
+        )
+
+        ip2me_before = self.native(ip2me)
+        dhcp_before = self.dhcp_counters(False)
+        self.send_and_expect(self.phy, self.dhcp4_to_me(), self.host)
+        self.assertEqual(self.native(ip2me), ip2me_before)
+        self.assertEqual(
+            self.delta(self.dhcp_counters(False), dhcp_before)["conform"],
+            self.N_PKTS,
+        )
+
+    def test_routed_limited_broadcast_uses_dhcp_policer(self):
+        """Ryan's local /32 route converges on the specific DHCP row"""
+        route = VppIpRoute(
+            self,
+            "255.255.255.255",
+            32,
+            [
+                VppRoutePath(
+                    "0.0.0.0",
+                    INVALID_INDEX,
+                    type=FibPathType.FIB_PATH_TYPE_LOCAL,
+                )
+            ],
+        ).add_vpp_config()
+        self.addCleanup(route.remove_vpp_config)
+
+        ip2me = self.policer(conform=DROP, cb=10**6, name="dhcp-limited-ip2me")
+        dhcp = self.policer(name="dhcp-limited-specific")
+        self.add_ip2me_addr("255.255.255.255")
+        self.bind_ip2me(ip2me)
+        self.bind_dhcp(dhcp)
+
+        ip2me_before = self.native(ip2me)
+        self.assert_policed(
+            self.dhcp4_limited_broadcast(),
+            dhcp,
+            lambda: self.dhcp_counters(False),
+        )
+        self.assertEqual(self.native(ip2me), ip2me_before)
+
+    def test_dhcp6_policed(self):
+        """A punted DHCPv6 packet uses the DHCPv6 row"""
+        dhcp6 = self.policer(name="dhcp6-specific")
+        self.bind_dhcp(dhcp6, is_ipv6=True)
+
+        self.assert_policed(self.dhcp6_to_me(), dhcp6, lambda: self.dhcp_counters(True))
+
+    def test_routed_dhcp6_extension_header_is_policed(self):
+        """DHCPv6 interception walks the IPv6 extension-header chain"""
+        dhcp6 = self.policer(name="dhcp6-extension")
+        self.bind_dhcp(dhcp6, is_ipv6=True)
+
+        self.assert_policed(
+            self.dhcp6_multicast(extension=True),
+            dhcp6,
+            lambda: self.dhcp_counters(True),
+        )
+
+    def test_active_unpoliced_dhcp6_redirects_multicast(self):
+        """A null-policer DHCPv6 trap still rescues routed multicast"""
+        self.vapi.sonic_ext_copp_dhcp_bind(
+            policer_name="", is_ipv6=True, is_copy=False, is_bind=True
+        )
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_dhcp_bind,
+            policer_name="",
+            is_ipv6=True,
+            is_copy=False,
+            is_bind=False,
+        )
+        counters_before = self.dhcp_counters(True)
+
+        self.send_and_expect(self.phy, self.dhcp6_multicast(extension=True), self.host)
+        self.assertEqual(
+            self.delta(self.dhcp_counters(True), counters_before)["conform"],
+            self.N_PKTS,
+        )
+
+    def test_routed_dhcp6_multicast_is_redirected_and_policed(self):
+        """ff02::1:2 traffic is intercepted before MFIB RPF drop"""
+        dhcp6 = self.policer(name="dhcp6-routed")
+        self.bind_dhcp(dhcp6, is_ipv6=True)
+
+        self.assert_policed(
+            self.dhcp6_multicast(),
+            dhcp6,
+            lambda: self.dhcp_counters(True),
+        )
+
+    def test_unrelated_udp_is_not_dhcp(self):
+        """The DHCP row does not meter arbitrary host-bound UDP"""
+        dhcp = self.policer(conform=DROP, cb=10**6)
+        self.bind_dhcp(dhcp)
+
+        native_before = self.native(dhcp)
+        counters_before = self.dhcp_counters(False)
+        self.send_and_expect(
+            self.phy,
+            self.ip4_to_me(l4=UDP(sport=12345, dport=67), size=128),
+            self.host,
+        )
+        self.assertEqual(self.native(dhcp), native_before)
+        self.assertEqual(self.dhcp_counters(False), counters_before)
+
+    def test_dhcp_and_ttl_rows_share_ipv4_ethertype(self):
+        """Two qualified IPv4 rows coexist without bind-order ambiguity"""
+        ttl = self.policer(conform=DROP, cb=10**6, name="ttl-specific")
+        dhcp = self.policer(name="dhcp-with-ttl")
+        self.bind_ifout(IP4_ETHERTYPE, ttl, ttl_expiring=True)
+        self.bind_dhcp(dhcp)
+
+        show = self.vapi.cli("show sonic-ext copp-ifout")
+        self.assertIn("ip4-ttl<=1", show)
+        self.assertIn("dhcp4-udp/67,68", show)
+        self.assert_policed(
+            self.dhcp4_to_me(ttl=64), dhcp, lambda: self.dhcp_counters(False)
+        )
+        self.assertEqual(sum(self.native(ttl).values()), 0)
+
+    def test_dhcp_has_priority_over_ttl_for_ttl_one(self):
+        """A DHCP packet matching TTL_ERROR is still debited only as DHCP"""
+        ttl = self.policer(conform=DROP, cb=10**6, name="ttl-dhcp-priority")
+        dhcp = self.policer(name="dhcp-ttl-one")
+        # Bind TTL first to prove table insertion order is irrelevant.
+        self.bind_ifout(IP4_ETHERTYPE, ttl, ttl_expiring=True)
+        self.bind_dhcp(dhcp)
+
+        ttl_before = self.native(ttl)
+        self.assert_policed(
+            self.dhcp4_to_me(ttl=1),
+            dhcp,
+            lambda: self.dhcp_counters(False),
+        )
+        self.assertEqual(self.native(ttl), ttl_before)
+
+    def test_stale_owner_cannot_unbind_replacement(self):
+        """An old trap owner cannot remove a newer family binding"""
+        first = self.policer(conform=DROP, cb=10**6, name="dhcp-first")
+        second = self.policer(conform=DROP, cb=10**6, name="dhcp-second")
+        self.vapi.sonic_ext_copp_dhcp_bind(
+            policer_name=first.name, is_ipv6=False, is_copy=False, is_bind=True
+        )
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_dhcp_bind,
+            policer_name=second.name,
+            is_ipv6=False,
+            is_copy=False,
+            is_bind=False,
+        )
+        self.vapi.sonic_ext_copp_dhcp_bind(
+            policer_name=second.name, is_ipv6=False, is_copy=False, is_bind=True
+        )
+        self.vapi.sonic_ext_copp_dhcp_bind(
+            policer_name=first.name, is_ipv6=False, is_copy=False, is_bind=False
+        )
+
+        before = self.native(second)
+        self.assert_dropped(self.dhcp4_to_me())
+        self.assertEqual(
+            self.delta(self.native(second), before)["conform"], self.N_PKTS
+        )
 
 
 class TestSonicExtCoppUdld(SonicExtCoppDataplaneBase):
@@ -788,6 +1094,39 @@ class TestSonicExtCoppIp2me(SonicExtCoppDataplaneBase):
             self.N_PKTS,
         )
         self.assertEqual(self.native(bgp_pol), bgp_before)
+
+    def test_same_policer_name_keeps_bgp_and_ip2me_slots_independent(self):
+        """The API operation, not only the name, identifies each slot."""
+        pol = self.policer(conform=DROP, cb=10**6, name="shared-copp")
+        self.add_ip2me_addr(self.phy.local_ip4)
+        self.bind_ip2me(pol)
+        self.bind_ip2me_port(pol)
+
+        self.vapi.sonic_ext_copp_ip2me_bind_condition(
+            policer_name=pol.name, tcp_port=BGP_PORT, is_bind=False
+        )
+        before = self.native(pol)
+        self.assert_dropped(self.ip4_to_me(l4=TCP(sport=40000, dport=22)))
+        self.assertEqual(self.delta(self.native(pol), before)["conform"], self.N_PKTS)
+
+    def test_rebinding_bgp_replaces_the_previous_owner(self):
+        """One semantic BGP slot cannot retain a superseded policer name."""
+        old_pol = self.policer(conform=DROP, cb=10**6, name="old-bgp")
+        new_pol = self.policer(conform=TRANSMIT, cb=10**6, name="new-bgp")
+        self.bind_ip2me_port(old_pol)
+        self.bind_ip2me_port(new_pol)
+
+        old_before = self.native(old_pol)
+        new_before = self.native(new_pol)
+        self.send_and_expect(
+            self.phy,
+            self.ip4_to_me(l4=TCP(sport=40000, dport=BGP_PORT)),
+            self.host,
+        )
+        self.assertEqual(self.native(old_pol), old_before)
+        self.assertEqual(
+            self.delta(self.native(new_pol), new_before)["conform"], self.N_PKTS
+        )
 
     def test_bgp_port_found_after_ip_options(self):
         """The TCP port is located from the IHL, not a fixed offset"""
