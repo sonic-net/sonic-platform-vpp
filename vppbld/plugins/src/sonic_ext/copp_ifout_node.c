@@ -96,14 +96,13 @@ sonic_ext_copp_dhcp6_match (vlib_buffer_t *b, u8 *payload, u32 hdr_len)
 {
   ip6_header_t *ip6;
   u32 udp_offset = 0;
-  int proto;
 
   if (b->current_length < hdr_len + sizeof (ip6_header_t))
     return 0;
 
   ip6 = (ip6_header_t *) payload;
-  proto = ip6_locate_header (b, ip6, -1, &udp_offset);
-  if (proto != IP_PROTOCOL_UDP ||
+  if (!sonic_ext_ip6_locate_transport (
+	ip6, b->current_length - hdr_len, IP_PROTOCOL_UDP, &udp_offset) ||
       b->current_length < hdr_len + udp_offset + sizeof (udp_header_t))
     return 0;
 
@@ -750,7 +749,16 @@ sonic_ext_copp_dhcp_is_bound (sonic_ext_main_t *sem, int is_ipv6)
 }
 
 int
-sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_bind)
+sonic_ext_copp_dhcp_is_copy (sonic_ext_main_t *sem, int is_ipv6)
+{
+  int idx = sonic_ext_copp_dhcp_find_entry (sem, is_ipv6);
+
+  return idx >= 0 && sem->copp_ifout_entries[idx].dhcp_copy;
+}
+
+int
+sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_copy,
+			  int is_bind)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
   vlib_main_t *vm = vlib_get_main ();
@@ -810,6 +818,7 @@ sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_bind)
   sem->copp_ifout_entries[idx].in_use = 1;
   sem->copp_ifout_entries[idx].match_dhcp4 = is_ipv6 ? 0 : 1;
   sem->copp_ifout_entries[idx].match_dhcp6 = is_ipv6 ? 1 : 0;
+  sem->copp_ifout_entries[idx].dhcp_copy = is_copy ? 1 : 0;
   sem->copp_ifout_conform_packets[idx] = 0;
   sem->copp_ifout_exceed_packets[idx] = 0;
   sem->copp_ifout_violate_packets[idx] = 0;

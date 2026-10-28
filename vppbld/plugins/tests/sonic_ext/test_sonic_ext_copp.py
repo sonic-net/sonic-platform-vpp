@@ -51,7 +51,7 @@ from scapy.contrib.lldp import (
     LLDPDUTimeToLive,
 )
 from scapy.layers.inet import ICMP, IP, IPOption_Router_Alert, TCP, UDP
-from scapy.layers.inet6 import IPv6
+from scapy.layers.inet6 import IPv6, IPv6ExtHdrHopByHop
 from scapy.layers.l2 import Dot1Q, Dot3, Ether, LLC, SNAP
 from scapy.packet import Raw
 
@@ -100,9 +100,6 @@ UDLD_NO_LCP = "/err/sonic-ext-copp-udld/UDLD dropped -- no LCP pair for ingress 
 TTL_NO_LCP = (
     "/err/sonic-ext-copp-ttl-punt/"
     "TTL_ERROR punt dropped -- no LCP pair for ingress phy"
-)
-DHCP6_REDIRECTED = (
-    "/err/sonic-ext-glean-redirect/" "routed DHCPv6 redirected to ingress host tap"
 )
 
 COLORS = ("conform", "exceed", "violate")
@@ -267,14 +264,18 @@ class SonicExtCoppDataplaneBase(VppTestCase):
             is_bind=False,
         )
 
-    def bind_dhcp(self, pol, is_ipv6=False):
+    def bind_dhcp(self, pol, is_ipv6=False, is_copy=False):
         self.vapi.sonic_ext_copp_dhcp_bind(
-            policer_name=pol.name, is_ipv6=is_ipv6, is_bind=True
+            policer_name=pol.name,
+            is_ipv6=is_ipv6,
+            is_copy=is_copy,
+            is_bind=True,
         )
         self.addCleanup(
             self.vapi.sonic_ext_copp_dhcp_bind,
             policer_name=pol.name,
             is_ipv6=is_ipv6,
+            is_copy=is_copy,
             is_bind=False,
         )
 
@@ -444,8 +445,11 @@ class SonicExtCoppDataplaneBase(VppTestCase):
     def dhcp4_to_me(self, n=None, sport=68, dport=67, ttl=64):
         return self.ip4_to_me(n=n, l4=UDP(sport=sport, dport=dport), size=400, ttl=ttl)
 
-    def dhcp6_to_me(self, n=None, sport=546, dport=547):
-        return self.ip6_to_me(UDP(sport=sport, dport=dport), n=n, size=400)
+    def dhcp6_to_me(self, n=None, sport=546, dport=547, extension=False):
+        l4 = UDP(sport=sport, dport=dport)
+        if extension:
+            l4 = IPv6ExtHdrHopByHop(options=[]) / l4
+        return self.ip6_to_me(l4, n=n, size=400)
 
     def dhcp4_limited_broadcast(self, n=None):
         return (
@@ -455,11 +459,14 @@ class SonicExtCoppDataplaneBase(VppTestCase):
             / Raw(b"\xa5" * 400)
         ) * (n or self.N_PKTS)
 
-    def dhcp6_multicast(self, n=None):
+    def dhcp6_multicast(self, n=None, extension=False):
+        l4 = UDP(sport=546, dport=547)
+        if extension:
+            l4 = IPv6ExtHdrHopByHop(options=[]) / l4
         return (
             Ether(src=self.phy.remote_mac, dst="33:33:00:01:00:02")
             / IPv6(src="::1", dst="ff02::1:2", hlim=64)
-            / UDP(sport=546, dport=547)
+            / l4
             / Raw(b"\xa5" * 400)
         ) * (n or self.N_PKTS)
 
@@ -682,11 +689,14 @@ class TestSonicExtCoppDhcp(SonicExtCoppDataplaneBase):
         ip2me = self.policer(conform=DROP, cb=10**6, name="dhcp-unpoliced-ip2me")
         self.add_ip2me_addr(self.phy.local_ip4)
         self.bind_ip2me(ip2me)
-        self.vapi.sonic_ext_copp_dhcp_bind(policer_name="", is_ipv6=False, is_bind=True)
+        self.vapi.sonic_ext_copp_dhcp_bind(
+            policer_name="", is_ipv6=False, is_copy=False, is_bind=True
+        )
         self.addCleanup(
             self.vapi.sonic_ext_copp_dhcp_bind,
             policer_name="",
             is_ipv6=False,
+            is_copy=False,
             is_bind=False,
         )
 
@@ -736,18 +746,47 @@ class TestSonicExtCoppDhcp(SonicExtCoppDataplaneBase):
 
         self.assert_policed(self.dhcp6_to_me(), dhcp6, lambda: self.dhcp_counters(True))
 
+    def test_routed_dhcp6_extension_header_is_policed(self):
+        """DHCPv6 interception walks the IPv6 extension-header chain"""
+        dhcp6 = self.policer(name="dhcp6-extension")
+        self.bind_dhcp(dhcp6, is_ipv6=True)
+
+        self.assert_policed(
+            self.dhcp6_multicast(extension=True),
+            dhcp6,
+            lambda: self.dhcp_counters(True),
+        )
+
+    def test_active_unpoliced_dhcp6_redirects_multicast(self):
+        """A null-policer DHCPv6 trap still rescues routed multicast"""
+        self.vapi.sonic_ext_copp_dhcp_bind(
+            policer_name="", is_ipv6=True, is_copy=False, is_bind=True
+        )
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_dhcp_bind,
+            policer_name="",
+            is_ipv6=True,
+            is_copy=False,
+            is_bind=False,
+        )
+        counters_before = self.dhcp_counters(True)
+
+        self.send_and_expect(self.phy, self.dhcp6_multicast(extension=True), self.host)
+        self.assertEqual(
+            self.delta(self.dhcp_counters(True), counters_before)["conform"],
+            self.N_PKTS,
+        )
+
     def test_routed_dhcp6_multicast_is_redirected_and_policed(self):
-        """Routed ff02::1:2 traffic is rescued from MFIB RPF drop"""
+        """ff02::1:2 traffic is intercepted before MFIB RPF drop"""
         dhcp6 = self.policer(name="dhcp6-routed")
         self.bind_dhcp(dhcp6, is_ipv6=True)
-        redirected_before = self.err(DHCP6_REDIRECTED)
 
         self.assert_policed(
             self.dhcp6_multicast(),
             dhcp6,
             lambda: self.dhcp_counters(True),
         )
-        self.assertEqual(self.err(DHCP6_REDIRECTED) - redirected_before, self.N_PKTS)
 
     def test_unrelated_udp_is_not_dhcp(self):
         """The DHCP row does not meter arbitrary host-bound UDP"""
@@ -800,19 +839,20 @@ class TestSonicExtCoppDhcp(SonicExtCoppDataplaneBase):
         first = self.policer(conform=DROP, cb=10**6, name="dhcp-first")
         second = self.policer(conform=DROP, cb=10**6, name="dhcp-second")
         self.vapi.sonic_ext_copp_dhcp_bind(
-            policer_name=first.name, is_ipv6=False, is_bind=True
+            policer_name=first.name, is_ipv6=False, is_copy=False, is_bind=True
         )
         self.addCleanup(
             self.vapi.sonic_ext_copp_dhcp_bind,
             policer_name=second.name,
             is_ipv6=False,
+            is_copy=False,
             is_bind=False,
         )
         self.vapi.sonic_ext_copp_dhcp_bind(
-            policer_name=second.name, is_ipv6=False, is_bind=True
+            policer_name=second.name, is_ipv6=False, is_copy=False, is_bind=True
         )
         self.vapi.sonic_ext_copp_dhcp_bind(
-            policer_name=first.name, is_ipv6=False, is_bind=False
+            policer_name=first.name, is_ipv6=False, is_copy=False, is_bind=False
         )
 
         before = self.native(second)

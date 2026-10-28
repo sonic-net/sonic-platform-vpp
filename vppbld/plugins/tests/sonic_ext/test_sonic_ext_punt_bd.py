@@ -59,7 +59,7 @@ from scapy.contrib.lldp import (
 )
 from scapy.layers.dhcp import BOOTP, DHCP
 from scapy.layers.inet import IP, UDP
-from scapy.layers.inet6 import IPv6
+from scapy.layers.inet6 import IPv6, IPv6ExtHdrHopByHop
 from scapy.layers.l2 import ARP, Dot1Q, Ether
 from scapy.packet import Raw
 
@@ -83,6 +83,8 @@ LLDP_ETHERTYPE = 0x88CC
 ARP_ETHERTYPE = 0x0806
 DHCP_CLIENT_PORT = 68
 DHCP_SERVER_PORT = 67
+DHCP6_CLIENT_PORT = 546
+DHCP6_SERVER_PORT = 547
 
 REDIRECTED = (
     "/err/sonic-ext-aggr-tap-redirect/aggregate tap punt redirected to member tap"
@@ -301,59 +303,18 @@ class SonicExtL2PuntBase(VppTestCase):
     def _install_punt_classifiers(self):
         self.tables = []
 
+        # Only LLDP remains classify-driven in this focused harness. DHCP is
+        # parsed on device-input by sonic-ext-capture, where the live semantic
+        # binding decides absent/TRAP/COPY without fixed transport offsets.
         punt_next = self._node_next("l2-input-classify", "linux-cp-punt")
-        trap_fixup_next = self._node_next(
-            "l2-input-classify", "sonic-ext-l2-trap-fixup"
-        )
-
-        bcast = {i: 0xFF for i in range(6)}
-
-        # Untagged IP4 slot: DHCPv4 broadcast.  dst mac, ethertype 0x0800,
-        # IP proto UDP at 23, UDP dport at 36..37 (sport not matched).
-        mask = self._vec(48, bcast, {12: 0xFF, 13: 0xFF, 23: 0xFF, 36: 0xFF, 37: 0xFF})
-        self.untag_ip4_table = self._add_table(mask, 3)
-        match = self._vec(
-            48,
-            bcast,
-            {
-                12: 0x08,
-                13: 0x00,
-                23: 0x11,
-                36: DHCP_SERVER_PORT >> 8,
-                37: DHCP_SERVER_PORT & 0xFF,
-            },
-        )
-        # Untagged DHCP punts straight to linux-cp-punt: VLIB_RX is already the
-        # parent phy, so no trap fixup is required.
-        self._add_session(self.untag_ip4_table, punt_next, match)
-
-        # Untagged OTHER slot: LLDP by ethertype.
         mask = self._vec(16, {12: 0xFF, 13: 0xFF})
         self.untag_other_table = self._add_table(mask, 1)
         match = self._vec(16, {12: 0x88, 13: 0xCC})
         self._add_session(self.untag_other_table, punt_next, match)
 
-        # Tagged OTHER slot: DHCPv4 over .1Q.  The VTR pop has not run at
-        # l2-input-classify, so every post-L2 offset shifts by 4.  Hit-next is
-        # the trap fixup, because a bridged sub-if has no LCP pair.
-        mask = self._vec(48, bcast, {16: 0xFF, 17: 0xFF, 27: 0xFF, 40: 0xFF, 41: 0xFF})
-        self.tag_dhcp_table = self._add_table(mask, 3)
-        match = self._vec(
-            48,
-            bcast,
-            {
-                16: 0x08,
-                17: 0x00,
-                27: 0x11,
-                40: DHCP_SERVER_PORT >> 8,
-                41: DHCP_SERVER_PORT & 0xFF,
-            },
-        )
-        self._add_session(self.tag_dhcp_table, trap_fixup_next, match)
-
         self.vapi.classify_set_interface_l2_tables(
             sw_if_index=self.access_phy.sw_if_index,
-            ip4_table_index=self.untag_ip4_table,
+            ip4_table_index=NO_INDEX,
             ip6_table_index=NO_INDEX,
             other_table_index=self.untag_other_table,
             is_input=1,
@@ -362,7 +323,7 @@ class SonicExtL2PuntBase(VppTestCase):
             sw_if_index=self.vlan_if.sw_if_index,
             ip4_table_index=NO_INDEX,
             ip6_table_index=NO_INDEX,
-            other_table_index=self.tag_dhcp_table,
+            other_table_index=NO_INDEX,
             is_input=1,
         )
 
@@ -418,6 +379,16 @@ class SonicExtL2PuntBase(VppTestCase):
             return eth / Dot1Q(vlan=self.VLAN_ID) / payload
         return eth / payload
 
+    def _dhcp6_request(self, phy, tagged=False, extension=False):
+        eth = Ether(dst="33:33:00:01:00:02", src=phy.remote_mac)
+        l4 = UDP(sport=DHCP6_CLIENT_PORT, dport=DHCP6_SERVER_PORT)
+        if extension:
+            l4 = IPv6ExtHdrHopByHop(options=[]) / l4
+        payload = IPv6(src="::1", dst="ff02::1:2", hlim=64) / l4 / Raw(b"dhcp6-client")
+        if tagged:
+            return eth / Dot1Q(vlan=self.VLAN_ID) / payload
+        return eth / payload
+
     def _lldp(self, phy):
         return (
             Ether(dst=LLDP_MCAST_MAC, src=phy.remote_mac, type=LLDP_ETHERTYPE)
@@ -438,6 +409,10 @@ class SonicExtL2PuntBase(VppTestCase):
     @staticmethod
     def _not_dhcp(p):
         return not (p.haslayer(UDP) and p[UDP].dport == DHCP_SERVER_PORT)
+
+    @staticmethod
+    def _not_dhcp6(p):
+        return not (p.haslayer(UDP) and p[UDP].dport == DHCP6_SERVER_PORT)
 
     @staticmethod
     def _not_lldp(p):
@@ -468,6 +443,21 @@ class SonicExtL2PuntBase(VppTestCase):
 
     def _err(self, name):
         return self.statistics.get_err_counter(name)
+
+    def _bind_dhcp(self, is_ipv6=False, is_copy=False):
+        self.vapi.sonic_ext_copp_dhcp_bind(
+            policer_name="",
+            is_ipv6=is_ipv6,
+            is_copy=is_copy,
+            is_bind=True,
+        )
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_dhcp_bind,
+            policer_name="",
+            is_ipv6=is_ipv6,
+            is_copy=is_copy,
+            is_bind=False,
+        )
 
     def _punt(self, phy, pkt, tap, filter_out_fn, flood_to=()):
         """Inject one frame on *phy* and return the copy seen on *tap*.
@@ -513,8 +503,12 @@ class SonicExtL2PuntBase(VppTestCase):
             )
         self.assertEqual(rx[Ether].dst, sent[Ether].dst)
         self.assertEqual(rx[Ether].src, sent[Ether].src)
-        self.assertEqual(rx[ARP].psrc, sent[ARP].psrc)
-        self.assertEqual(rx[ARP].pdst, sent[ARP].pdst)
+        if sent.haslayer(ARP):
+            self.assertEqual(rx[ARP].psrc, sent[ARP].psrc)
+            self.assertEqual(rx[ARP].pdst, sent[ARP].pdst)
+        elif sent.haslayer(UDP):
+            self.assertEqual(rx[UDP].sport, sent[UDP].sport)
+            self.assertEqual(rx[UDP].dport, sent[UDP].dport)
 
     def _assert_untagged(self, rx):
         self.assertFalse(
@@ -556,6 +550,7 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
 
     def test_untagged_dhcp_to_member_tap(self):
         """Untagged DHCP request is classified and punted to the member tap"""
+        self._bind_dhcp()
         rx = self._punt(
             self.access_phy,
             self._dhcp_request(self.access_phy),
@@ -601,6 +596,7 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
 
     def test_tagged_dhcp_to_parent_member_tap(self):
         """Tagged DHCP is trap-fixed up and punted to the parent phy's tap"""
+        self._bind_dhcp()
         rx = self._punt(
             self.trunk_phy,
             self._dhcp_request(self.trunk_phy, tagged=True),
@@ -610,6 +606,54 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
 
         self._assert_tagged(rx)
         self.assertEqual(rx[UDP].dport, DHCP_SERVER_PORT)
+
+    def test_unbound_dhcp6_preserves_vlan_flooding(self):
+        """Without a DHCPv6 trap, a client multicast stays in the bridge."""
+        pkt = self._dhcp6_request(self.access_phy, extension=True)
+        self.access_tap.enable_capture()
+        self.pg_enable_capture(self.pg_interfaces)
+        self.access_phy.add_stream([pkt])
+        self.pg_start(trace=True)
+
+        self.access_tap.get_capture(
+            expected_count=0, timeout=1, filter_out_fn=self._not_dhcp6
+        )
+        flooded = self.trunk_phy.get_capture(
+            1, filter_out_fn=self._not_from(pkt[Ether].src)
+        )[0]
+        self._assert_flooded(pkt, flooded, self.trunk_phy, True)
+
+    def test_unpoliced_dhcp6_copy_preserves_vlan_flooding(self):
+        """COPY sends one CPU copy and preserves the original flood path."""
+        self._bind_dhcp(is_ipv6=True, is_copy=True)
+        pkt = self._dhcp6_request(self.access_phy, extension=True)
+        rx = self._punt(
+            self.access_phy,
+            pkt,
+            self.access_tap,
+            self._not_dhcp6,
+            flood_to=[(self.trunk_phy, True)],
+        )
+        self._assert_untagged(rx)
+        self.assertEqual(rx[UDP].dport, DHCP6_SERVER_PORT)
+
+    def test_tagged_dhcp6_extension_trap_suppresses_flood(self):
+        """TRAP parses an extension chain, punts tagged, and consumes L2."""
+        self._bind_dhcp(is_ipv6=True)
+        pkt = self._dhcp6_request(self.trunk_phy, tagged=True, extension=True)
+        self.trunk_tap.enable_capture()
+        self.pg_enable_capture(self.pg_interfaces)
+        self.trunk_phy.add_stream([pkt])
+        self.pg_start(trace=True)
+
+        rx = self.trunk_tap.get_capture(
+            expected_count=1, timeout=5, filter_out_fn=self._not_dhcp6
+        )[0]
+        self.access_phy.get_capture(
+            0, timeout=1, filter_out_fn=self._not_from(pkt[Ether].src)
+        )
+        self._assert_tagged(rx)
+        self.assertEqual(rx[UDP].dport, DHCP6_SERVER_PORT)
 
     def test_lldp_on_trunk_to_own_tap(self):
         """LLDP on the trunk phy is punted via the L3 ethertype path to its tap"""
@@ -735,9 +779,7 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
             sw_if_index=self.bvi.sw_if_index, prefix=prefix
         )
         try:
-            self.vapi.sonic_ext_copp_neighbor_miss_bind(
-                policer_name="", is_bind=True
-            )
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(policer_name="", is_bind=True)
             self.access_tap.enable_capture()
             self.access_phy.add_stream([pkt, pkt, pkt])
             self.pg_start(trace=True)
@@ -748,9 +790,7 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
             )
             self.assertEqual([bytes(rx) for rx in rxs], [bytes(pkt)] * 3)
         finally:
-            self.vapi.sonic_ext_copp_neighbor_miss_bind(
-                policer_name="", is_bind=False
-            )
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(policer_name="", is_bind=False)
             self.vapi.sw_interface_add_del_address(
                 sw_if_index=self.bvi.sw_if_index, prefix=prefix, is_add=0
             )
@@ -767,9 +807,7 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
             sw_if_index=self.bvi.sw_if_index, prefix=prefix
         )
         try:
-            self.vapi.sonic_ext_copp_neighbor_miss_bind(
-                policer_name="", is_bind=True
-            )
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(policer_name="", is_bind=True)
             self.vapi.cli("sonic-ext punt-via-member off")
             rx = self._punt(
                 self.access_phy,
@@ -779,9 +817,7 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
             )
             self.assertEqual(bytes(rx), bytes(pkt))
         finally:
-            self.vapi.sonic_ext_copp_neighbor_miss_bind(
-                policer_name="", is_bind=False
-            )
+            self.vapi.sonic_ext_copp_neighbor_miss_bind(policer_name="", is_bind=False)
             self.vapi.cli("sonic-ext punt-via-member on")
             self.vapi.sw_interface_add_del_address(
                 sw_if_index=self.bvi.sw_if_index, prefix=prefix, is_add=0
