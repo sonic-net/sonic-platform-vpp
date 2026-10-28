@@ -336,6 +336,47 @@ class SonicExtL2PuntBase(VppTestCase):
             is_input=1,
         )
 
+    def _install_ip6_mcast_punt_classifiers(self):
+        """Mirror sairedis unknown-multicast flood NONE classifiers.
+
+        The terminal punt still traverses copp-ifout on the member host tap,
+        where the live DHCPv6 policer row applies. Flood NONE remains terminal
+        for both DHCPv6 and other 33:33 traffic.
+        """
+        fixup_next = self._node_next(
+            "l2-input-classify", "sonic-ext-l2-trap-fixup"
+        )
+
+        mask = self._vec(16, {0: 0xFF, 1: 0xFF})
+        untag_ip6mc_table = self._add_table(mask, 1)
+        match = self._vec(16, {0: 0x33, 1: 0x33})
+        self._add_session(untag_ip6mc_table, fixup_next, match)
+        self.vapi.classify_set_interface_l2_tables(
+            sw_if_index=self.access_phy.sw_if_index,
+            ip4_table_index=NO_INDEX,
+            ip6_table_index=untag_ip6mc_table,
+            other_table_index=self.untag_other_table,
+            is_input=1,
+        )
+
+        mask = self._vec(
+            32,
+            {0: 0xFF, 1: 0xFF, 16: 0xFF, 17: 0xFF},
+        )
+        tag_ip6mc_table = self._add_table(mask, 2)
+        match = self._vec(
+            32,
+            {0: 0x33, 1: 0x33, 16: 0x86, 17: 0xDD},
+        )
+        self._add_session(tag_ip6mc_table, fixup_next, match)
+        self.vapi.classify_set_interface_l2_tables(
+            sw_if_index=self.vlan_if.sw_if_index,
+            ip4_table_index=NO_INDEX,
+            ip6_table_index=NO_INDEX,
+            other_table_index=tag_ip6mc_table,
+            is_input=1,
+        )
+
     def _remove_punt_classifiers(self):
         for sw_if_index in (self.access_phy.sw_if_index, self.vlan_if.sw_if_index):
             self.vapi.classify_set_interface_l2_tables(
@@ -735,6 +776,81 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
             flood_to=[(self.trunk_phy, True)],
         )
         self._assert_untagged(rx)
+        self.assertEqual(rx[UDP].dport, DHCP6_SERVER_PORT)
+
+    def test_mcast_flood_none_dhcp6_copy_is_punted_once_without_flood(self):
+        """COPY remains CPU-policed while explicit flood NONE suppresses peers."""
+        self._install_ip6_mcast_punt_classifiers()
+        policer = VppPolicer(
+            self,
+            "copp-dhcp6-flood-none",
+            1000,
+            0,
+            100000,
+            0,
+            rate_type=RATE.SSE2_QOS_RATE_API_KBPS,
+        ).add_vpp_config()
+        self._bind_dhcp(
+            is_ipv6=True, is_copy=True, policer_name=policer.name
+        )
+        pkt = self._dhcp6_request(self.access_phy, extension=True)
+        before = self.vapi.sonic_ext_copp_dhcp_get_counters(is_ipv6=True)
+        self.access_tap.enable_capture()
+        self.pg_enable_capture(self.pg_interfaces)
+        self.access_phy.add_stream([pkt])
+        self.pg_start(trace=True)
+
+        rx = self.access_tap.get_capture(
+            expected_count=1, timeout=5, filter_out_fn=self._not_dhcp6
+        )[0]
+        self.trunk_phy.get_capture(
+            0, timeout=1, filter_out_fn=self._not_from(pkt[Ether].src)
+        )
+        after = self.vapi.sonic_ext_copp_dhcp_get_counters(is_ipv6=True)
+        self._assert_untagged(rx)
+        self.assertEqual(rx[UDP].dport, DHCP6_SERVER_PORT)
+        self.assertEqual(after.conform_packets, before.conform_packets + 1)
+
+    def test_mcast_flood_none_still_punts_non_dhcp6(self):
+        """Resuming semantic DHCPv6 does not weaken generic flood NONE."""
+        self._install_ip6_mcast_punt_classifiers()
+        pkt = (
+            Ether(dst="33:33:00:00:00:01", src=self.access_phy.remote_mac)
+            / IPv6(src="::1", dst="ff02::1", hlim=64)
+            / UDP(sport=9999, dport=9999)
+            / Raw(b"not-dhcp6")
+        )
+        packet_filter = self._not_from(pkt[Ether].src)
+        self.access_tap.enable_capture()
+        self.pg_enable_capture(self.pg_interfaces)
+        self.access_phy.add_stream([pkt])
+        self.pg_start(trace=True)
+
+        rx = self.access_tap.get_capture(
+            expected_count=1, timeout=5, filter_out_fn=packet_filter
+        )[0]
+        self.trunk_phy.get_capture(
+            0, timeout=1, filter_out_fn=packet_filter
+        )
+        self.assertEqual(rx[IPv6].dst, "ff02::1")
+
+    def test_mcast_flood_none_tagged_dhcp6_copy_is_punted_without_flood(self):
+        """Tagged COPY also composes with flood NONE on the fixup path."""
+        self._install_ip6_mcast_punt_classifiers()
+        self._bind_dhcp(is_ipv6=True, is_copy=True)
+        pkt = self._dhcp6_request(self.trunk_phy, tagged=True, extension=True)
+        self.trunk_tap.enable_capture()
+        self.pg_enable_capture(self.pg_interfaces)
+        self.trunk_phy.add_stream([pkt])
+        self.pg_start(trace=True)
+
+        rx = self.trunk_tap.get_capture(
+            expected_count=1, timeout=5, filter_out_fn=self._not_dhcp6
+        )[0]
+        self.access_phy.get_capture(
+            0, timeout=1, filter_out_fn=self._not_from(pkt[Ether].src)
+        )
+        self._assert_tagged(rx)
         self.assertEqual(rx[UDP].dport, DHCP6_SERVER_PORT)
 
     def test_tagged_dhcp6_extension_trap_suppresses_flood(self):
