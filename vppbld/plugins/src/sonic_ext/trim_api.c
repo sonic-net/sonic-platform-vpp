@@ -25,6 +25,7 @@
  */
 
 #include <sonic_ext/sonic_ext.h>
+#include <sonic_ext/sonic_ext_vnet_buf.h>
 
 #include <vlib/vlib.h>
 #include <vnet/vnet.h>
@@ -74,8 +75,11 @@ sonic_ext_trim_sw_if_add_del (vnet_main_t *vnm, u32 sw_if_index, u32 is_add)
   /* VPP removes the feature arc; discard our latch and buckets as well so a
    * recycled interface index starts with no trim configuration. */
   if (!is_add && sw_if_index < vec_len (sem->trim_ports))
-    clib_memset (&sem->trim_ports[sw_if_index], 0,
-		 sizeof (sem->trim_ports[sw_if_index]));
+    {
+      if (sem->trim_ports[sw_if_index].feature_enabled)
+	sonic_ext_vnet_buf_unref (vlib_get_main ());
+      clib_memset (&sem->trim_ports[sw_if_index], 0, sizeof (sem->trim_ports[sw_if_index]));
+    }
 
   return 0;
 }
@@ -114,9 +118,17 @@ sonic_ext_trim_bucket_admit (vlib_main_t *vm, sonic_ext_trim_queue_t *q,
 int
 sonic_ext_trim_enable_disable (u32 sw_if_index, int enable)
 {
-  return vnet_feature_enable_disable ("interface-output",
-				      "sonic-ext-trim-admission", sw_if_index,
-				      enable, 0, 0);
+  int rv;
+
+  if (enable && sonic_ext_vnet_buf_ref (vlib_get_main ()))
+    return VNET_API_ERROR_UNSPECIFIED;
+
+  rv = vnet_feature_enable_disable ("interface-output", "sonic-ext-trim-admission", sw_if_index,
+				    enable, 0, 0);
+  if ((enable && rv) || (!enable && !rv))
+    sonic_ext_vnet_buf_unref (vlib_get_main ());
+
+  return rv;
 }
 
 int
@@ -125,6 +137,7 @@ sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
 {
   sonic_ext_trim_port_t *port;
   sonic_ext_trim_queue_t *q;
+  sonic_ext_trim_queue_t saved_queue;
   int any_eligible = 0;
   int rv = 0;
   int i;
@@ -134,6 +147,7 @@ sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
 
   port = sonic_ext_trim_port_get (sw_if_index, 1 /* create */);
   q = &port->q[queue];
+  saved_queue = *q;
   q->eligible = eligible ? 1 : 0;
   q->rate_bytes_per_sec = rate_bytes_per_sec;
   q->capacity_bytes = capacity_bytes;
@@ -159,9 +173,11 @@ sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
       if (rv == 0)
 	port->feature_enabled = any_eligible ? 1 : 0;
       else
-	clib_warning (
-	  "sonic-ext trim: feature %s on sw_if_index %u failed (rv=%d)",
-	  any_eligible ? "enable" : "disable", sw_if_index, rv);
+	{
+	  *q = saved_queue;
+	  clib_warning ("sonic-ext trim: feature %s on sw_if_index %u failed (rv=%d)",
+			any_eligible ? "enable" : "disable", sw_if_index, rv);
+	}
     }
 
   return rv;

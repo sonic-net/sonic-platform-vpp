@@ -13,6 +13,7 @@
  * limitations under the License.
  */
 #include <sonic_ext/sonic_ext.h>
+#include <sonic_ext/sonic_ext_vnet_buf.h>
 
 #include <vlib/vlib.h>
 #include <vnet/vnet.h>
@@ -33,15 +34,10 @@
  *      congested the copy is dropped (trim_drop), otherwise it is
  *      transmitted on the same port (trim_sent).
  *
- * VLIB_TX is unchanged (same egress port).  The truncated copy is
- * enqueued directly to "interface-output-arc-end" -- the node the
- * interface-output feature arc terminates at -- so it goes straight to
- * the port TX, PAST the admission feature.  This is what makes a
- * one-shot "already trimmed" buffer flag unnecessary: a trimmed copy
- * never re-enters admission, so it can never be re-trimmed and there is
- * no dependence on opaque2 being cleared on buffer recycle.  (We cannot
- * use vnet_feature_next here because this node is not itself a feature
- * on the arc.)
+ * VLIB_TX is unchanged (same egress port). The truncated copy returns to
+ * admission with a sideband one-shot marker. Admission consumes that marker
+ * and resumes its saved feature chain, so downstream output features still
+ * run without another admission attempt or another trim.
  *
  * NOTE (FROM_TC): asymmetric DSCP resolution needs a TC->DSCP egress map
  * which is not pushed in this increment; FROM_TC therefore reuses the
@@ -93,7 +89,7 @@ static char *sonic_ext_trim_error_strings[] = {
 
 typedef enum
 {
-  SONIC_EXT_TRIM_NEXT_TX,
+  SONIC_EXT_TRIM_NEXT_ADMISSION,
   SONIC_EXT_TRIM_NEXT_DROP,
   SONIC_EXT_TRIM_N_NEXT,
 } sonic_ext_trim_next_t;
@@ -182,10 +178,17 @@ VLIB_NODE_FN (sonic_ext_trim_node)
   while (n_left_from > 0)
     {
       u32 next0 = 0;
-      sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b[0]);
+      sonic_ext_vnet_buf_t *sb =
+	sonic_ext_vnet_buf_main.refs ?
+		sonic_ext_vnet_buf_find (vm, b[0], SONIC_EXT_VNET_BUF_TRIM_ORIG_QUEUE) :
+		0;
+      u8 orig_queue = sb ? sb->trim_orig_queue : SONIC_EXT_TRIM_QUEUE_NONE;
       u32 sw_if_index = sonic_ext_trim_egress_port_sw_if_index (b[0]);
       sonic_ext_trim_port_t *port;
       u8 dropped = 0;
+
+      if (sb)
+	sonic_ext_vnet_buf_release (sb, SONIC_EXT_VNET_BUF_TRIM_ORIG_QUEUE);
 
       /* A multicast/replicate clone has a private head but shared tail
        * segments. Take ownership before changing any bytes or chain links. */
@@ -201,10 +204,11 @@ VLIB_NODE_FN (sonic_ext_trim_node)
 	      next0 = SONIC_EXT_TRIM_NEXT_DROP;
 	      goto done0;
 	    }
+	  /* vlib_buffer_copy() does not copy the feature-chain cursor. */
+	  copy->current_config_index = b[0]->current_config_index;
 	  vlib_buffer_free_one (vm, from[b - bufs]);
 	  from[b - bufs] = vlib_get_buffer_index (vm, copy);
 	  b[0] = copy;
-	  seb = sonic_ext_buffer (copy);
 	}
 
       /* Rewrite DSCP on the full packet, then truncate. */
@@ -230,15 +234,12 @@ VLIB_NODE_FN (sonic_ext_trim_node)
 	{
 	  sem->trim_sent++;
 	  n_sent++;
-	  /* Transmit the trimmed copy on the same egress port (VLIB_TX
-	   * unchanged) by enqueuing directly to interface-output-arc-end,
-	   * the node the interface-output feature arc terminates at.  This
-	   * sends the copy straight to the port TX, PAST the admission
-	   * feature, so a trimmed copy never re-enters admission and can
-	   * never be re-trimmed -- no one-shot buffer flag required.  We
-	   * cannot use vnet_feature_next here because this node is not a
-	   * feature on the arc. */
-	  next0 = SONIC_EXT_TRIM_NEXT_TX;
+	  /* Claim on the final buffer: sideband fields are not inherited
+	   * by vlib_buffer_copy(). With no live trim ports, admission will
+	   * bypass without a marker. */
+	  if (sonic_ext_vnet_buf_main.refs)
+	    sonic_ext_vnet_buf_claim (vm, b[0], SONIC_EXT_VNET_BUF_TRIMMED);
+	  next0 = SONIC_EXT_TRIM_NEXT_ADMISSION;
 	}
 
     done0:
@@ -250,7 +251,7 @@ VLIB_NODE_FN (sonic_ext_trim_node)
 	  sonic_ext_trim_trace_t *t =
 	    vlib_add_trace (vm, node, b[0], sizeof (*t));
 	  t->sw_if_index = sw_if_index;
-	  t->orig_queue = seb->orig_queue;
+	  t->orig_queue = orig_queue;
 	  t->trim_queue = trim_queue;
 	  t->trim_size = trim_size;
 	  t->new_dscp = new_dscp;
@@ -286,7 +287,7 @@ VLIB_REGISTER_NODE (sonic_ext_trim_node) = {
   .error_strings = sonic_ext_trim_error_strings,
   .n_next_nodes = SONIC_EXT_TRIM_N_NEXT,
   .next_nodes = {
-    [SONIC_EXT_TRIM_NEXT_TX] = "interface-output-arc-end",
+    [SONIC_EXT_TRIM_NEXT_ADMISSION] = "sonic-ext-trim-admission",
     [SONIC_EXT_TRIM_NEXT_DROP] = "error-drop",
   },
 };

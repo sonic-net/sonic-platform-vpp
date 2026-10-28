@@ -13,6 +13,7 @@
  * limitations under the License.
  */
 #include <sonic_ext/sonic_ext.h>
+#include <sonic_ext/sonic_ext_vnet_buf.h>
 
 #include <vlib/vlib.h>
 #include <vnet/vnet.h>
@@ -42,13 +43,9 @@
  *     normal forwarding.
  *   - On an eligible queue that admits, the packet continues the arc.
  *   - On an eligible queue that fails admission, we stamp the resolved
- *     queue into the buffer and divert to `sonic-ext-trim`, which
- *     truncates the copy and transmits it via interface-output-arc-end
- *     (the arc terminator) on the same port.  Because the trimmed copy
- *     goes to the arc END it never re-enters this feature, so a trimmed
- *     packet can never be re-trimmed and no per-buffer "already trimmed"
- *     one-shot flag is needed (which matters: VPP does not clear the
- *     opaque2 area on buffer recycle, so such a flag could go stale).
+ *     queue into the sideband and divert to `sonic-ext-trim`. The copy
+ *     returns here with a one-shot marker, bypasses admission, and
+ *     continues the saved feature chain without repeating earlier features.
  */
 
 typedef struct
@@ -115,7 +112,7 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
   while (n_left_from > 0)
     {
       u32 next0 = 0;
-      sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b[0]);
+      sonic_ext_vnet_buf_t *sb;
       u32 sw_if_index = vnet_buffer (b[0])->sw_if_index[VLIB_TX];
       sonic_ext_trim_port_t *port;
       sonic_ext_trim_queue_t *q;
@@ -123,18 +120,19 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
       u8 eligible = 0;
       u8 admitted = 1;
 
-      /* Default: continue the feature arc (normal egress).  Overridden
-       * below only when we divert a congested eligible packet to trim. */
-      vnet_feature_next (&next0, b[0]);
+      if (sonic_ext_vnet_buf_main.refs &&
+	  (sb = sonic_ext_vnet_buf_find (vm, b[0], SONIC_EXT_VNET_BUF_TRIMMED)))
+	{
+	  sonic_ext_vnet_buf_release (sb, SONIC_EXT_VNET_BUF_TRIMMED);
+	  goto next_feature0;
+	}
 
-      /* Operator force-off (`sonic-ext { trim disable }`) or no global trim
-       * policy pushed yet: bypass at the first check so a disabled feature
-       * costs only this branch. sem->trim defaults on; trimming still only
-       * activates once SAI pushes a policy (sem->trim_configured). */
+      /* Operator force-off or no global policy: bypass normal admission.
+       * Returned trimmed copies have already been handled above. */
       if (PREDICT_FALSE (!sem->trim || !sem->trim_configured))
 	{
 	  n_bypass++;
-	  goto done0;
+	  goto next_feature0;
 	}
 
       sw_if_index = sonic_ext_trim_egress_port_sw_if_index (b[0]);
@@ -142,7 +140,7 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
       if (PREDICT_FALSE (port == 0))
 	{
 	  n_bypass++;
-	  goto done0;
+	  goto next_feature0;
 	}
 
       queue = sonic_ext_trim_packet_queue (sem, b[0]);
@@ -152,7 +150,7 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
       if (PREDICT_FALSE (queue == SONIC_EXT_TRIM_QUEUE_NONE))
 	{
 	  n_bypass++;
-	  goto done0;
+	  goto next_feature0;
 	}
 
       q = &port->q[queue];
@@ -162,7 +160,7 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
       if (!q->eligible)
 	{
 	  n_bypass++;
-	  goto done0;
+	  goto next_feature0;
 	}
       eligible = 1;
 
@@ -171,16 +169,22 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
 	{
 	  admitted = 1;
 	  n_admitted++;
-	  goto done0;
+	  goto next_feature0;
 	}
 
       /* Admission failure on an eligible queue: divert to the trim
        * action node, which truncates the copy and re-injects it. */
       admitted = 0;
-      seb->orig_queue = queue;
+      sb = sonic_ext_vnet_buf_claim (vm, b[0], SONIC_EXT_VNET_BUF_TRIM_ORIG_QUEUE);
+      sb->trim_orig_queue = queue;
       sem->trim_admit_fail++;
       n_to_trim++;
       next0 = SONIC_EXT_TRIM_ADMISSION_NEXT_TRIM;
+      goto done0;
+
+    next_feature0:
+      /* Do not advance this cursor on the detour through sonic-ext-trim. */
+      vnet_feature_next (&next0, b[0]);
 
     done0:
       next[0] = (u16) next0;
@@ -235,7 +239,5 @@ VLIB_REGISTER_NODE (sonic_ext_trim_admission_node) = {
 VNET_FEATURE_INIT (sonic_ext_trim_admission_feat, static) = {
   .arc_name = "interface-output",
   .node_name = "sonic-ext-trim-admission",
-  /* No strict ordering vs other interface-output features: we either
-   * pass the packet through the arc unchanged, or divert an eligible
-   * congested packet to the trim node which then resumes the arc. */
+  .runs_before = VNET_FEATURES ("sonic-ext-egress-mirror"),
 };
