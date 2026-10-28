@@ -11,9 +11,20 @@ ln -sf /usr/share/sonic/device/$PLATFORM/$HWSKU /usr/share/sonic/hwsku
 pushd /usr/share/sonic/hwsku
 
 # filter available front panel ports in lanemap.ini
+#
+# The Nth port passed to the container (VPP_DPDK_PORTS) is EthernetN-1, as in
+# platform.json and sonic_vpp_ifmap.ini, so it gets the lanes of the Nth
+# lanemap.ini entry under its own interface name: saivpp drops lane map
+# entries whose interface doesn't exist in the container, so the ports used to
+# work only if they were named eth1, eth2, ... in that order.
 [ -f lanemap.ini.orig ] || cp lanemap.ini lanemap.ini.orig
-for p in $(ip link show | grep -oE "eth[0-9]+" | grep -v eth0); do
-    grep ^$p: lanemap.ini.orig
+IFS=',' read -r -a ports <<< "$VPP_DPDK_PORTS"
+idx=0
+for p in "${ports[@]}"; do
+    idx=$((idx + 1))
+    lanes=$(sed -n "${idx}p" lanemap.ini.orig | cut -d: -f2)
+    [ -n "$lanes" ] && ip link show dev "$p" &> /dev/null || continue
+    echo "$p:$lanes"
 done > lanemap.ini
 
 # filter available sonic front panel ports in port_config.ini
@@ -22,6 +33,20 @@ grep ^# port_config.ini.orig > port_config.ini
 for lanes in $(awk -F ':' '{print $2}' lanemap.ini); do
     grep -E "\s$lanes\s" port_config.ini.orig
 done >> port_config.ini
+
+# Name the ports the way platform.json does (Ethernet0, Ethernet1, ...), as
+# CONFIG_DB and sonic_vpp_ifmap.ini do. saivpp maps a port to its VPP interface
+# by lanes -> port_config.ini name -> sonic_vpp_ifmap.ini, so keeping the
+# Force10-S6000 names here (Ethernet0, Ethernet4, ...) leaves every port but the
+# first without a VPP interface.
+if [ -f /usr/share/sonic/platform/platform.json ]; then
+    jq -r '.interfaces | to_entries[] | "\(.value.lanes) \(.key)"' \
+        /usr/share/sonic/platform/platform.json > port_names.tmp
+    awk 'NR == FNR { name[$1] = $2; next } !/^#/ && ($2 in name) { $1 = name[$2] } { print }' \
+        port_names.tmp port_config.ini > port_config.ini.tmp
+    mv port_config.ini.tmp port_config.ini
+    rm -f port_names.tmp
+fi
 
 popd
 
