@@ -25,9 +25,10 @@ option version = "1.0.0";
 
 /** \brief Bind or unbind the semantic NEIGHBOR_MISS reason to a CoPP
     policer. Unlike sonic_ext_copp_ifout_bind, this is not keyed by a wire
-    ethertype: glean-redirect marks successfully redirected BVI/SVI neighbor
-    misses in sonic_ext's per-buffer side-band and copp-ifout consumes that
-    reason before examining the restored Ethernet frame.
+    ethertype: glean-redirect marks successfully redirected unresolved-neighbor
+    traffic from routed interfaces, bonds, subinterfaces, and BVIs/SVIs in
+    sonic_ext's per-buffer side-band. copp-ifout consumes that reason before
+    examining the restored Ethernet frame.
 
     @param client_index - opaque cookie to identify the sender
     @param context - sender context, to match reply w/ request
@@ -52,6 +53,7 @@ autoreply define sonic_ext_copp_neighbor_miss_bind
     @param context - sender context, to match reply w/ request
     @param policer_name - name of an existing VPP policer object
     @param is_ipv6 - 0 for DHCPv4, 1 for DHCPv6
+    @param is_copy - 0 for terminal TRAP, 1 to copy and preserve L2 forwarding
     @param is_bind - 1 to add/replace the family binding, 0 to remove it
 */
 autoreply define sonic_ext_copp_dhcp_bind
@@ -60,6 +62,7 @@ autoreply define sonic_ext_copp_dhcp_bind
   u32 context;
   string policer_name[64];
   bool is_ipv6;
+  bool is_copy;
   bool is_bind;
 };
 
