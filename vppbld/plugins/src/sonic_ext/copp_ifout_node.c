@@ -353,7 +353,11 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
      * drop below. */
     if (!entry && ethertype >= 0x0600)
       {
+	sonic_ext_copp_ifout_entry_t *dhcp = 0;
+	sonic_ext_copp_ifout_entry_t *ttl = 0;
 	sonic_ext_copp_ifout_entry_t *fallback = 0;
+	int dhcp_idx = -1;
+	int ttl_idx = -1;
 	int fallback_idx = -1;
 
 	for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
@@ -374,6 +378,10 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 		ip4 = (ip4_header_t *) payload;
 		if (ip4->ttl > 1)
 		  continue;
+
+		ttl = cand;
+		ttl_idx = (int) i;
+		continue;
 	      }
 
 	    if (cand->match_dhcp4 &&
@@ -384,22 +392,32 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 		!sonic_ext_copp_dhcp6_match (b, payload, hdr_len))
 	      continue;
 
-	    /* A qualified row is more specific than a plain ethertype row,
-	     * regardless of bind order. */
-	    if (!cand->match_ip4_ttl_expiring && !cand->match_dhcp4 &&
-		!cand->match_dhcp6)
+	    if (cand->match_dhcp4 || cand->match_dhcp6)
 	      {
-		fallback = cand;
-		fallback_idx = (int) i;
+		dhcp = cand;
+		dhcp_idx = (int) i;
 		continue;
 	      }
 
-	    entry = cand;
-	    idx = (int) i;
-	    break;
+	    fallback = cand;
+	    fallback_idx = (int) i;
 	  }
 
-	if (!entry && fallback)
+	/* Qualified rows have a fixed semantic priority independent of bind
+	 * order. DHCP owns packets satisfying its complete UDP predicate, then
+	 * TTL_ERROR owns the remaining expiring IPv4 packets, and a plain
+	 * ethertype row is only the final fallback. */
+	if (dhcp)
+	  {
+	    entry = dhcp;
+	    idx = dhcp_idx;
+	  }
+	else if (ttl)
+	  {
+	    entry = ttl;
+	    idx = ttl_idx;
+	  }
+	else if (fallback)
 	  {
 	    entry = fallback;
 	    idx = fallback_idx;
@@ -435,10 +453,12 @@ matched:
   *out_matched_idx = idx;
 
   {
-    /* Empty name is the explicit active-but-unpoliced NEIGHBOR_MISS row.
-     * Keep the semantic reason (and thus bypass the legacy glean throttle),
-     * but admit the packet without consulting the policer pool. */
-    if (PREDICT_FALSE (entry->match_neighbor_miss && entry->name[0] == 0))
+    /* Empty name is the explicit active-but-unpoliced form of a semantic
+	 * row. Preserve trap delivery while admitting the packet without
+	 * consulting an unrelated fallback policer. */
+    if (PREDICT_FALSE ((entry->match_neighbor_miss || entry->match_dhcp4 ||
+			entry->match_dhcp6) &&
+		      entry->name[0] == 0))
       {
 	*out_policer_index = ~0;
 	*out_verdict = POLICE_CONFORM;
@@ -733,41 +753,51 @@ int
 sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_bind)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
+  vlib_main_t *vm = vlib_get_main ();
   int idx = sonic_ext_copp_dhcp_find_entry (sem, is_ipv6);
+  int rv = 0;
+
+  if (is_bind && !sem->copp)
+    return VNET_API_ERROR_FEATURE_DISABLED;
+
+  /* Feature attachment can itself synchronize worker state. Do it before
+   * taking the explicit row-update barrier below. */
+  if (is_bind && is_ipv6)
+    sonic_ext_copp_enable_drop_redirect ();
+
+  /* ip2me and interface-output read the same semantic row on workers. Make
+   * replacement atomic across both nodes so a packet can never skip IP2ME
+   * under one generation and miss (or inherit a fallback) at ifout under
+   * another. */
+  vlib_worker_thread_barrier_sync (vm);
 
   if (!is_bind)
     {
       if (idx < 0)
-	return 0;
+	goto done;
 
       /* A stale owner must not remove a newer replacement binding. */
       if (policer_name && policer_name[0] &&
 	  strncmp ((char *) sem->copp_ifout_entries[idx].name, policer_name,
 		   SONIC_EXT_COPP_IFOUT_NAME_LEN) != 0)
-	return 0;
+	goto done;
 
       clib_memset (&sem->copp_ifout_entries[idx], 0,
 		   sizeof (sem->copp_ifout_entries[idx]));
       sem->copp_ifout_conform_packets[idx] = 0;
       sem->copp_ifout_exceed_packets[idx] = 0;
       sem->copp_ifout_violate_packets[idx] = 0;
-      return 0;
+	goto done;
     }
-
-  if (!sem->copp)
-    return VNET_API_ERROR_FEATURE_DISABLED;
-
-  /* Routed DHCPv6 multicast fails VPP's MFIB RPF check before it can reach
-   * ip6-punt. The common drop-arc redirect rescues only the exact DHCPv6
-   * predicate while this family binding is active. */
-  if (is_ipv6)
-    sonic_ext_copp_enable_drop_redirect ();
 
   if (idx < 0)
     {
       idx = sonic_ext_copp_ifout_alloc_slot (sem);
       if (idx < 0)
-	return VNET_API_ERROR_QUEUE_FULL;
+	{
+	  rv = VNET_API_ERROR_QUEUE_FULL;
+	  goto done;
+	}
     }
 
   clib_memset (&sem->copp_ifout_entries[idx], 0,
@@ -784,7 +814,9 @@ sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_bind)
   sem->copp_ifout_exceed_packets[idx] = 0;
   sem->copp_ifout_violate_packets[idx] = 0;
 
-  return 0;
+done:
+  vlib_worker_thread_barrier_release (vm);
+  return rv;
 }
 
 int
