@@ -265,10 +265,10 @@ plugins {
 ## is, so VPP neither answers ND nor learns neighbors from it; off leaves ND to
 ## VPP.
 ##
-## saivpp-wired: ip2me, l2-trap-fixup, l2-vlan-filter.  VPP only stores these
-## and answers sonic_ext_feature_get(); saivpp asks before installing the ACL
-## hook or the classify sessions.  "show interface features" does NOT reflect
-## them the way it does for the VPP-wired features above.
+## saivpp-wired: ip2me, l2-trap-fixup, l2-trap-learn, l2-vlan-filter.  VPP only
+## stores these and answers sonic_ext_feature_get(); saivpp asks before
+## installing the ACL hook or the classify sessions.  "show interface features"
+## does NOT reflect them the way it does for the VPP-wired features above.
 ##
 ## Generated at runtime by vpp_init.sh from $SONIC_EXT_CONFIG, which is given as
 ## comma-separated key=value pairs -- SONIC_EXT_CONFIG=host-xc=off -- and which
@@ -281,6 +281,7 @@ plugins {
     # copp off
     # ip2me off
     # l2-trap-fixup off
+    # l2-trap-learn off
     # l2-vlan-filter off
 # }
 

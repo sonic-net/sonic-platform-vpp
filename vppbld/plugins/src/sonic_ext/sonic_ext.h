@@ -228,6 +228,7 @@ typedef enum
   _ (TRIM, trim, "trim", 1, VPP)                                               \
   _ (IP2ME, ip2me, "ip2me", 1, SAIVPP)                                        \
   _ (L2_TRAP_FIXUP, l2_trap_fixup, "l2-trap-fixup", 1, SAIVPP)                \
+  _ (L2_TRAP_LEARN, l2_trap_learn, "l2-trap-learn", 1, SAIVPP)                \
   _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)             \
   _ (PBH, pbh, "pbh", 1, SAIVPP)                                              \
   _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)
@@ -370,6 +371,7 @@ typedef struct
   u64 glean_redirects;
   u64 host_xc_direct;
   u64 l2_trap_fixups;
+  u64 l2_trap_learns;
   u64 ip2me_hits;
 
   /* ---- packet trimming ---- */
@@ -424,6 +426,7 @@ extern vlib_node_registration_t sonic_ext_aggr_tap_redirect_node;
 extern vlib_node_registration_t sonic_ext_glean_redirect_node;
 extern vlib_node_registration_t sonic_ext_host_xc_node;
 extern vlib_node_registration_t sonic_ext_l2_trap_fixup_node;
+extern vlib_node_registration_t sonic_ext_l2_trap_learn_node;
 extern vlib_node_registration_t sonic_ext_l2_vlan_filter_node;
 extern vlib_node_registration_t sonic_ext_ip2me_ip4_node;
 extern vlib_node_registration_t sonic_ext_ip2me_ip6_node;

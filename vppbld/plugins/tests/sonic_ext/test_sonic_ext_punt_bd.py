@@ -46,6 +46,12 @@ LLDP is covered on both punt paths.  On the access phy it is a bridged frame
 and is punted by the classify table.  On the trunk phy it never enters the
 bridge -- the phy is not a BD member -- so it takes the L3 path through
 ethernet-input's ethertype demux, which requires "lcp ethertype enable".
+
+TestSonicExtL2TrapLearn reruns all of this with the DHCPv4 sessions pointed
+at sonic-ext-l2-trap-learn, as saivpp points every trap session except LLDP's
+when the l2-trap-learn feature is on, and checks that the trapped frame's
+source MAC is learned on its ingress bridge port without the frame being
+flooded.
 """
 
 import unittest
@@ -65,7 +71,12 @@ from config import config
 from framework import VppTestCase
 from host_interface import HostInterface
 from vpp_bvi_interface import VppBviInterface
-from vpp_l2 import L2_PORT_TYPE, VppBridgeDomain, VppBridgeDomainPort
+from vpp_l2 import (
+    L2_PORT_TYPE,
+    VppBridgeDomain,
+    VppBridgeDomainPort,
+    find_l2_fib_entry,
+)
 from vpp_qemu_utils import create_namespace, delete_all_namespaces, set_interface_up
 from vpp_sub_interface import L2_VTR_OP, VppDot1QSubint
 
@@ -83,6 +94,10 @@ REDIRECTED = (
 )
 NOT_REDIRECTED = (
     "/err/sonic-ext-aggr-tap-redirect/punt-via-member disabled -- left on aggregate tap"
+)
+TRAP_LEARNED = "/err/sonic-ext-l2-trap-learn/L2 trapped packet sent to l2-learn"
+TRAP_NOT_LEARNED = (
+    "/err/sonic-ext-l2-trap-learn/L2 trapped packet not learned: learning off"
 )
 
 
@@ -110,6 +125,9 @@ class TestSonicExtL2Punt(VppTestCase):
 
     BD_ID = 1
     VLAN_ID = 100
+
+    # Point the DHCPv4 sessions at sonic-ext-l2-trap-learn.
+    TRAP_LEARN = False
 
     #
     # netns plumbing -- the namespace has to exist before VPP starts
@@ -284,6 +302,17 @@ class TestSonicExtL2Punt(VppTestCase):
         trap_fixup_next = self._node_next(
             "l2-input-classify", "sonic-ext-l2-trap-fixup"
         )
+        # Untagged DHCP punts straight to linux-cp-punt: VLIB_RX is already the
+        # parent phy, so no trap fixup is required.  Tagged DHCP needs the trap
+        # fixup, because a bridged sub-if has no LCP pair.  With l2-trap-learn
+        # on, both go to sonic-ext-l2-trap-learn, which hands its copy to the
+        # trap fixup.
+        if self.TRAP_LEARN:
+            untag_dhcp_next = tag_dhcp_next = self._node_next(
+                "l2-input-classify", "sonic-ext-l2-trap-learn"
+            )
+        else:
+            untag_dhcp_next, tag_dhcp_next = punt_next, trap_fixup_next
 
         bcast = {i: 0xFF for i in range(6)}
 
@@ -302,9 +331,7 @@ class TestSonicExtL2Punt(VppTestCase):
                 37: DHCP_SERVER_PORT & 0xFF,
             },
         )
-        # Untagged DHCP punts straight to linux-cp-punt: VLIB_RX is already the
-        # parent phy, so no trap fixup is required.
-        self._add_session(self.untag_ip4_table, punt_next, match)
+        self._add_session(self.untag_ip4_table, untag_dhcp_next, match)
 
         # Untagged OTHER slot: LLDP by ethertype.
         mask = self._vec(16, {12: 0xFF, 13: 0xFF})
@@ -313,8 +340,7 @@ class TestSonicExtL2Punt(VppTestCase):
         self._add_session(self.untag_other_table, punt_next, match)
 
         # Tagged OTHER slot: DHCPv4 over .1Q.  The VTR pop has not run at
-        # l2-input-classify, so every post-L2 offset shifts by 4.  Hit-next is
-        # the trap fixup, because a bridged sub-if has no LCP pair.
+        # l2-input-classify, so every post-L2 offset shifts by 4.
         mask = self._vec(48, bcast, {16: 0xFF, 17: 0xFF, 27: 0xFF, 40: 0xFF, 41: 0xFF})
         self.tag_dhcp_table = self._add_table(mask, 3)
         match = self._vec(
@@ -328,7 +354,7 @@ class TestSonicExtL2Punt(VppTestCase):
                 41: DHCP_SERVER_PORT & 0xFF,
             },
         )
-        self._add_session(self.tag_dhcp_table, trap_fixup_next, match)
+        self._add_session(self.tag_dhcp_table, tag_dhcp_next, match)
 
         self.vapi.classify_set_interface_l2_tables(
             sw_if_index=self.access_phy.sw_if_index,
@@ -385,12 +411,13 @@ class TestSonicExtL2Punt(VppTestCase):
             return eth / Dot1Q(vlan=self.VLAN_ID) / payload
         return eth / payload
 
-    def _dhcp_request(self, phy, tagged=False):
-        eth = Ether(dst=BCAST_MAC, src=phy.remote_mac)
+    def _dhcp_request(self, phy, tagged=False, src_mac=None):
+        src_mac = src_mac or phy.remote_mac
+        eth = Ether(dst=BCAST_MAC, src=src_mac)
         payload = (
             IP(src="0.0.0.0", dst="255.255.255.255")
             / UDP(sport=DHCP_CLIENT_PORT, dport=DHCP_SERVER_PORT)
-            / BOOTP(op=1, chaddr=bytes.fromhex(phy.remote_mac.replace(":", "")))
+            / BOOTP(op=1, chaddr=bytes.fromhex(src_mac.replace(":", "")))
             / DHCP(options=[("message-type", "request"), "end"])
         )
         if tagged:
@@ -623,6 +650,98 @@ class TestSonicExtL2Punt(VppTestCase):
             self.assertEqual(self._err(NOT_REDIRECTED), before + 1)
         finally:
             self.vapi.cli("sonic-ext punt-via-member on")
+
+
+class TestSonicExtL2TrapLearn(TestSonicExtL2Punt):
+    """SONiC-ext L2 punt: trap sessions on sonic-ext-l2-trap-learn"""
+
+    TRAP_LEARN = True
+
+    # Source MACs no other test sends from, so that only the frame under test
+    # can have put them in the L2 FIB.
+    UNTAGGED_SRC = "02:00:00:00:01:01"
+    TAGGED_SRC = "02:00:00:00:01:02"
+    NO_LEARN_SRC = "02:00:00:00:01:03"
+
+    def _trap(self, phy, tagged, tap, src_mac, not_flooded_to):
+        """Send a DHCPv4 request from *src_mac*, check that it is trapped to
+        *tap* and that no copy of it is flooded to *not_flooded_to*."""
+        rx = self._punt(
+            phy,
+            self._dhcp_request(phy, tagged=tagged, src_mac=src_mac),
+            tap,
+            self._not_dhcp,
+        )
+        self.assertEqual(rx[Ether].src, src_mac)
+        not_flooded_to.assert_nothing_captured(filter_out_fn=self._not_from(src_mac))
+        return rx
+
+    def test_untagged_trap_learned(self):
+        """Untagged trapped frame: punted once, source MAC learned on the phy"""
+        before = self._err(TRAP_LEARNED)
+
+        rx = self._trap(
+            self.access_phy,
+            False,
+            self.access_tap,
+            self.UNTAGGED_SRC,
+            not_flooded_to=self.trunk_phy,
+        )
+
+        self._assert_untagged(rx)
+        self.assertEqual(self._err(TRAP_LEARNED), before + 1)
+        self.assertTrue(
+            find_l2_fib_entry(
+                self, self.BD_ID, self.UNTAGGED_SRC, self.access_phy.sw_if_index
+            ),
+            "trapped frame's source MAC not learned on %s" % self.access_phy.name,
+        )
+
+    def test_tagged_trap_learned_on_sub_if(self):
+        """Tagged trapped frame: punted once with its tag, learned on the sub-if"""
+        before = self._err(TRAP_LEARNED)
+
+        rx = self._trap(
+            self.trunk_phy,
+            True,
+            self.trunk_tap,
+            self.TAGGED_SRC,
+            not_flooded_to=self.access_phy,
+        )
+
+        self._assert_tagged(rx)
+        self.assertEqual(self._err(TRAP_LEARNED), before + 1)
+        # The bridge port is the sub-if; the trap fixup's VLIB_RX rewrite to
+        # the parent phy is only for the copy sent to the host.
+        self.assertTrue(
+            find_l2_fib_entry(
+                self, self.BD_ID, self.TAGGED_SRC, self.vlan_if.sw_if_index
+            ),
+            "trapped frame's source MAC not learned on %s" % self.vlan_if.name,
+        )
+
+    def test_trap_not_learned_when_learning_off(self):
+        """Trapped frame from a port that does not learn: punted, not learned"""
+        self.vapi.cli("set interface l2 learn %s disable" % self.access_phy.name)
+        try:
+            before = self._err(TRAP_NOT_LEARNED)
+
+            self._trap(
+                self.access_phy,
+                False,
+                self.access_tap,
+                self.NO_LEARN_SRC,
+                not_flooded_to=self.trunk_phy,
+            )
+
+            self.assertEqual(self._err(TRAP_NOT_LEARNED), before + 1)
+            self.assertFalse(
+                find_l2_fib_entry(
+                    self, self.BD_ID, self.NO_LEARN_SRC, self.access_phy.sw_if_index
+                )
+            )
+        finally:
+            self.vapi.cli("set interface l2 learn %s" % self.access_phy.name)
 
 
 if __name__ == "__main__":
