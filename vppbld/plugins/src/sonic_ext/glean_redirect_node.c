@@ -190,7 +190,8 @@ sonic_ext_is_dhcp6_packet (vlib_buffer_t *b)
 
   ip6 = vlib_buffer_get_current (b);
   if (!ip6_address_is_equal (&ip6->dst_address, &dhcp6_dst) ||
-      ip6_locate_header (b, ip6, -1, &udp_offset) != IP_PROTOCOL_UDP ||
+      !sonic_ext_ip6_locate_transport (
+	ip6, b->current_length, IP_PROTOCOL_UDP, &udp_offset) ||
       b->current_length < udp_offset + sizeof (udp_header_t))
     return 0;
 

@@ -26,17 +26,16 @@
  * session that wants to trap-to-CPU a frame whose ingress interface
  * is a bridged sub-interface (e.g. Ethernet0.10 in a Vlan1000 BD).
  *
- * Current consumer: the DHCPv4 client-broadcast session installed by
- * SAI in SwitchVppFdb.cpp::l2_punt_classify_init.  Additional users
- * (e.g. STP BPDU trap, IGMP query trap, custom CoPP traps) can share
- * this node verbatim — there is nothing DHCP-specific in it.
+ * Current consumers: tagged ARP and IPv6-multicast flood-suppression
+ * sessions installed by SAI in SwitchVppFdb.cpp. Additional L2 control
+ * punts can share this node verbatim; DHCP TRAP/COPY is parsed earlier by
+ * sonic-ext-capture so its live packet action can preserve forwarding.
  *
  * Background.  A real ASIC implements SAI_PACKET_ACTION_TRAP by
  * simultaneously dropping the frame from the forwarding pipeline AND
- * copying it to the CPU.  On VPP-VS the bridge-domain L2-flood would
- * otherwise replicate a broadcast (e.g. a DHCP client discover) to
- * every BD member, causing sonic-mgmt's DHCPBroadcastNotFloodedTest
- * to fail because the (N-1) peer members observe the flood copies.
+ * copying it to the CPU. On VPP-VS a terminal L2 classifier is used only
+ * for explicit per-VLAN flood suppression; semantic DHCP actions are handled
+ * on device-input so COPY can retain the original bridge-domain flood.
  *
  * Fix: install a classifier session at l2-input-classify (which runs
  * BEFORE l2-fwd / l2-flood) matching the trapped protocol's predicate,
