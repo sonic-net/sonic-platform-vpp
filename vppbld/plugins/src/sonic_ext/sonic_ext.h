@@ -272,6 +272,8 @@ typedef struct
   u8 in_use;
   u8 match_ip4_ttl_expiring; /* TTL_ERROR trap */
   u8 match_neighbor_miss; /* per-buffer semantic reason, not an ethertype */
+  u8 match_dhcp4; /* IPv4 UDP ports 67/68 */
+  u8 match_dhcp6; /* IPv6 UDP ports 546/547 */
   u8 rate_is_pps;
 } sonic_ext_copp_ifout_entry_t;
 
@@ -476,6 +478,9 @@ void sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable);
 /* Toggle accessors used by CLI and node fast paths. */
 void sonic_ext_set_punt_via_member (u8 is_enable);
 void sonic_ext_neighbor_miss_enable_redirect (void);
+/* Attach capture and the global drop-arc redirect used by semantic CoPP
+ * traps whose packet would otherwise be consumed before the punt arcs. */
+void sonic_ext_copp_enable_drop_redirect (void);
 void sonic_ext_set_host_xc (u8 is_enable);
 void sonic_ext_set_nd_punt (u8 is_enable);
 
@@ -706,6 +711,10 @@ int sonic_ext_copp_ifout_bind (u16 ethertype, const char *policer_name,
 /* Bind the semantic NEIGHBOR_MISS reason to a copp-ifout policer row. */
 int sonic_ext_copp_neighbor_miss_bind (const char *policer_name, int is_bind);
 int sonic_ext_copp_neighbor_miss_is_bound (sonic_ext_main_t *sem);
+/* Bind one family of the semantic DHCP trap to copp-ifout. */
+int sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6,
+			      int is_bind);
+int sonic_ext_copp_dhcp_is_bound (sonic_ext_main_t *sem, int is_ipv6);
 int sonic_ext_copp_ip2me_addr_add_del (u32 addr, int is_add);
 int sonic_ext_copp_ip2me_bind (const char *policer_name, int is_bind);
 int sonic_ext_copp_ip2me_bind_condition (

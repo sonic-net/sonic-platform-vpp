@@ -29,7 +29,11 @@
 #include <vnet/ip/ip6_packet.h>
 #include <vnet/ip/format.h>
 #include <vnet/tcp/tcp_packet.h>
+#include <vnet/udp/udp_packet.h>
 #include <policer/policer.h>
+
+#define SONIC_EXT_DHCP4_CLIENT_PORT 68
+#define SONIC_EXT_DHCP4_SERVER_PORT 67
 
 typedef struct
 {
@@ -246,6 +250,7 @@ sonic_ext_copp_ip2me_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
   u16 src_port = 0;
   u16 dst_port = 0;
   int has_tcp_port = 0;
+  int is_dhcp4 = 0;
 
   vnet_feature_next (&feat_next, b);
   *next = (u16) feat_next;
@@ -278,8 +283,32 @@ sonic_ext_copp_ip2me_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 	dst_port = clib_net_to_host_u16 (tcp->dst_port);
 	has_tcp_port = 1;
       }
+    else if (ip4->protocol == IP_PROTOCOL_UDP &&
+	     b->current_length >= ihl_bytes + sizeof (udp_header_t) &&
+	     ip4_get_fragment_offset (ip4) == 0)
+      {
+	udp_header_t *udp = (udp_header_t *) ((u8 *) ip4 + ihl_bytes);
+	src_port = clib_net_to_host_u16 (udp->src_port);
+	dst_port = clib_net_to_host_u16 (udp->dst_port);
+	is_dhcp4 =
+	  ((src_port == SONIC_EXT_DHCP4_CLIENT_PORT &&
+	    dst_port == SONIC_EXT_DHCP4_SERVER_PORT) ||
+	   (src_port == SONIC_EXT_DHCP4_SERVER_PORT &&
+	    dst_port == SONIC_EXT_DHCP4_CLIENT_PORT));
+      }
   }
   *out_dst_port = dst_port;
+
+  /* A bound DHCP trap is more specific than the generic IP2ME address
+   * policy. Leave it unmetered here so copp-ifout applies the DHCP trap
+   * group's policer exactly once on the selected host TAP. Without a DHCP
+   * binding, retain the legacy IP2ME fallback. */
+  if (is_dhcp4 && sonic_ext_copp_dhcp_is_bound (sem, 0))
+    {
+      *out_policer_index = ~0;
+      *out_verdict = POLICE_CONFORM;
+      return SONIC_EXT_COPP_IP2ME_ERROR_PASS;
+    }
 
   sonic_ext_copp_ip2me_policer_t *pol = sonic_ext_copp_ip2me_find_policer (
     sem, dst_addr, has_tcp_port, src_port, dst_port);

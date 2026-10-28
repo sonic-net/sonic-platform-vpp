@@ -501,7 +501,7 @@ sonic_ext_set_punt_via_member (u8 is_enable)
  * when it is off, only packets carrying an active NEIGHBOR_MISS reason may
  * pass glean-redirect's run-time gate. */
 void
-sonic_ext_neighbor_miss_enable_redirect (void)
+sonic_ext_copp_enable_drop_redirect (void)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
 
@@ -511,6 +511,12 @@ sonic_ext_neighbor_miss_enable_redirect (void)
       sonic_ext_glean_redirect_enable_disable (1);
       sem->glean_redirect_enabled = 1;
     }
+}
+
+void
+sonic_ext_neighbor_miss_enable_redirect (void)
+{
+  sonic_ext_copp_enable_drop_redirect ();
 }
 
 void
