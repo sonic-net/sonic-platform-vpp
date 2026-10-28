@@ -212,8 +212,12 @@ VLIB_NODE_FN (sonic_ext_l2_trap_learn_node)
   vlib_buffer_enqueue_to_next (vm, node, to, nexts, n_to);
 
   if (n_learn)
-    vlib_node_increment_counter (vm, node->node_index,
-				 SONIC_EXT_L2_TRAP_LEARN_ERROR_LEARN, n_learn);
+    {
+      vlib_node_increment_counter (vm, node->node_index,
+				   SONIC_EXT_L2_TRAP_LEARN_ERROR_LEARN, n_learn);
+      /* Shared by the workers, so added atomically. */
+      clib_atomic_fetch_add_relax (&sonic_ext_main.l2_trap_learns, n_learn);
+    }
   if (n_no_learn)
     vlib_node_increment_counter (vm, node->node_index,
 				 SONIC_EXT_L2_TRAP_LEARN_ERROR_NO_LEARN,
@@ -222,7 +226,6 @@ VLIB_NODE_FN (sonic_ext_l2_trap_learn_node)
     vlib_node_increment_counter (vm, node->node_index,
 				 SONIC_EXT_L2_TRAP_LEARN_ERROR_NO_BUFFER,
 				 n_no_buffer);
-  sonic_ext_main.l2_trap_learns += n_learn;
 
   return frame->n_vectors;
 }

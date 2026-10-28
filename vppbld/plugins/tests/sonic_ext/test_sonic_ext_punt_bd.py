@@ -54,6 +54,7 @@ source MAC is learned on its ingress bridge port without the frame being
 flooded.
 """
 
+import re
 import unittest
 
 from scapy.contrib.lldp import (
@@ -676,9 +677,16 @@ class TestSonicExtL2TrapLearn(TestSonicExtL2Punt):
         not_flooded_to.assert_nothing_captured(filter_out_fn=self._not_from(src_mac))
         return rx
 
+    def _trap_learns(self):
+        """The "l2 trap learns" count of "show sonic-ext"."""
+        m = re.search(r"l2 trap learns\s*:\s*(\d+)", self.vapi.cli("show sonic-ext"))
+        self.assertIsNotNone(m, "no l2 trap learns count in show sonic-ext")
+        return int(m.group(1))
+
     def test_untagged_trap_learned(self):
         """Untagged trapped frame: punted once, source MAC learned on the phy"""
         before = self._err(TRAP_LEARNED)
+        learns = self._trap_learns()
 
         rx = self._trap(
             self.access_phy,
@@ -690,6 +698,7 @@ class TestSonicExtL2TrapLearn(TestSonicExtL2Punt):
 
         self._assert_untagged(rx)
         self.assertEqual(self._err(TRAP_LEARNED), before + 1)
+        self.assertEqual(self._trap_learns(), learns + 1)
         self.assertTrue(
             find_l2_fib_entry(
                 self, self.BD_ID, self.UNTAGGED_SRC, self.access_phy.sw_if_index
@@ -700,6 +709,7 @@ class TestSonicExtL2TrapLearn(TestSonicExtL2Punt):
     def test_tagged_trap_learned_on_sub_if(self):
         """Tagged trapped frame: punted once with its tag, learned on the sub-if"""
         before = self._err(TRAP_LEARNED)
+        learns = self._trap_learns()
 
         rx = self._trap(
             self.trunk_phy,
@@ -711,6 +721,7 @@ class TestSonicExtL2TrapLearn(TestSonicExtL2Punt):
 
         self._assert_tagged(rx)
         self.assertEqual(self._err(TRAP_LEARNED), before + 1)
+        self.assertEqual(self._trap_learns(), learns + 1)
         # The bridge port is the sub-if; the trap fixup's VLIB_RX rewrite to
         # the parent phy is only for the copy sent to the host.
         self.assertTrue(
@@ -725,6 +736,7 @@ class TestSonicExtL2TrapLearn(TestSonicExtL2Punt):
         self.vapi.cli("set interface l2 learn %s disable" % self.access_phy.name)
         try:
             before = self._err(TRAP_NOT_LEARNED)
+            learns = self._trap_learns()
 
             self._trap(
                 self.access_phy,
@@ -735,6 +747,7 @@ class TestSonicExtL2TrapLearn(TestSonicExtL2Punt):
             )
 
             self.assertEqual(self._err(TRAP_NOT_LEARNED), before + 1)
+            self.assertEqual(self._trap_learns(), learns)
             self.assertFalse(
                 find_l2_fib_entry(
                     self, self.BD_ID, self.NO_LEARN_SRC, self.access_phy.sw_if_index
