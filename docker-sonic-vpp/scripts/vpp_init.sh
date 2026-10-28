@@ -71,6 +71,15 @@ cp $STARTUP_TMPL $TMP_FILE || error "Failed to copy template file"
 [ "$DPDK_DISABLE" == "y" ] && sed -i -e 's/plugin dpdk_plugin/#plugin dpdk_plugin/g' $TMP_FILE
 [ "$NO_LINUX_NL" == "y" ] && sed -i -e 's/plugin linux_nl_plugin/#plugin linux_nl_plugin/g' $TMP_FILE
 
+# Unset and empty both mean adaptive: start_sonic_vpp.sh always passes the
+# variable, empty when the user did not set it.
+VPP_DEFAULT_RX_MODE=${VPP_DEFAULT_RX_MODE:-adaptive}
+[[ "$VPP_DEFAULT_RX_MODE" =~ ^(polling|interrupt|adaptive)$ ]] || \
+    error "VPP_DEFAULT_RX_MODE must be polling, interrupt or adaptive, got '$VPP_DEFAULT_RX_MODE'"
+# Anchored on the keyword so the placeholder's mention in the comment above
+# the stanza is left alone
+sed -i -e "s/default-rx-mode VPP_DEFAULT_RX_MODE/default-rx-mode $VPP_DEFAULT_RX_MODE/" $TMP_FILE
+
 IDX=0
 upd_startup "dpdk {"
 for port in ${portlist[@]};

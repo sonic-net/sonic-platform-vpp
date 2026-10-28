@@ -78,6 +78,19 @@ ip6 {
 	heap-size 128M
 }
 
+## Initial rx-mode of the rx queues of newly created interfaces: polling,
+## interrupt or adaptive.  Honoured by the drivers that take the global
+## default -- tap (the linux-cp host interfaces), virtio and memif.  dpdk
+## queues always start in polling mode and af_packet queues in interrupt
+## mode, regardless of this setting.
+##
+## VPP_DEFAULT_RX_MODE below is a placeholder: vpp_init.sh replaces it with
+## the value of the VPP_DEFAULT_RX_MODE environment variable, or with
+## adaptive when that is unset.
+interface {
+	default-rx-mode VPP_DEFAULT_RX_MODE
+}
+
 # memory (original defaults) {
 	# main-heap-size 2G
 
