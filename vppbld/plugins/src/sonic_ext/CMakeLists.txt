@@ -22,6 +22,7 @@ add_vpp_plugin(sonic_ext
   sonic_ext_api.c
   copp_api.c
   capture_node.c
+  dhcp_node.c
   aggr_tap_redirect_node.c
   glean_redirect_node.c
   host_xc_node.c
