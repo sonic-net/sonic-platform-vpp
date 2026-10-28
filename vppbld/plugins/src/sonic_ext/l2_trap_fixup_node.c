@@ -28,8 +28,9 @@
  *
  * Current consumers: tagged ARP and IPv6-multicast flood-suppression
  * sessions installed by SAI in SwitchVppFdb.cpp. Additional L2 control
- * punts can share this node verbatim; DHCP TRAP/COPY is parsed earlier by
- * sonic-ext-capture so its live packet action can preserve forwarding.
+ * punts can share this node verbatim; DHCP TRAP/COPY is parsed separately on
+ * the post-admission L2 input arc so its live packet action can preserve or
+ * suppress forwarding as requested.
  *
  * Background.  A real ASIC implements SAI_PACKET_ACTION_TRAP by
  * simultaneously dropping the frame from the forwarding pipeline AND
