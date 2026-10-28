@@ -14,7 +14,7 @@
  *
  * sonic-ext-copp-ifout
  *
- * CoPP policing for ARP/LACP/LLDP/UDLD/TTL_ERROR/NEIGHBOR_MISS,
+ * CoPP policing for ARP/LACP/LLDP/UDLD/TTL_ERROR/NEIGHBOR_MISS/DHCP,
  * enforced on the `interface-output` arc of each linux-cp-paired TAP
  *
  * BACKGROUND (sonic-net/sonic-buildimage#25801, SONiC-on-VPP CoPP HLD):
@@ -35,6 +35,9 @@
 #include <vnet/feature/feature.h>
 #include <policer/policer.h>
 #include <vnet/ip/ip4_packet.h>
+#include <vnet/ip/ip6_inlines.h>
+#include <vnet/ip/ip6_packet.h>
+#include <vnet/udp/udp_packet.h>
 #include <vnet/llc/llc.h>
 #include <vnet/snap/snap.h>
 #include <vnet/ethernet/ethernet.h>
@@ -48,6 +51,65 @@ typedef struct
   u32 policer_index;
   u32 verdict;
 } sonic_ext_copp_ifout_trace_t;
+
+#define SONIC_EXT_DHCP4_CLIENT_PORT 68
+#define SONIC_EXT_DHCP4_SERVER_PORT 67
+#define SONIC_EXT_DHCP6_CLIENT_PORT 546
+#define SONIC_EXT_DHCP6_SERVER_PORT 547
+
+static_always_inline int
+sonic_ext_copp_dhcp_ports_match (const udp_header_t *udp, int is_ipv6)
+{
+  u16 src = clib_net_to_host_u16 (udp->src_port);
+  u16 dst = clib_net_to_host_u16 (udp->dst_port);
+  u16 client = is_ipv6 ? SONIC_EXT_DHCP6_CLIENT_PORT :
+				 SONIC_EXT_DHCP4_CLIENT_PORT;
+  u16 server = is_ipv6 ? SONIC_EXT_DHCP6_SERVER_PORT :
+				 SONIC_EXT_DHCP4_SERVER_PORT;
+
+  return (src == client && dst == server) ||
+	 (src == server && dst == client);
+}
+
+static_always_inline int
+sonic_ext_copp_dhcp4_match (vlib_buffer_t *b, u8 *payload, u32 hdr_len)
+{
+  ip4_header_t *ip4;
+  u32 ihl;
+
+  if (b->current_length < hdr_len + sizeof (ip4_header_t))
+    return 0;
+
+  ip4 = (ip4_header_t *) payload;
+  ihl = ip4_header_bytes (ip4);
+  if (ip4->protocol != IP_PROTOCOL_UDP ||
+      ip4_get_fragment_offset (ip4) != 0 || ihl < sizeof (*ip4) ||
+      b->current_length < hdr_len + ihl + sizeof (udp_header_t))
+    return 0;
+
+  return sonic_ext_copp_dhcp_ports_match (
+    (udp_header_t *) (payload + ihl), 0);
+}
+
+static_always_inline int
+sonic_ext_copp_dhcp6_match (vlib_buffer_t *b, u8 *payload, u32 hdr_len)
+{
+  ip6_header_t *ip6;
+  u32 udp_offset = 0;
+  int proto;
+
+  if (b->current_length < hdr_len + sizeof (ip6_header_t))
+    return 0;
+
+  ip6 = (ip6_header_t *) payload;
+  proto = ip6_locate_header (b, ip6, -1, &udp_offset);
+  if (proto != IP_PROTOCOL_UDP ||
+      b->current_length < hdr_len + udp_offset + sizeof (udp_header_t))
+    return 0;
+
+  return sonic_ext_copp_dhcp_ports_match (
+    (udp_header_t *) (payload + udp_offset), 1);
+}
 
 static u8 *
 format_sonic_ext_copp_ifout_trace (u8 *s, va_list *args)
@@ -290,29 +352,58 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
      * anything else with ethertype < 0x0600 falls through to the
      * drop below. */
     if (!entry && ethertype >= 0x0600)
-      for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
       {
-	sonic_ext_copp_ifout_entry_t *cand = &sem->copp_ifout_entries[i];
+	sonic_ext_copp_ifout_entry_t *fallback = 0;
+	int fallback_idx = -1;
 
-	if (!cand->in_use || cand->match_neighbor_miss ||
-	    cand->ethertype != ethertype)
-	  continue;
-
-	if (cand->match_ip4_ttl_expiring)
+	for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
 	  {
-	    ip4_header_t *ip4;
+	    sonic_ext_copp_ifout_entry_t *cand = &sem->copp_ifout_entries[i];
 
-	    if (b->current_length < hdr_len + sizeof (ip4_header_t))
+	    if (!cand->in_use || cand->match_neighbor_miss ||
+		cand->ethertype != ethertype)
 	      continue;
 
-	    ip4 = (ip4_header_t *) payload;
-	    if (ip4->ttl > 1)
+	    if (cand->match_ip4_ttl_expiring)
+	      {
+		ip4_header_t *ip4;
+
+		if (b->current_length < hdr_len + sizeof (ip4_header_t))
+		  continue;
+
+		ip4 = (ip4_header_t *) payload;
+		if (ip4->ttl > 1)
+		  continue;
+	      }
+
+	    if (cand->match_dhcp4 &&
+		!sonic_ext_copp_dhcp4_match (b, payload, hdr_len))
 	      continue;
+
+	    if (cand->match_dhcp6 &&
+		!sonic_ext_copp_dhcp6_match (b, payload, hdr_len))
+	      continue;
+
+	    /* A qualified row is more specific than a plain ethertype row,
+	     * regardless of bind order. */
+	    if (!cand->match_ip4_ttl_expiring && !cand->match_dhcp4 &&
+		!cand->match_dhcp6)
+	      {
+		fallback = cand;
+		fallback_idx = (int) i;
+		continue;
+	      }
+
+	    entry = cand;
+	    idx = (int) i;
+	    break;
 	  }
 
-	entry = cand;
-	idx = (int) i;
-	break;
+	if (!entry && fallback)
+	  {
+	    entry = fallback;
+	    idx = fallback_idx;
+	  }
       }
   }
 
@@ -550,7 +641,23 @@ sonic_ext_copp_ifout_find_entry (sonic_ext_main_t *sem, u16 ethertype)
     {
       if (sem->copp_ifout_entries[i].in_use &&
 	  !sem->copp_ifout_entries[i].match_neighbor_miss &&
+	  !sem->copp_ifout_entries[i].match_dhcp4 &&
+	  !sem->copp_ifout_entries[i].match_dhcp6 &&
 	  sem->copp_ifout_entries[i].ethertype == ethertype)
+	return (int) i;
+    }
+  return -1;
+}
+
+static int
+sonic_ext_copp_dhcp_find_entry (sonic_ext_main_t *sem, int is_ipv6)
+{
+  for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
+    {
+      sonic_ext_copp_ifout_entry_t *entry = &sem->copp_ifout_entries[i];
+
+      if (entry->in_use &&
+	  (is_ipv6 ? entry->match_dhcp6 : entry->match_dhcp4))
 	return (int) i;
     }
   return -1;
@@ -609,6 +716,70 @@ sonic_ext_copp_ifout_bind (u16 ethertype, const char *policer_name,
   sem->copp_ifout_entries[idx].in_use = 1;
   sem->copp_ifout_entries[idx].match_ip4_ttl_expiring =
     match_ip4_ttl_expiring ? 1 : 0;
+  sem->copp_ifout_conform_packets[idx] = 0;
+  sem->copp_ifout_exceed_packets[idx] = 0;
+  sem->copp_ifout_violate_packets[idx] = 0;
+
+  return 0;
+}
+
+int
+sonic_ext_copp_dhcp_is_bound (sonic_ext_main_t *sem, int is_ipv6)
+{
+  return sonic_ext_copp_dhcp_find_entry (sem, is_ipv6) >= 0;
+}
+
+int
+sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_bind)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  int idx = sonic_ext_copp_dhcp_find_entry (sem, is_ipv6);
+
+  if (!is_bind)
+    {
+      if (idx < 0)
+	return 0;
+
+      /* A stale owner must not remove a newer replacement binding. */
+      if (policer_name && policer_name[0] &&
+	  strncmp ((char *) sem->copp_ifout_entries[idx].name, policer_name,
+		   SONIC_EXT_COPP_IFOUT_NAME_LEN) != 0)
+	return 0;
+
+      clib_memset (&sem->copp_ifout_entries[idx], 0,
+		   sizeof (sem->copp_ifout_entries[idx]));
+      sem->copp_ifout_conform_packets[idx] = 0;
+      sem->copp_ifout_exceed_packets[idx] = 0;
+      sem->copp_ifout_violate_packets[idx] = 0;
+      return 0;
+    }
+
+  if (!sem->copp)
+    return VNET_API_ERROR_FEATURE_DISABLED;
+
+  /* Routed DHCPv6 multicast fails VPP's MFIB RPF check before it can reach
+   * ip6-punt. The common drop-arc redirect rescues only the exact DHCPv6
+   * predicate while this family binding is active. */
+  if (is_ipv6)
+    sonic_ext_copp_enable_drop_redirect ();
+
+  if (idx < 0)
+    {
+      idx = sonic_ext_copp_ifout_alloc_slot (sem);
+      if (idx < 0)
+	return VNET_API_ERROR_QUEUE_FULL;
+    }
+
+  clib_memset (&sem->copp_ifout_entries[idx], 0,
+	       sizeof (sem->copp_ifout_entries[idx]));
+  sem->copp_ifout_entries[idx].ethertype = is_ipv6 ? ETHERNET_TYPE_IP6 :
+						       ETHERNET_TYPE_IP4;
+  snprintf ((char *) sem->copp_ifout_entries[idx].name,
+	    sizeof (sem->copp_ifout_entries[idx].name), "%s", policer_name);
+  sem->copp_ifout_entries[idx].policer_index = ~0;
+  sem->copp_ifout_entries[idx].in_use = 1;
+  sem->copp_ifout_entries[idx].match_dhcp4 = is_ipv6 ? 0 : 1;
+  sem->copp_ifout_entries[idx].match_dhcp6 = is_ipv6 ? 1 : 0;
   sem->copp_ifout_conform_packets[idx] = 0;
   sem->copp_ifout_exceed_packets[idx] = 0;
   sem->copp_ifout_violate_packets[idx] = 0;
