@@ -122,6 +122,11 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
 
       /* refs protects table lifetime; find() checks the per-packet witness
        * before touching a slot. Flagged buffers can outlive the last unref. */
+      if (PREDICT_TRUE (n_left_from > 8) &&
+	  sonic_ext_vnet_buf_main.refs &&
+	  (b[8]->flags & SONIC_EXT_BUFFER_F_VNET_BUF))
+	clib_prefetch_load (sonic_ext_vnet_buf_slot (vm, b[8]));
+
       if (sonic_ext_vnet_buf_main.refs &&
 	  (sb = sonic_ext_vnet_buf_find (vm, b[0], SONIC_EXT_VNET_BUF_TRIM)) &&
 	  (sb->trim_flags & SONIC_EXT_TRIM_BUF_F_TRIMMED))

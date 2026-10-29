@@ -284,7 +284,7 @@ class TestSonicExtTrimDataplane(SonicExtTrimDataplaneBase):
     """sonic-ext trim dataplane regressions"""
 
     def test_deferred_egress_mirror(self):
-        """Deferred mirroring sees each trimmed packet exactly once."""
+        """Deferred mirroring stays one-shot across prefetch frame boundaries."""
         acl = self.vapi.acl_add_replace(
             acl_index=0xFFFFFFFF,
             tag="trim-egress-mirror",
@@ -328,31 +328,32 @@ class TestSonicExtTrimDataplane(SonicExtTrimDataplaneBase):
             feature_name="sonic-ext-egress-mirror",
             enable=False,
         )
-        for enabled in (True, False, True):
-            with self.subTest(trim_enabled=enabled):
-                if enabled:
-                    self.set_global()
-                else:
-                    self.vapi.sonic_ext_trim_global_set(is_enable=False)
-                before = self.vapi.sonic_ext_trim_counters_get()
-                self.pg0.add_stream([self.packet()] * 64)
-                self.pg_enable_capture([self.pg1, self.pg2])
-                self.pg_start()
-                forwarded = self.pg1.get_capture(64)
-                mirrored = self.pg2.get_capture(64)
-                for packet, copy in zip(forwarded, mirrored):
+        for count in (8, 9, 64):
+            for enabled in (True, False, True):
+                with self.subTest(packet_count=count, trim_enabled=enabled):
                     if enabled:
-                        self.assert_trimmed(packet)
+                        self.set_global()
                     else:
-                        self.assertEqual(len(packet), 512)
-                        self.assertEqual(packet[IP].tos, 40)
-                    self.assertEqual(bytes(copy), bytes(packet))
-                after = self.vapi.sonic_ext_trim_counters_get()
-                expected = 64 if enabled else 0
-                self.assertEqual(
-                    after.trim_admit_fail - before.trim_admit_fail, expected
-                )
-                self.assertEqual(after.trim_sent - before.trim_sent, expected)
+                        self.vapi.sonic_ext_trim_global_set(is_enable=False)
+                    before = self.vapi.sonic_ext_trim_counters_get()
+                    self.pg0.add_stream([self.packet()] * count)
+                    self.pg_enable_capture([self.pg1, self.pg2])
+                    self.pg_start()
+                    forwarded = self.pg1.get_capture(count)
+                    mirrored = self.pg2.get_capture(count)
+                    for packet, copy in zip(forwarded, mirrored):
+                        if enabled:
+                            self.assert_trimmed(packet)
+                        else:
+                            self.assertEqual(len(packet), 512)
+                            self.assertEqual(packet[IP].tos, 40)
+                        self.assertEqual(bytes(copy), bytes(packet))
+                    after = self.vapi.sonic_ext_trim_counters_get()
+                    expected = count if enabled else 0
+                    self.assertEqual(
+                        after.trim_admit_fail - before.trim_admit_fail, expected
+                    )
+                    self.assertEqual(after.trim_sent - before.trim_sent, expected)
 
     def test_sideband_enable_failure_and_interface_delete(self):
         """Callback contention rejects enable atomically; deletion releases it."""
