@@ -22,6 +22,13 @@ typedef struct
 {
   /* API message ID base */
   u16 msg_id_base;
+
+  /*
+   * Drop packets whose source or destination is in the link-local range
+   * (169.254.0.0/16).  Enabled by default; turn it off with
+   * "ip-validate { link-local-drop off }" in startup.conf.
+   */
+  u8 link_local_drop;
 } ip_validate_main_t;
 
 extern ip_validate_main_t ip_validate_main;

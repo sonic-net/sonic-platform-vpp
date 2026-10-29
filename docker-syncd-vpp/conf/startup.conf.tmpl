@@ -285,6 +285,22 @@ plugins {
     # l2-vlan-filter off
 # }
 
+## ip_validate plugin feature selection.  Every check defaults to on, so a
+## keyword is only needed to turn one off.  Changing this requires a VPP
+## restart.  Each keyword takes on|off.
+##
+## link-local-drop: drop IPv4 packets whose source or destination is in
+## 169.254.0.0/16.  Turn it off on a box that routes link-local traffic, which
+## is what SAI_NOT_DROP_SIP_DIP_LINK_LOCAL asks for.  The other ip4-validate /
+## ip6-validate checks have no keyword and stay on.
+##
+## Generated at runtime by vpp_init.sh from $IP_VALIDATE_CONFIG, which is given
+## as comma-separated key=value pairs -- IP_VALIDATE_CONFIG=link-local-drop=off
+## -- and which a platform sets in /etc/sonic/vpp/syncd_vpp_env.
+# ip-validate {
+    # link-local-drop off
+# }
+
 ## Statistics Segment
 # statseg {
     # socket-name <filename>, name of the stats segment socket
