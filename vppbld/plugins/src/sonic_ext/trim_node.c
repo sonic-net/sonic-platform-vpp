@@ -47,7 +47,6 @@
 typedef struct
 {
   u32 sw_if_index;  /* egress port */
-  u8 orig_queue;    /* queue that failed admission */
   u8 trim_queue;    /* static trim queue */
   u16 trim_size;    /* bytes retained */
   u8 new_dscp;	    /* DSCP written to the trimmed copy */
@@ -61,10 +60,10 @@ format_sonic_ext_trim_trace (u8 *s, va_list *args)
   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
   sonic_ext_trim_trace_t *t = va_arg (*args, sonic_ext_trim_trace_t *);
   s = format (s,
-	      "SONIC-EXT-TRIM: port %u orig-queue %u -> trim-queue %u "
+	      "SONIC-EXT-TRIM: port %u trim-queue %u "
 	      "size %u dscp %u %s",
-	      t->sw_if_index, t->orig_queue, t->trim_queue, t->trim_size,
-	      t->new_dscp, t->dropped ? "DROP (trim queue congested)" : "SENT");
+	      t->sw_if_index, t->trim_queue, t->trim_size, t->new_dscp,
+	      t->dropped ? "DROP (trim queue congested)" : "SENT");
   return s;
 }
 
@@ -178,17 +177,10 @@ VLIB_NODE_FN (sonic_ext_trim_node)
   while (n_left_from > 0)
     {
       u32 next0 = 0;
-      sonic_ext_vnet_buf_t *sb =
-	sonic_ext_vnet_buf_main.refs ?
-		sonic_ext_vnet_buf_find (vm, b[0], SONIC_EXT_VNET_BUF_TRIM_ORIG_QUEUE) :
-		0;
-      u8 orig_queue = sb ? sb->trim_orig_queue : SONIC_EXT_TRIM_QUEUE_NONE;
+      sonic_ext_vnet_buf_t *sb;
       u32 sw_if_index = sonic_ext_trim_egress_port_sw_if_index (b[0]);
       sonic_ext_trim_port_t *port;
       u8 dropped = 0;
-
-      if (sb)
-	sonic_ext_vnet_buf_release (sb, SONIC_EXT_VNET_BUF_TRIM_ORIG_QUEUE);
 
       /* A multicast/replicate clone has a private head but shared tail
        * segments. Take ownership before changing any bytes or chain links. */
@@ -238,7 +230,10 @@ VLIB_NODE_FN (sonic_ext_trim_node)
 	   * by vlib_buffer_copy(). With no live trim ports, admission will
 	   * bypass without a marker. */
 	  if (sonic_ext_vnet_buf_main.refs)
-	    sonic_ext_vnet_buf_claim (vm, b[0], SONIC_EXT_VNET_BUF_TRIMMED);
+	    {
+	      sb = sonic_ext_vnet_buf_claim (vm, b[0], SONIC_EXT_VNET_BUF_TRIM);
+	      sb->trim_flags = SONIC_EXT_TRIM_BUF_F_TRIMMED;
+	    }
 	  next0 = SONIC_EXT_TRIM_NEXT_ADMISSION;
 	}
 
@@ -251,7 +246,6 @@ VLIB_NODE_FN (sonic_ext_trim_node)
 	  sonic_ext_trim_trace_t *t =
 	    vlib_add_trace (vm, node, b[0], sizeof (*t));
 	  t->sw_if_index = sw_if_index;
-	  t->orig_queue = orig_queue;
 	  t->trim_queue = trim_queue;
 	  t->trim_size = trim_size;
 	  t->new_dscp = new_dscp;

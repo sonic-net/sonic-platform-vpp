@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """sonic-ext packet-trim configuration, lifecycle, and dataplane tests."""
 
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import tempfile
 import unittest
 
+from config import config
 from framework import VppTestCase
 from asfframework import VppTestRunner
 from vpp_ip_route import VppIpMRoute, VppMRoutePath
@@ -55,6 +61,47 @@ class TestSonicExtTrim(SonicExtTrimBase):
         so SAI-driven trimming still activates with no startup stanza.
         """
         self.assertTrue(self.trim_feature_enabled())
+
+
+class TestSonicExtTrimSideband(SonicExtTrimBase):
+    """Production sideband accessors with deterministic buffer reuse."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.accessor_tempdir = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.accessor_tempdir.cleanup)
+        cls.binary = str(Path(cls.accessor_tempdir.name) / "sideband-accessors")
+        subprocess.check_call(
+            shlex.split(os.environ.get("CC", "cc"))
+            + [
+                "-O2",
+                "-Wall",
+                "-Werror",
+                "-I" + str(Path(config.vpp_ws_dir) / "src" / "plugins"),
+                "-I" + str(Path(config.vpp_install_dir) / "vpp" / "include"),
+                str(Path(__file__).with_name("test_sonic_ext_vnet_buf.c")),
+                "-o",
+                cls.binary,
+                "-L" + str(Path(config.vpp_install_dir) / "vpp" / "lib"),
+                "-L" + str(Path(config.vpp_install_dir) / "vpp" / "lib64"),
+                "-Wl,-rpath," + str(Path(config.vpp_install_dir) / "vpp" / "lib"),
+                "-Wl,-rpath," + str(Path(config.vpp_install_dir) / "vpp" / "lib64"),
+                "-lvppinfra",
+            ]
+        )
+
+    def test_first_claim_clears_dirty_slot(self):
+        """A new incarnation cannot retain stale validity or payload."""
+        subprocess.check_call([self.binary, "first-claim"])
+
+    def test_later_claim_and_release_preserve_other_client(self):
+        """One client cannot invalidate another client's live field."""
+        subprocess.check_call([self.binary, "shared-claim"])
+
+    def test_unclaimed_and_clone_slots_hide_stale_fields(self):
+        """Unclaimed buffers and fresh clone slots expose no source fields."""
+        subprocess.check_call([self.binary, "unclaimed-clone"])
 
 
 class TestSonicExtTrimStartupOff(SonicExtTrimBase):

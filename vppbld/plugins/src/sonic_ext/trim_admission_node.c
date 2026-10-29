@@ -42,8 +42,8 @@
  *     the shim strictly scoped to trim behavior and never perturbs
  *     normal forwarding.
  *   - On an eligible queue that admits, the packet continues the arc.
- *   - On an eligible queue that fails admission, we stamp the resolved
- *     queue into the sideband and divert to `sonic-ext-trim`. The copy
+ *   - On an eligible queue that fails admission, we divert to
+ *     `sonic-ext-trim`. The copy
  *     returns here with a one-shot marker, bypasses admission, and
  *     continues the saved feature chain without repeating earlier features.
  */
@@ -120,10 +120,14 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
       u8 eligible = 0;
       u8 admitted = 1;
 
+      /* refs protects table lifetime; find() checks the per-packet witness
+       * before touching a slot. Flagged buffers can outlive the last unref. */
       if (sonic_ext_vnet_buf_main.refs &&
-	  (sb = sonic_ext_vnet_buf_find (vm, b[0], SONIC_EXT_VNET_BUF_TRIMMED)))
+	  (sb = sonic_ext_vnet_buf_find (vm, b[0], SONIC_EXT_VNET_BUF_TRIM)) &&
+	  (sb->trim_flags & SONIC_EXT_TRIM_BUF_F_TRIMMED))
 	{
-	  sonic_ext_vnet_buf_release (sb, SONIC_EXT_VNET_BUF_TRIMMED);
+	  sb->trim_flags &= ~SONIC_EXT_TRIM_BUF_F_TRIMMED;
+	  sonic_ext_vnet_buf_release (sb, SONIC_EXT_VNET_BUF_TRIM);
 	  goto next_feature0;
 	}
 
@@ -175,8 +179,6 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
       /* Admission failure on an eligible queue: divert to the trim
        * action node, which truncates the copy and re-injects it. */
       admitted = 0;
-      sb = sonic_ext_vnet_buf_claim (vm, b[0], SONIC_EXT_VNET_BUF_TRIM_ORIG_QUEUE);
-      sb->trim_orig_queue = queue;
       sem->trim_admit_fail++;
       n_to_trim++;
       next0 = SONIC_EXT_TRIM_ADMISSION_NEXT_TRIM;

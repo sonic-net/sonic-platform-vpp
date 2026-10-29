@@ -80,8 +80,8 @@
  */
 
 /*
- * Buffer flag: this incarnation of the buffer has at least one live
- * side-band field.  One bit for the whole facility rather than one per
+ * Buffer flag: this incarnation of the buffer has claimed side-band
+ * storage.  One bit for the whole facility rather than one per
  * feature -- the AVAIL bits are a nine-deep resource shared with every
  * other plugin, and `valid` already discriminates between fields.  The cost
  * of sharing is a false positive: a feature whose own field is absent, but
@@ -94,19 +94,22 @@
 typedef enum
 {
   SONIC_EXT_VNET_BUF_PBH_LAG_HASH = 1 << 0,
-  SONIC_EXT_VNET_BUF_TRIM_ORIG_QUEUE = 1 << 1,
-  SONIC_EXT_VNET_BUF_TRIMMED = 1 << 2,
+  SONIC_EXT_VNET_BUF_TRIM = 1 << 1,
 } sonic_ext_vnet_buf_field_t;
+
+#define SONIC_EXT_TRIM_BUF_F_TRIMMED (1 << 0)
 
 typedef struct
 {
   u32 pbh_lag_hash; /* SONIC_EXT_VNET_BUF_PBH_LAG_HASH */
   u8 valid;            /* bitmap of sonic_ext_vnet_buf_field_t */
-  u8 trim_orig_queue;  /* SONIC_EXT_VNET_BUF_TRIM_ORIG_QUEUE */
+  u8 trim_flags;       /* SONIC_EXT_VNET_BUF_TRIM */
   /* Add feature fields here, and a bit above for each.  The table costs one
    * struct per buffer position, so widening it is linear in the buffer
    * count. */
 } sonic_ext_vnet_buf_t; /* 8 bytes with padding; 2 bytes spare */
+
+STATIC_ASSERT_SIZEOF (sonic_ext_vnet_buf_t, 8);
 
 /* Per-pool constants that turn a buffer index into a slot number. */
 typedef struct
@@ -153,9 +156,10 @@ sonic_ext_vnet_buf_slot (vlib_main_t *vm, vlib_buffer_t *b)
 }
 
 /*
- * Claim field f of b's slot. A DPDK-recycled slot can retain old valid bits,
- * so the first claim of an incarnation must discard them. Later claims
- * preserve other fields belonging to the same packet.
+ * Claim field f of b's slot. A DPDK-recycled slot can retain old data,
+ * so the first claim of an incarnation must reset the entire slot. Later
+ * claims preserve other fields belonging to the same packet. Reclaiming a
+ * released field does not reset its payload; producers must initialize it.
  *
  * The field bit and the buffer flag are written together here and nowhere
  * else, so a feature cannot acquire the storage without also acquiring the
@@ -168,7 +172,7 @@ sonic_ext_vnet_buf_claim (vlib_main_t *vm, vlib_buffer_t *b,
   sonic_ext_vnet_buf_t *sb = sonic_ext_vnet_buf_slot (vm, b);
 
   if ((b->flags & SONIC_EXT_BUFFER_F_VNET_BUF) == 0)
-    sb->valid = 0;
+    clib_memset (sb, 0, sizeof (*sb));
   sb->valid |= (u8) f;
   b->flags |= SONIC_EXT_BUFFER_F_VNET_BUF;
   return sb;
