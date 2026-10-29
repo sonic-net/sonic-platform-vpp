@@ -92,8 +92,8 @@ TTL_REDIRECTED = (
     "sonic_ext" in config.excluded_plugins, "Exclude sonic-ext plugin tests"
 )
 @unittest.skipIf(config.skip_netns_tests, "netns not available or disabled from cli")
-class TestSonicExtBondPunt(VppTestCase):
-    """SONiC-ext L3 punt over a bond: capture and aggregate-tap redirect"""
+class SonicExtBondPuntBase(VppTestCase):
+    """SONiC-ext L3 punt over a bond test base"""
 
     extra_vpp_plugin_config = [
         # Both sonic-ext and linux-cp are .default_disabled.
@@ -126,6 +126,9 @@ class TestSonicExtBondPunt(VppTestCase):
     VLAN_IP4 = "10.10.100.1"
     VLAN_REMOTE_IP4 = "10.10.100.2"
     PREFIX_LEN = 24
+    # Turning punt-via-member on at runtime wires it, so a class testing it
+    # off in startup.conf must not.
+    PUNT_VIA_MEMBER = True
 
     #
     # netns plumbing -- the namespace has to exist before VPP starts
@@ -156,7 +159,7 @@ class TestSonicExtBondPunt(VppTestCase):
         super().tearDownClass()
 
     def setUp(self):
-        super(TestSonicExtBondPunt, self).setUp()
+        super(SonicExtBondPuntBase, self).setUp()
 
         self.create_pg_interfaces(range(3))
         for i in self.pg_interfaces:
@@ -215,7 +218,8 @@ class TestSonicExtBondPunt(VppTestCase):
         self.vapi.cli("lcp ethertype enable %d" % ARP_ETHERTYPE)
         self.logger.info("lcp ethertype:\n%s", self.vapi.cli("show lcp ethertype"))
 
-        self.vapi.cli("sonic-ext punt-via-member on")
+        if self.PUNT_VIA_MEMBER:
+            self.vapi.cli("sonic-ext punt-via-member on")
         self.logger.info("sonic-ext:\n%s", self.vapi.cli("show sonic-ext"))
 
     def tearDown(self):
@@ -250,7 +254,7 @@ class TestSonicExtBondPunt(VppTestCase):
         self.egress.unconfig_ip4()
         for i in self.pg_interfaces:
             i.admin_down()
-        super(TestSonicExtBondPunt, self).tearDown()
+        super(SonicExtBondPuntBase, self).tearDown()
 
     def show_commands_at_teardown(self):
         self.logger.info(self.vapi.cli("show interface"))
@@ -390,6 +394,10 @@ class TestSonicExtBondPunt(VppTestCase):
             self.assertEqual(rx[Ether].src, member.remote_mac)
             results.append((member, rx))
         return results
+
+
+class TestSonicExtBondPunt(SonicExtBondPuntBase):
+    """SONiC-ext L3 punt over a bond: capture and aggregate-tap redirect"""
 
     #
     # scenario 1 -- ARP for the bond address
@@ -567,6 +575,45 @@ class TestSonicExtBondPunt(VppTestCase):
             self.assertEqual(self._err(DISABLED), before + 1)
         finally:
             self.vapi.cli("sonic-ext punt-via-member on")
+
+
+class TestSonicExtBondPuntStartupOff(SonicExtBondPuntBase):
+    """SONiC-ext L3 punt over a bond with punt-via-member off in startup.conf"""
+
+    extra_vpp_config = ["sonic-ext", "{", "punt-via-member", "off", "}"]
+    PUNT_VIA_MEMBER = False
+
+    def test_punt_via_member_startup_off(self):
+        """punt-via-member off at startup never wires the aggregate-tap redirect"""
+        self.assertFalse(
+            self.vapi.sonic_ext_feature_get(feature="punt-via-member").enabled
+        )
+        for itf in self.vapi.sw_interface_dump():
+            output = self.vapi.cli("show interface features %s" % itf.interface_name)
+            features = (line.strip() for line in output.splitlines())
+            self.assertFalse(
+                "sonic-ext-aggr-tap-redirect" in features,
+                "sonic-ext-aggr-tap-redirect on %s" % itf.interface_name,
+            )
+
+        redirected = self._err(REDIRECTED)
+        disabled = self._err(DISABLED)
+
+        self.bond_tap.enable_capture()
+        self.pg0.add_stream([self._arp_request(self.pg0)])
+        self.pg_start(trace=True)
+        try:
+            rxs = self.bond_tap.get_capture(
+                expected_count=1, timeout=5, filter_out_fn=self._not_arp
+            )
+        finally:
+            self.logger.debug(self.vapi.cli("show trace max 50"))
+
+        self.assertEqual(len(rxs), 1)
+        self.assertEqual(rxs[0][ARP].pdst, self.BOND_IP4)
+        # Unlike a runtime off, the redirect node is not on the arc to count.
+        self.assertEqual(self._err(REDIRECTED), redirected)
+        self.assertEqual(self._err(DISABLED), disabled)
 
 
 if __name__ == "__main__":

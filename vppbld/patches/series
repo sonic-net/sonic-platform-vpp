@@ -86,3 +86,9 @@
 #     "sonic-clear fdb all"). Includes a test in test_l2_fib.py.
 #     Upstream: https://gerrit.fd.io/r/c/vpp/+/47191
 0024-l2-report-flushed-MAC-refreshed-by-traffic.patch
+# 26. nat: with nat44 forwarding enabled and no address pool configured, pass
+#     a new in2out-output flow that matches no static mapping untranslated
+#     instead of dropping it as "out of ports". With static NAT only
+#     (saivpp's SAI NAT), hosts without a mapping are routed untranslated,
+#     as on an ASIC. No change with forwarding disabled or with a pool.
+0026-nat-forward-unmatched-output-feature-flows-without-a-pool.patch

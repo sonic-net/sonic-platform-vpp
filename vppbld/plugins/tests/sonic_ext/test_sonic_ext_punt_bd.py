@@ -107,8 +107,8 @@ TRAP_NOT_LEARNED = (
     "sonic_ext" in config.excluded_plugins, "Exclude sonic-ext plugin tests"
 )
 @unittest.skipIf(config.skip_netns_tests, "netns not available or disabled from cli")
-class TestSonicExtL2Punt(VppTestCase):
-    """SONiC-ext L2 punt: capture and aggregate-tap redirect"""
+class SonicExtL2PuntBase(VppTestCase):
+    """SONiC-ext L2 punt test base"""
 
     # Both plugins are .default_disabled, so ask for them explicitly.
     extra_vpp_plugin_config = [
@@ -126,6 +126,9 @@ class TestSonicExtL2Punt(VppTestCase):
 
     BD_ID = 1
     VLAN_ID = 100
+    # Turning punt-via-member on at runtime wires it, so a class testing it
+    # off in startup.conf must not.
+    PUNT_VIA_MEMBER = True
 
     # Point the DHCPv4 sessions at sonic-ext-l2-trap-learn.
     TRAP_LEARN = False
@@ -159,7 +162,7 @@ class TestSonicExtL2Punt(VppTestCase):
         super().tearDownClass()
 
     def setUp(self):
-        super(TestSonicExtL2Punt, self).setUp()
+        super(SonicExtL2PuntBase, self).setUp()
 
         self.create_pg_interfaces(range(2))
         for i in self.pg_interfaces:
@@ -218,7 +221,8 @@ class TestSonicExtL2Punt(VppTestCase):
             self.vapi.cli("lcp ethertype enable %d" % ethertype)
         self.logger.info("lcp ethertype:\n%s", self.vapi.cli("show lcp ethertype"))
 
-        self.vapi.cli("sonic-ext punt-via-member on")
+        if self.PUNT_VIA_MEMBER:
+            self.vapi.cli("sonic-ext punt-via-member on")
 
         self._install_punt_classifiers()
         self.logger.info("sonic-ext:\n%s", self.vapi.cli("show sonic-ext"))
@@ -241,7 +245,7 @@ class TestSonicExtL2Punt(VppTestCase):
 
         for i in self.pg_interfaces:
             i.admin_down()
-        super(TestSonicExtL2Punt, self).tearDown()
+        super(SonicExtL2PuntBase, self).tearDown()
 
     def _lcp_create(self, itf, host_if_name):
         """Create an LCP pair and return a HostInterface for its Linux tap."""
@@ -535,6 +539,10 @@ class TestSonicExtL2Punt(VppTestCase):
         )
         self.assertEqual(rx[Dot1Q].vlan, self.VLAN_ID)
 
+
+class TestSonicExtL2Punt(SonicExtL2PuntBase):
+    """SONiC-ext L2 punt: capture and aggregate-tap redirect"""
+
     #
     # scenario 1 -- untagged, received on the physical bridge member
     #
@@ -651,6 +659,42 @@ class TestSonicExtL2Punt(VppTestCase):
             self.assertEqual(self._err(NOT_REDIRECTED), before + 1)
         finally:
             self.vapi.cli("sonic-ext punt-via-member on")
+
+
+class TestSonicExtL2PuntStartupOff(SonicExtL2PuntBase):
+    """SONiC-ext L2 punt with punt-via-member off in startup.conf"""
+
+    extra_vpp_config = ["sonic-ext", "{", "punt-via-member", "off", "}"]
+    PUNT_VIA_MEMBER = False
+
+    def test_punt_via_member_startup_off(self):
+        """punt-via-member off at startup never wires the aggregate-tap redirect"""
+        self.assertFalse(
+            self.vapi.sonic_ext_feature_get(feature="punt-via-member").enabled
+        )
+        for itf in self.vapi.sw_interface_dump():
+            output = self.vapi.cli("show interface features %s" % itf.interface_name)
+            features = (line.strip() for line in output.splitlines())
+            self.assertFalse(
+                "sonic-ext-aggr-tap-redirect" in features,
+                "sonic-ext-aggr-tap-redirect on %s" % itf.interface_name,
+            )
+
+        redirected = self._err(REDIRECTED)
+        not_redirected = self._err(NOT_REDIRECTED)
+
+        rx = self._punt(
+            self.access_phy,
+            self._arp_request(self.access_phy),
+            self.aggr_tap,
+            self._not_arp,
+            flood_to=[(self.trunk_phy, True)],
+        )
+
+        self.assertEqual(rx[ARP].pdst, "10.0.0.1")
+        # Unlike a runtime off, the redirect node is not on the arc to count.
+        self.assertEqual(self._err(REDIRECTED), redirected)
+        self.assertEqual(self._err(NOT_REDIRECTED), not_redirected)
 
 
 class TestSonicExtL2TrapLearn(TestSonicExtL2Punt):
