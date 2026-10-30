@@ -25,6 +25,7 @@ add_vpp_plugin(sonic_ext
   glean_redirect_node.c
   host_xc_node.c
   l2_trap_fixup_node.c
+  l2_trap_learn_node.c
   l2_vlan_filter_node.c
   ip2me_node.c
   drop_member_stats_node.c
