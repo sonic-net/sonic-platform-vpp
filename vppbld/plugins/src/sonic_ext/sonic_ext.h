@@ -343,6 +343,9 @@ typedef struct
   u8 glean_redirect_enabled;
   u8 aggr_tap_redirect_enabled;
 
+  /* Continue the L2 feature bitmap after validating a native VLAN tag. */
+  u32 l2_vlan_filter_feat_next[32];
+
   /* Deferred egress mirror: set once the sonic-ext-egress-mirror feature
    * has been enabled on all interface-output arcs; gated by a refcount of
    * installed MIRROR_EGRESS actions so the arc cost is only paid while the
