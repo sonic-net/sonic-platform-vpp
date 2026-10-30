@@ -608,5 +608,38 @@ class TestIpValidate(VppTestCase):
         )
 
 
+class TestIpValidateLinkLocalDropOff(TestIpValidate):
+    """Verify 'ip-validate { link-local-drop off }'.
+
+    The link-local checks are the only ones a SONiC dataplane has a reason
+    to want disabled: 169.254.0.0/16 is legitimate traffic to a router that
+    has a link-local address configured. With the stanza the two checks are
+    suppressed and the packets forward normally. Default behaviour (drop) is
+    covered by TestIpValidate, whose remaining cases are inherited here and
+    re-run with the knob off to prove no other check is weakened."""
+
+    extra_vpp_config = ["ip-validate", "{", "link-local-drop", "off", "}"]
+
+    def test_src_ip_link_local(self):
+        """IPv4: SRC=169.254.1.1 -> forwarded when link-local-drop is off"""
+        counter = "/err/ip4-validate/source address is link-local"
+        before = self.statistics.get_err_counter(counter)
+
+        pkt = self.create_ipv4_packet(src_ip="169.254.1.1", dst_ip=None)
+        self.send_and_assert_forwarded(pkt)
+
+        self.assertEqual(self.statistics.get_err_counter(counter), before)
+
+    def test_dst_ip_link_local(self):
+        """IPv4: DST=169.254.1.1 -> not dropped when link-local-drop is off"""
+        counter = "/err/ip4-validate/destination address is link-local"
+        before = self.statistics.get_err_counter(counter)
+
+        pkt = self.create_ipv4_packet(src_ip="10.0.0.1", dst_ip="169.254.1.1")
+        self.send_and_assert_passed_validate(pkt, "ip4-validate")
+
+        self.assertEqual(self.statistics.get_err_counter(counter), before)
+
+
 if __name__ == "__main__":
     unittest.main(testRunner=VppTestRunner)

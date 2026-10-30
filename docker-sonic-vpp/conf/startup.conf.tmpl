@@ -308,6 +308,17 @@ plugins {
     # l2-vlan-filter off
 # }
 
+## ip_validate plugin feature selection.
+## link-local-drop: drop IPv4 packets whose source or destination is in
+## 169.254.0.0/16.
+##
+## Generated at runtime by vpp_init.sh from $IP_VALIDATE_CONFIG, which is given
+## as comma-separated key=value pairs -- IP_VALIDATE_CONFIG=link-local-drop=off
+## -- and which a platform sets in /etc/sonic/vpp/syncd_vpp_env.
+# ip-validate {
+    # link-local-drop off
+# }
+
 ## Statistics Segment
 # statseg {
     # socket-name <filename>, name of the stats segment socket
