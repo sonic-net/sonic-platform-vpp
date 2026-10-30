@@ -371,6 +371,27 @@ class TestSonicExtTrimDataplane(SonicExtTrimDataplaneBase):
         self.assertIn("trim-queue 6 size 256 dscp 48 SENT", trace)
         self.assertEqual(self.statistics.get_err_counter(counter), before + 1)
 
+    def test_drop_counter_is_attributed_once(self):
+        """A blocked trim queue counts each dropped packet exactly once."""
+        self.set_queue(queue=6, eligible=False)
+        counter = (
+            "/err/sonic-ext-trim-admission/"
+            "trimmed copies dropped (trim queue congested)"
+        )
+        for count in (1, 9, 64):
+            with self.subTest(packet_count=count):
+                before = self.vapi.sonic_ext_trim_counters_get()
+                before_error = self.statistics.get_err_counter(counter)
+                self.send_and_assert_no_replies(self.pg0, [self.packet()] * count)
+                after = self.vapi.sonic_ext_trim_counters_get()
+                self.assertEqual(after.trim_admit_fail - before.trim_admit_fail, count)
+                self.assertEqual(after.trim_drop - before.trim_drop, count)
+                self.assertEqual(after.trim_sent, before.trim_sent)
+                self.assertEqual(
+                    self.statistics.get_err_counter(counter) - before_error,
+                    count,
+                )
+
     def test_trim_independent_of_sideband_callback(self):
         """Trimming can enable, forward and delete while bufmon owns the hook."""
         self.set_queue(eligible=False)

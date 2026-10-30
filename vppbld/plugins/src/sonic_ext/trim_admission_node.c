@@ -252,7 +252,9 @@ VLIB_NODE_FN (sonic_ext_trim_admission_node)
 	outcome = SONIC_EXT_TRIM_ADMISSION_ERROR_ADMITTED;
 
     done0:
-      n_errors[outcome]++;
+      /* Drop outcomes are counted downstream using b->error. */
+      if (next0 != SONIC_EXT_TRIM_ADMISSION_NEXT_DROP)
+	n_errors[outcome]++;
       next[0] = (u16) next0;
 
       if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
