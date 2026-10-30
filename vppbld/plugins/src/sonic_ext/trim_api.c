@@ -20,7 +20,7 @@
  * the global trim policy, the DSCP->queue resolution table, and the
  * per-(port,queue) software admission parameters, and to read trim
  * counters back for SAI statistics.  Also hosts the small helpers shared
- * by the admission and trim action nodes (port-state lookup and the
+ * by the admission node and its trim helper (port-state lookup and the
  * token-bucket admission decision).
  */
 
@@ -42,7 +42,7 @@
 #include <vlibapi/api_helper_macros.h>
 
 /* ------------------------------------------------------------------ */
-/* Shared helpers (declared in sonic_ext.h, used by the trim nodes).   */
+/* Shared helpers (declared in sonic_ext.h).                           */
 /* ------------------------------------------------------------------ */
 
 sonic_ext_trim_port_t *
@@ -74,8 +74,9 @@ sonic_ext_trim_sw_if_add_del (vnet_main_t *vnm, u32 sw_if_index, u32 is_add)
   /* VPP removes the feature arc; discard our latch and buckets as well so a
    * recycled interface index starts with no trim configuration. */
   if (!is_add && sw_if_index < vec_len (sem->trim_ports))
-    clib_memset (&sem->trim_ports[sw_if_index], 0,
-		 sizeof (sem->trim_ports[sw_if_index]));
+    {
+      clib_memset (&sem->trim_ports[sw_if_index], 0, sizeof (sem->trim_ports[sw_if_index]));
+    }
 
   return 0;
 }
@@ -114,8 +115,7 @@ sonic_ext_trim_bucket_admit (vlib_main_t *vm, sonic_ext_trim_queue_t *q,
 int
 sonic_ext_trim_enable_disable (u32 sw_if_index, int enable)
 {
-  return vnet_feature_enable_disable ("interface-output",
-				      "sonic-ext-trim-admission", sw_if_index,
+  return vnet_feature_enable_disable ("interface-output", "sonic-ext-trim-admission", sw_if_index,
 				      enable, 0, 0);
 }
 
@@ -125,6 +125,7 @@ sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
 {
   sonic_ext_trim_port_t *port;
   sonic_ext_trim_queue_t *q;
+  sonic_ext_trim_queue_t saved_queue;
   int any_eligible = 0;
   int rv = 0;
   int i;
@@ -134,6 +135,7 @@ sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
 
   port = sonic_ext_trim_port_get (sw_if_index, 1 /* create */);
   q = &port->q[queue];
+  saved_queue = *q;
   q->eligible = eligible ? 1 : 0;
   q->rate_bytes_per_sec = rate_bytes_per_sec;
   q->capacity_bytes = capacity_bytes;
@@ -159,9 +161,11 @@ sonic_ext_trim_queue_program (u32 sw_if_index, u32 queue, int eligible,
       if (rv == 0)
 	port->feature_enabled = any_eligible ? 1 : 0;
       else
-	clib_warning (
-	  "sonic-ext trim: feature %s on sw_if_index %u failed (rv=%d)",
-	  any_eligible ? "enable" : "disable", sw_if_index, rv);
+	{
+	  *q = saved_queue;
+	  clib_warning ("sonic-ext trim: feature %s on sw_if_index %u failed (rv=%d)",
+			any_eligible ? "enable" : "disable", sw_if_index, rv);
+	}
     }
 
   return rv;

@@ -102,29 +102,6 @@ typedef struct
   u32 magic;
   u32 orig_rx_sw_if_index;
   u32 orig_vlan_tag;
-  /*
-   * Packet-trim per-buffer state, sharing the same opaque2->unused
-   * overlay as the capture cookie above.
-   *
-   *   orig_queue -- the SONiC egress queue the packet resolved to on
-   *     the admission-failure path.  The admission node writes it
-   *     immediately before diverting the buffer to sonic-ext-trim, and
-   *     the trim node reads it in the same graph dispatch, so it is
-   *     always freshly written before it is read -- it never depends on
-   *     opaque2 surviving (or being cleared on) a buffer recycle.
-   *
-   * NOTE: there is deliberately NO persistent "already trimmed" flag
-   * here.  opaque2 is NOT zeroed on buffer recycle, so a stale flag on
-   * a reused buffer would make a genuinely new packet read as
-   * "already trimmed" and wrongly bypass trimming.  Instead the trim
-   * node re-injects the truncated copy straight to
-   * "interface-output-arc-end" (past the admission feature), so a
-   * trimmed copy never re-enters admission and no one-shot guard is
-   * needed.  See trim_node.c / trim_admission_node.c.
-   */
-  u8 orig_queue;  /* 0 .. SONIC_EXT_TRIM_MAX_QUEUES-1 */
-  u8 trim_pad0;
-  u16 trim_pad1;
   u32 mirror_sw_if_index; /* deferred egress mirror dst; ~0 = none */
 } sonic_ext_buffer_opaque_t;
 
@@ -141,7 +118,7 @@ sonic_ext_buffer (vlib_buffer_t *b)
 /*
  * ------------------------------------------------------------------
  * Packet trimming (SAI DROP_AND_TRIM) -- software egress admission +
- * trim action.  See trim_admission_node.c, trim_node.c, trim_api.c.
+ * trim action.  See trim_admission_node.c and trim_api.c.
  *
  * VPP has no native egress QoS / per-queue admission substrate, so the
  * SONiC scheduler's PIR is a dataplane no-op today.  The trim feature
@@ -500,10 +477,9 @@ int sonic_ext_phy_is_bvi (u32 phy_sw_if_index);
  * port-channel aggregates and to funnel tap-less bonded sub-interface
  * punts to the bond master host tap. */
 int sonic_ext_phy_is_bond (u32 phy_sw_if_index);
-/* ---- packet trimming (trim_admission_node.c / trim_node.c / trim_api.c) ---- */
+/* ---- packet trimming (trim_admission_node.c / trim_api.c) ---- */
 
 extern vlib_node_registration_t sonic_ext_trim_admission_node;
-extern vlib_node_registration_t sonic_ext_trim_node;
 
 /* Enable/disable the sonic-ext-trim-admission feature on an egress
  * interface-output arc.  Driven from the binary API when a port gains or
@@ -552,11 +528,10 @@ sonic_ext_trim_egress_port_sw_if_index (vlib_buffer_t *b)
 
 /*
  * ------------------------------------------------------------------
- * Shared L3 classification / DSCP rewrite inlines used by both the
- * admission node (classify the packet to its egress queue) and the
- * trim action node (rewrite the trimmed copy's DSCP).
+ * L3 classification / DSCP rewrite inlines used by the admission node
+ * and its trim helper.
  *
- * Both nodes run on the interface-output arc, where the buffer's
+ * The node runs on the interface-output arc, where the buffer's
  * current data is positioned at the start of the (rewritten) L2
  * ethernet header for normal transit/routed traffic.  We parse the
  * ethertype, skip up to two VLAN tags, and locate the IPv4/IPv6
