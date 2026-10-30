@@ -72,6 +72,10 @@ class TestSonicExtTrimSideband(SonicExtTrimBase):
         cls.accessor_tempdir = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.accessor_tempdir.cleanup)
         cls.binary = str(Path(cls.accessor_tempdir.name) / "sideband-accessors")
+        install_dir = Path(config.vpp_install_dir) / "vpp"
+        vppinfra = next(install_dir.glob("lib*/**/libvppinfra.so"), None)
+        if vppinfra is None:
+            raise FileNotFoundError(f"libvppinfra.so not found under {install_dir}")
         subprocess.check_call(
             shlex.split(os.environ.get("CC", "cc"))
             + [
@@ -79,15 +83,12 @@ class TestSonicExtTrimSideband(SonicExtTrimBase):
                 "-Wall",
                 "-Werror",
                 "-I" + str(Path(config.vpp_ws_dir) / "src" / "plugins"),
-                "-I" + str(Path(config.vpp_install_dir) / "vpp" / "include"),
+                "-I" + str(install_dir / "include"),
                 str(Path(__file__).with_name("test_sonic_ext_vnet_buf.c")),
                 "-o",
                 cls.binary,
-                "-L" + str(Path(config.vpp_install_dir) / "vpp" / "lib"),
-                "-L" + str(Path(config.vpp_install_dir) / "vpp" / "lib64"),
-                "-Wl,-rpath," + str(Path(config.vpp_install_dir) / "vpp" / "lib"),
-                "-Wl,-rpath," + str(Path(config.vpp_install_dir) / "vpp" / "lib64"),
-                "-lvppinfra",
+                "-Wl,-rpath," + str(vppinfra.parent),
+                str(vppinfra),
             ]
         )
 
