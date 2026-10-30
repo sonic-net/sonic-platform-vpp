@@ -118,7 +118,7 @@ sonic_ext_buffer (vlib_buffer_t *b)
 /*
  * ------------------------------------------------------------------
  * Packet trimming (SAI DROP_AND_TRIM) -- software egress admission +
- * trim action.  See trim_admission_node.c, trim_node.c, trim_api.c.
+ * trim action.  See trim_admission_node.c and trim_api.c.
  *
  * VPP has no native egress QoS / per-queue admission substrate, so the
  * SONiC scheduler's PIR is a dataplane no-op today.  The trim feature
@@ -477,10 +477,9 @@ int sonic_ext_phy_is_bvi (u32 phy_sw_if_index);
  * port-channel aggregates and to funnel tap-less bonded sub-interface
  * punts to the bond master host tap. */
 int sonic_ext_phy_is_bond (u32 phy_sw_if_index);
-/* ---- packet trimming (trim_admission_node.c / trim_node.c / trim_api.c) ---- */
+/* ---- packet trimming (trim_admission_node.c / trim_api.c) ---- */
 
 extern vlib_node_registration_t sonic_ext_trim_admission_node;
-extern vlib_node_registration_t sonic_ext_trim_node;
 
 /* Enable/disable the sonic-ext-trim-admission feature on an egress
  * interface-output arc.  Driven from the binary API when a port gains or
@@ -529,11 +528,10 @@ sonic_ext_trim_egress_port_sw_if_index (vlib_buffer_t *b)
 
 /*
  * ------------------------------------------------------------------
- * Shared L3 classification / DSCP rewrite inlines used by both the
- * admission node (classify the packet to its egress queue) and the
- * trim action node (rewrite the trimmed copy's DSCP).
+ * L3 classification / DSCP rewrite inlines used by the admission node
+ * and its trim helper.
  *
- * Both nodes run on the interface-output arc, where the buffer's
+ * The node runs on the interface-output arc, where the buffer's
  * current data is positioned at the start of the (rewritten) L2
  * ethernet header for normal transit/routed traffic.  We parse the
  * ethertype, skip up to two VLAN tags, and locate the IPv4/IPv6

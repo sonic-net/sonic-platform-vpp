@@ -59,40 +59,20 @@ first_claim (void)
 }
 
 static int
-shared_claim (void)
+repeated_claim (void)
 {
   sonic_ext_vnet_buf_t *sb;
 
-  for (int trim_first = 0; trim_first < 2; ++trim_first)
-    {
-      setup ();
-      if (trim_first)
-	{
-	  sb = sonic_ext_vnet_buf_claim (&vm, &buffers[0], SONIC_EXT_VNET_BUF_TRIM);
-	  sb->trim_flags = SONIC_EXT_TRIM_BUF_F_TRIMMED;
-	  sonic_ext_vnet_buf_claim (&vm, &buffers[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
-	  CHECK (sb->trim_flags == SONIC_EXT_TRIM_BUF_F_TRIMMED);
-	  sb->pbh_lag_hash = 0x12345678;
-	}
-      else
-	{
-	  sb = sonic_ext_vnet_buf_claim (&vm, &buffers[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
-	  sb->pbh_lag_hash = 0x12345678;
-	  sonic_ext_vnet_buf_claim (&vm, &buffers[0], SONIC_EXT_VNET_BUF_TRIM);
-	  CHECK (sb->pbh_lag_hash == 0x12345678);
-	  sb->trim_flags = SONIC_EXT_TRIM_BUF_F_TRIMMED;
-	}
-      CHECK (sonic_ext_vnet_buf_find (&vm, &buffers[0], SONIC_EXT_VNET_BUF_TRIM) == sb);
-      sb->trim_flags = 0;
-      sonic_ext_vnet_buf_release (sb, SONIC_EXT_VNET_BUF_TRIM);
-      CHECK (sonic_ext_vnet_buf_find (&vm, &buffers[0], SONIC_EXT_VNET_BUF_TRIM) == 0);
-      CHECK (sonic_ext_vnet_buf_find (&vm, &buffers[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH) == sb);
-      sonic_ext_vnet_buf_claim (&vm, &buffers[0], SONIC_EXT_VNET_BUF_TRIM);
-      CHECK (sb->trim_flags == 0);
-      sonic_ext_vnet_buf_release (sb, SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
-      CHECK (sonic_ext_vnet_buf_find (&vm, &buffers[0], SONIC_EXT_VNET_BUF_TRIM) == sb);
-      CHECK (buffers[0].flags & SONIC_EXT_BUFFER_F_VNET_BUF);
-    }
+  sb = sonic_ext_vnet_buf_claim (&vm, &buffers[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
+  sb->pbh_lag_hash = 0x12345678;
+  CHECK (sonic_ext_vnet_buf_claim (&vm, &buffers[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH) == sb);
+  CHECK (sb->pbh_lag_hash == 0x12345678);
+  CHECK (sonic_ext_vnet_buf_find (&vm, &buffers[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH) == sb);
+  sonic_ext_vnet_buf_release (sb, SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
+  CHECK (sonic_ext_vnet_buf_find (&vm, &buffers[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH) == 0);
+  CHECK (buffers[0].flags & SONIC_EXT_BUFFER_F_VNET_BUF);
+  sonic_ext_vnet_buf_claim (&vm, &buffers[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
+  CHECK (sb->pbh_lag_hash == 0x12345678);
   return 0;
 }
 
@@ -123,8 +103,8 @@ main (int argc, char **argv)
     return 2;
   if (strcmp (argv[1], "first-claim") == 0)
     return first_claim ();
-  if (strcmp (argv[1], "shared-claim") == 0)
-    return shared_claim ();
+  if (strcmp (argv[1], "repeated-claim") == 0)
+    return repeated_claim ();
   if (strcmp (argv[1], "unclaimed-clone") == 0)
     return unclaimed_and_clone ();
   return 2;

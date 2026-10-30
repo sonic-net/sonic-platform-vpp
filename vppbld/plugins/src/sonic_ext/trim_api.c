@@ -20,12 +20,11 @@
  * the global trim policy, the DSCP->queue resolution table, and the
  * per-(port,queue) software admission parameters, and to read trim
  * counters back for SAI statistics.  Also hosts the small helpers shared
- * by the admission and trim action nodes (port-state lookup and the
+ * by the admission node and its trim helper (port-state lookup and the
  * token-bucket admission decision).
  */
 
 #include <sonic_ext/sonic_ext.h>
-#include <sonic_ext/sonic_ext_vnet_buf.h>
 
 #include <vlib/vlib.h>
 #include <vnet/vnet.h>
@@ -43,7 +42,7 @@
 #include <vlibapi/api_helper_macros.h>
 
 /* ------------------------------------------------------------------ */
-/* Shared helpers (declared in sonic_ext.h, used by the trim nodes).   */
+/* Shared helpers (declared in sonic_ext.h).                           */
 /* ------------------------------------------------------------------ */
 
 sonic_ext_trim_port_t *
@@ -76,8 +75,6 @@ sonic_ext_trim_sw_if_add_del (vnet_main_t *vnm, u32 sw_if_index, u32 is_add)
    * recycled interface index starts with no trim configuration. */
   if (!is_add && sw_if_index < vec_len (sem->trim_ports))
     {
-      if (sem->trim_ports[sw_if_index].feature_enabled)
-	sonic_ext_vnet_buf_unref (vlib_get_main ());
       clib_memset (&sem->trim_ports[sw_if_index], 0, sizeof (sem->trim_ports[sw_if_index]));
     }
 
@@ -118,17 +115,8 @@ sonic_ext_trim_bucket_admit (vlib_main_t *vm, sonic_ext_trim_queue_t *q,
 int
 sonic_ext_trim_enable_disable (u32 sw_if_index, int enable)
 {
-  int rv;
-
-  if (enable && sonic_ext_vnet_buf_ref (vlib_get_main ()))
-    return VNET_API_ERROR_UNSPECIFIED;
-
-  rv = vnet_feature_enable_disable ("interface-output", "sonic-ext-trim-admission", sw_if_index,
-				    enable, 0, 0);
-  if ((enable && rv) || (!enable && !rv))
-    sonic_ext_vnet_buf_unref (vlib_get_main ());
-
-  return rv;
+  return vnet_feature_enable_disable ("interface-output", "sonic-ext-trim-admission", sw_if_index,
+				      enable, 0, 0);
 }
 
 int

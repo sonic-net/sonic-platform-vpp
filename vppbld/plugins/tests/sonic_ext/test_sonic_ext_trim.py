@@ -96,9 +96,9 @@ class TestSonicExtTrimSideband(SonicExtTrimBase):
         """A new incarnation cannot retain stale validity or payload."""
         subprocess.check_call([self.binary, "first-claim"])
 
-    def test_later_claim_and_release_preserve_other_client(self):
-        """One client cannot invalidate another client's live field."""
-        subprocess.check_call([self.binary, "shared-claim"])
+    def test_repeated_claim_and_release(self):
+        """Repeated claims preserve the PBH hash; release hides the field."""
+        subprocess.check_call([self.binary, "repeated-claim"])
 
     def test_unclaimed_and_clone_slots_hide_stale_fields(self):
         """Unclaimed buffers and fresh clone slots expose no source fields."""
@@ -285,7 +285,7 @@ class TestSonicExtTrimDataplane(SonicExtTrimDataplaneBase):
     """sonic-ext trim dataplane regressions"""
 
     def test_deferred_egress_mirror(self):
-        """Deferred mirroring stays one-shot across prefetch frame boundaries."""
+        """Downstream mirroring runs once after trimming or policy bypass."""
         acl = self.vapi.acl_add_replace(
             acl_index=0xFFFFFFFF,
             tag="trim-egress-mirror",
@@ -329,6 +329,7 @@ class TestSonicExtTrimDataplane(SonicExtTrimDataplaneBase):
             feature_name="sonic-ext-egress-mirror",
             enable=False,
         )
+
         for count in (8, 9, 64):
             for enabled in (True, False, True):
                 with self.subTest(packet_count=count, trim_enabled=enabled):
@@ -356,34 +357,43 @@ class TestSonicExtTrimDataplane(SonicExtTrimDataplaneBase):
                     )
                     self.assertEqual(after.trim_sent - before.trim_sent, expected)
 
-    def test_sideband_enable_failure_and_interface_delete(self):
-        """Callback contention rejects enable atomically; deletion releases it."""
-        self.set_queue(eligible=False)
-        interface = self.vapi.create_loopback().sw_if_index
-        try:
-            self.set_queue(sw_if_index=interface)
-        finally:
-            self.vapi.delete_loopback(sw_if_index=interface)
-
-        self.vapi.cli("set buffer traces on")
-        try:
-            before = self.vapi.cli("show sonic-ext trim")
-            with self.vapi.assert_negative_api_retval():
-                self.set_queue(rate=17, capacity=1024)
-            self.assertEqual(before, self.vapi.cli("show sonic-ext trim"))
-            self.assertNotIn(
-                "sonic-ext-trim-admission",
-                self.vapi.cli(f"show interface features {self.pg1.name}"),
-            )
-        finally:
-            self.vapi.cli("set buffer traces off")
-        self.set_queue()
+    def test_single_pass_trace_and_counters(self):
+        """One admission trace carries the trim outcome and both counters."""
+        counter = "/err/sonic-ext-trim-admission/trimmed copies transmitted"
+        before = self.statistics.get_err_counter(counter)
+        self.vapi.cli("clear trace")
+        self.vapi.cli("trace add pg-input 1")
         self.assert_trimmed(
             self.send_and_expect(self.pg0, [self.packet()], self.pg1)[0]
         )
+        trace = self.vapi.cli("show trace")
+        self.assertEqual(trace.count("SONIC-EXT-TRIM-ADMISSION:"), 1)
+        self.assertIn("trim-queue 6 size 256 dscp 48 SENT", trace)
+        self.assertEqual(self.statistics.get_err_counter(counter), before + 1)
 
-    def test_sideband_shared_with_pbh(self):
-        """PBH and trimming independently retain and release the sideband."""
+    def test_trim_independent_of_sideband_callback(self):
+        """Trimming can enable, forward and delete while bufmon owns the hook."""
+        self.set_queue(eligible=False)
+        self.vapi.cli("set buffer traces on")
+        try:
+            self.set_queue()
+            self.assertIn(
+                "sonic-ext-trim-admission",
+                self.vapi.cli(f"show interface features {self.pg1.name}"),
+            )
+            interface = self.vapi.create_loopback().sw_if_index
+            try:
+                self.set_queue(sw_if_index=interface)
+            finally:
+                self.vapi.delete_loopback(sw_if_index=interface)
+            self.assert_trimmed(
+                self.send_and_expect(self.pg0, [self.packet()], self.pg1)[0]
+            )
+        finally:
+            self.vapi.cli("set buffer traces off")
+
+    def test_pbh_sideband_independent_of_trim(self):
+        """Only PBH retains the sideband across trim enable/disable."""
         profile = self.vapi.sonic_ext_pbh_profile_add_del(
             is_add=True,
             profile_index=0xFFFFFFFF,
@@ -409,6 +419,8 @@ class TestSonicExtTrimDataplane(SonicExtTrimDataplaneBase):
             ).table_index
             self.set_queue(eligible=False)
             self.set_queue()
+            with self.assertRaises(CliFailedCommandError):
+                self.vapi.cli("set buffer traces on")
             self.vapi.sonic_ext_pbh_table_del(table_index=table)
             table = None
             self.assert_trimmed(
@@ -420,10 +432,8 @@ class TestSonicExtTrimDataplane(SonicExtTrimDataplaneBase):
             self.vapi.sonic_ext_pbh_profile_add_del(
                 is_add=False, profile_index=profile, n_fields=0, fields=[]
             )
-        self.set_queue(eligible=False)
         self.vapi.cli("set buffer traces on")
         self.vapi.cli("set buffer traces off")
-        self.set_queue()
 
     def test_interface_index_reuse(self):
         """a reused interface index has clean buckets and can enable trim"""
@@ -504,19 +514,23 @@ class TestSonicExtTrimDataplane(SonicExtTrimDataplaneBase):
         self.assert_trimmed(rx[0], size=3000)
 
     def test_shared_multicast_chain(self):
-        """trimming a replicated jumbo never shortens its untrimmed sibling"""
+        """Private trimmed chains retain the cursor for downstream features."""
         # Keep the sibling in the output graph until trimming runs; otherwise
         # pg2 can serialize it and release its shared references first.
-        for feature in ("sonic-ext-trim-admission", "sonic-ext-egress-mirror"):
+        for interface, feature in (
+            (self.pg1, "sonic-ext-egress-mirror"),
+            (self.pg2, "sonic-ext-trim-admission"),
+            (self.pg2, "sonic-ext-egress-mirror"),
+        ):
             self.vapi.feature_enable_disable(
-                sw_if_index=self.pg2.sw_if_index,
+                sw_if_index=interface.sw_if_index,
                 arc_name="interface-output",
                 feature_name=feature,
                 enable=True,
             )
             self.addCleanup(
                 self.vapi.feature_enable_disable,
-                sw_if_index=self.pg2.sw_if_index,
+                sw_if_index=interface.sw_if_index,
                 arc_name="interface-output",
                 feature_name=feature,
                 enable=False,

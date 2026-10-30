@@ -94,20 +94,16 @@
 typedef enum
 {
   SONIC_EXT_VNET_BUF_PBH_LAG_HASH = 1 << 0,
-  SONIC_EXT_VNET_BUF_TRIM = 1 << 1,
 } sonic_ext_vnet_buf_field_t;
-
-#define SONIC_EXT_TRIM_BUF_F_TRIMMED (1 << 0)
 
 typedef struct
 {
   u32 pbh_lag_hash; /* SONIC_EXT_VNET_BUF_PBH_LAG_HASH */
-  u8 valid;            /* bitmap of sonic_ext_vnet_buf_field_t */
-  u8 trim_flags;       /* SONIC_EXT_VNET_BUF_TRIM */
+  u8 valid;	    /* bitmap of sonic_ext_vnet_buf_field_t */
   /* Add feature fields here, and a bit above for each.  The table costs one
    * struct per buffer position, so widening it is linear in the buffer
    * count. */
-} sonic_ext_vnet_buf_t; /* 8 bytes with padding; 2 bytes spare */
+} sonic_ext_vnet_buf_t; /* 8 bytes with padding; 3 bytes spare */
 
 STATIC_ASSERT_SIZEOF (sonic_ext_vnet_buf_t, 8);
 
