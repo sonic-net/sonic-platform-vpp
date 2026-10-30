@@ -96,10 +96,10 @@ autoreply define sonic_ext_mirror_encap_fixup_enable_disable
 /** \brief Ask whether a sonic-ext feature is enabled in startup.conf.
 
     For the features saivpp wires itself -- ip2me, l2-trap-fixup,
-    l2-vlan-filter -- VPP only stores the operator's choice; it has no hook
-    of its own to skip.  saivpp calls this before deciding to install the
-    ACL hook or the classify sessions, so the decision is never made rather
-    than made and then refused.
+    l2-trap-learn, l2-vlan-filter -- VPP only stores the operator's choice; it
+    has no hook of its own to skip.  saivpp calls this before deciding to
+    install the ACL hook or the classify sessions, so the decision is never
+    made rather than made and then refused.
 
     An unrecognised name replies disabled: the sonic-ext plugin has no such feature,
     so there is nothing for saivpp to wire.
