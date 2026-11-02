@@ -54,17 +54,19 @@
  *      programmed, so no extra per-interface plumbing is needed.
  *   3. If VID == bd_id, the frame is tagged with the member's own
  *      access VLAN: pop the 4-byte tag (mirroring l2_vtr_process's
- *      POP_1, so every L2 metadata field stays consistent), then continue
- *      the remaining L2 features, including the ingress ACL. An inner
- *      customer VLAN tag remains part of the payload and is preserved.
+ *      POP_1, so every L2 metadata field stays consistent). If a customer
+ *      VLAN tag remains, continue the remaining L2 features, including
+ *      the ingress ACL. Otherwise restart l2-input so the exposed
+ *      protocol reaches the existing control-packet classifiers.
  *   4. Otherwise the VID is not configured on this access member:
  *      send the frame to "error-drop".
  *
- * Do not restart l2-input: it resets the feature bitmap and would classify
- * a QinQ packet's remaining customer tag as a second access VLAN. Continue
- * after INPUT_CLASSIFY instead, using the metadata and remaining feature
- * bitmap from the first l2-input visit. Thus only the original outer VID
- * is checked, and the subsequent ACL/learn/flood path still executes.
+ * A QinQ packet must not restart l2-input: it resets the feature bitmap
+ * and would classify the remaining customer tag as a second access VLAN.
+ * Continue after INPUT_CLASSIFY for that case, using the original bridge
+ * metadata and remaining feature bitmap. A single-tag frame instead needs
+ * the existing l2-input re-entry: after POP_1, DHCP, ARP and IPv6 multicast
+ * can reach their untagged classifier slots before ACL/learn/flood.
  *
  * Why a custom node (and not a pure classifier).  A classify hit is
  * terminal (it cannot "continue" a still-tagged frame down the L2 arc
@@ -116,6 +118,7 @@ static char *sonic_ext_l2_vlan_filter_error_strings[] = {
 typedef enum
 {
   SONIC_EXT_L2_VLAN_FILTER_NEXT_DROP,
+  SONIC_EXT_L2_VLAN_FILTER_NEXT_L2_INPUT,
   SONIC_EXT_L2_VLAN_FILTER_N_NEXT,
 } sonic_ext_l2_vlan_filter_next_t;
 
@@ -183,12 +186,16 @@ VLIB_NODE_FN (sonic_ext_l2_vlan_filter_node)
 
       if (vid0 == bd_id0)
 	{
-          /* Strip only the validated access tag. Keep a customer tag and
-           * the original bridge metadata, then resume after classify. */
+	  /* Strip only the validated access tag. QinQ must keep its
+	   * customer tag; a newly exposed protocol must be classified. */
 	  sonic_ext_l2_vlan_filter_pop_one_tag (b[0]);
-          next[0] = vnet_l2_feature_next (
-            b[0], sonic_ext_main.l2_vlan_filter_feat_next,
-            L2INPUT_FEAT_INPUT_CLASSIFY);
+	  e0 = (ethernet_header_t *) vlib_buffer_get_current (b[0]);
+	  if (ethernet_frame_is_tagged (clib_net_to_host_u16 (e0->type)))
+	    next[0] = vnet_l2_feature_next (
+	      b[0], sonic_ext_main.l2_vlan_filter_feat_next,
+	      L2INPUT_FEAT_INPUT_CLASSIFY);
+	  else
+	    next[0] = SONIC_EXT_L2_VLAN_FILTER_NEXT_L2_INPUT;
 	  n_accepted++;
 	  action0 = 0;
 	}
@@ -247,6 +254,7 @@ VLIB_REGISTER_NODE (sonic_ext_l2_vlan_filter_node) = {
   .n_next_nodes = SONIC_EXT_L2_VLAN_FILTER_N_NEXT,
   .next_nodes = {
     [SONIC_EXT_L2_VLAN_FILTER_NEXT_DROP] = "error-drop",
+    [SONIC_EXT_L2_VLAN_FILTER_NEXT_L2_INPUT] = "l2-input",
   },
 };
 
