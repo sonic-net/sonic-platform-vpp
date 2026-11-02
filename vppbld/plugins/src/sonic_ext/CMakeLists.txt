@@ -42,7 +42,6 @@ add_vpp_plugin(sonic_ext
   ip4_loopback_node.c
   ip6_loopback_node.c
   trim_admission_node.c
-  trim_node.c
   trim_api.c
   trim_cli.c
 
