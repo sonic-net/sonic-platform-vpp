@@ -56,6 +56,7 @@ class SonicExtAllFeaturesBase(VppTestCase):
         "trim": "vpp",
         "ip2me": "saivpp",
         "l2-trap-fixup": "saivpp",
+        "l2-trap-learn": "saivpp",
         "l2-vlan-filter": "saivpp",
         "pbh": "saivpp",
         "iface-loopback": "saivpp",
