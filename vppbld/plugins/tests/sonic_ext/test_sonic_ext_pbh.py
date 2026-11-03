@@ -68,6 +68,9 @@ from vpp_qemu_utils import create_namespace, delete_all_namespaces, set_interfac
 
 NO_INDEX = 0xFFFFFFFF
 
+# VNET_API_ERROR_FEATURE_DISABLED -- vnet/error.h.  No VppEnum for these either.
+FEATURE_DISABLED = -30
+
 # sonic_ext_pbh_hash_field_id_t -- pbh.h.  The .api carries a bare u8, so
 # there is no VppEnum for these; the ordinals have to be mirrored here.
 HF_INNER_IP_PROTOCOL = 0
@@ -253,6 +256,8 @@ class SonicExtPbhBase(VppTestCase):
     # Subclass knobs: which actions the rules carry.
     WANT_ECMP = True
     WANT_LAG = True
+    # False for a class that starts VPP with pbh off, which has no PBH to set up.
+    WANT_PBH = True
 
     #
     # netns plumbing -- the namespace has to exist before VPP starts
@@ -297,6 +302,9 @@ class SonicExtPbhBase(VppTestCase):
         self._setup_bridge()
         self._setup_bond()
         self._setup_lcp()
+
+        if not self.WANT_PBH:
+            return
 
         self.assertTrue(
             self.vapi.sonic_ext_feature_get(feature="pbh").enabled,
@@ -1613,6 +1621,35 @@ class TestSonicExtPbhApi(SonicExtPbhBase):
         self.assertIn("hits", self.vapi.cli("show sonic-ext pbh"))
         with self.assertRaisesRegex(CliFailedCommandError, "unknown input `bogus'"):
             self.vapi.cli("show sonic-ext pbh bogus")
+
+
+class TestSonicExtPbhStartupOff(SonicExtPbhBase):
+    """SONiC-ext PBH off in startup.conf"""
+
+    extra_vpp_config = ["sonic-ext", "{", "pbh", "off", "}"]
+    WANT_PBH = False
+
+    def test_startup_off(self):
+        """pbh off at startup refuses every profile, table and attach"""
+        self.assertFalse(self.vapi.sonic_ext_feature_get(feature="pbh").enabled)
+
+        # FEATURE_DISABLED in particular: failing for any other reason, a bad
+        # table index say, would not show that the toggle refused the call.
+        with self.vapi.assert_known_api_retval(retvals=[FEATURE_DISABLED]):
+            self._profile_add_del(
+                is_add=True, profile_index=NO_INDEX, fields=self._addr_fields()
+            )
+            self._table_add_replace(table_index=NO_INDEX, name="pbh_table")
+            self.vapi.sonic_ext_pbh_interface_attach_detach(
+                sw_if_index=self.pg0.sw_if_index, table_index=0, is_attach=True
+            )
+
+        self.assertIn(
+            "pbh is disabled in startup.conf", self.vapi.cli("show sonic-ext pbh")
+        )
+        out = self.vapi.cli("show interface features %s" % self.bvi.name)
+        self.assertNotIn(PBH_NODE4, out)
+        self.assertNotIn(PBH_NODE6, out)
 
 
 if __name__ == "__main__":

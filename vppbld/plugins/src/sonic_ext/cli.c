@@ -390,6 +390,7 @@ show_sonic_ext_command_fn (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (vm, "  glean redirect    : %llu", sem->glean_redirects);
   vlib_cli_output (vm, "  host-xc direct    : %llu", sem->host_xc_direct);
   vlib_cli_output (vm, "  l2 trap fixups    : %llu", sem->l2_trap_fixups);
+  vlib_cli_output (vm, "  l2 trap learns    : %llu", sem->l2_trap_learns);
   vlib_cli_output (vm, "  ip2me hits        : %llu", sem->ip2me_hits);
   vlib_cli_output (vm, "  ttl-punt enabled  : %s",
 		   sem->copp_ttl_punt_enabled ? "on" : "off");

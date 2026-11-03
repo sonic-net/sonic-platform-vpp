@@ -661,8 +661,9 @@ unformat_sonic_ext_onoff (unformat_input_t *input, va_list *args)
  * sonic_ext_apply_config() does the wiring.  Assigning rather than acting is
  * also what lets a second stanza merge with the first, per keyword.
  *
- * ip2me, l2-trap-fixup and l2-vlan-filter are stored but never acted on here:
- * saivpp wires those, and asks for them over sonic_ext_feature_get().
+ * ip2me, l2-trap-fixup, l2-trap-learn and l2-vlan-filter are stored but never
+ * acted on here: saivpp wires those, and asks for them over
+ * sonic_ext_feature_get().
  */
 static clib_error_t *
 sonic_ext_config (vlib_main_t *vm, unformat_input_t *input)
