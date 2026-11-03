@@ -92,3 +92,13 @@
 #     (saivpp's SAI NAT), hosts without a mapping are routed untranslated,
 #     as on an ASIC. No change with forwarding disabled or with a pool.
 0026-nat-forward-unmatched-output-feature-flows-without-a-pool.patch
+# 27. ipip: 'punt-no-tunnel' startup config option. ip[46]_register_protocol()
+#     is global, so once any ipip tunnel exists ipip[46]-input also steals
+#     locally destined IP_IN_IP/IPV6/MPLS_IN_IP packets that match no tunnel
+#     and drops them with "no tunnel". A HW dataplane traps those to the CPU
+#     as ordinary IP2ME. With the knob set, the packet is rewound over the
+#     outer header and sent to the ip4-punt/ip6-punt arc so linux-cp hands it
+#     to the host. Default off -> stock behaviour and upstream tests
+#     unchanged. The 6RD security_check "no tunnel" stays a drop.
+#     Includes both-halves tests in test_ipip.py.
+0027-ipip-add-punt-no-tunnel-startup-config-option.patch
