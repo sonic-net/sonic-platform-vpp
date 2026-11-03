@@ -160,6 +160,24 @@ ip6_validate_x1 (vlib_buffer_t *b, u16 *next)
   return IP6_VALIDATE_ERROR_VALID;
 }
 
+/*
+ * Dropped buffers carry their reason in b->error, which the terminal drop
+ * node counts against this node's error counter and which sonic-ext uses to
+ * attribute the drop to a SAI drop reason. Only VALID is left for the node to
+ * count itself; counting drops here as well would count them twice.
+ */
+static_always_inline void
+ip6_validate_one (vlib_node_runtime_t *node, vlib_buffer_t *b, u16 *next,
+		  u32 *error_counts)
+{
+  ip6_validate_error_t err = ip6_validate_x1 (b, next);
+
+  if (PREDICT_TRUE (err == IP6_VALIDATE_ERROR_VALID))
+    error_counts[err]++;
+  else
+    b->error = node->errors[err];
+}
+
 static_always_inline void
 ip6_validate_trace_one (vlib_main_t *vm, vlib_node_runtime_t *node,
 			      vlib_buffer_t *b, u16 next)
@@ -209,10 +227,10 @@ VLIB_NODE_FN (ip6_validate_node)
 	  vlib_prefetch_buffer_data (b[7], LOAD);
 	}
 
-      error_counts[ip6_validate_x1 (b[0], &next[0])]++;
-      error_counts[ip6_validate_x1 (b[1], &next[1])]++;
-      error_counts[ip6_validate_x1 (b[2], &next[2])]++;
-      error_counts[ip6_validate_x1 (b[3], &next[3])]++;
+      ip6_validate_one (node, b[0], &next[0], error_counts);
+      ip6_validate_one (node, b[1], &next[1], error_counts);
+      ip6_validate_one (node, b[2], &next[2], error_counts);
+      ip6_validate_one (node, b[3], &next[3], error_counts);
 
       if (PREDICT_FALSE (node->flags & VLIB_NODE_FLAG_TRACE))
 	{
@@ -230,7 +248,7 @@ VLIB_NODE_FN (ip6_validate_node)
 
   while (n_left_from)
     {
-      error_counts[ip6_validate_x1 (b[0], &next[0])]++;
+      ip6_validate_one (node, b[0], &next[0], error_counts);
 
       if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
 			 (b[0]->flags & VLIB_BUFFER_IS_TRACED)))
