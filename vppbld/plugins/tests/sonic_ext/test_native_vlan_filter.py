@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Live native-VLAN/QinQ regressions using an isolated packet-generator VPP.
+"""Native-VLAN/QinQ regressions for VPP's test framework.
 
-Run this file with the built VPP libraries on LD_LIBRARY_PATH, Scapy and
-src/vpp-api/python on PYTHONPATH. VPP_BINARY, VPP_PLUGIN_PATH and VPP_API_DIR
-can override the native build paths. No physical interfaces or network
-namespaces are used; sockets and PCAPs live in a temporary directory.
-Bytecode writes are disabled to keep imported workspace sources untouched
-when the runner uses a different container UID from the build user.
+The platform's ``make ci-test`` discovers this module through EXTERN_TESTS.
+For a focused run from vppbld/repo, use ``make test TEST=native_vlan_filter
+EXTERN_TESTS="$(realpath ../plugins/tests)"``. The framework manages VPP,
+API connections, CPU allocation and retained logs/PCAPs. Only
+packet-generator interfaces and a simulated LCP host endpoint are used;
+no kernel TAP or namespace is created.
 """
 
 import sys
@@ -16,10 +16,10 @@ sys.dont_write_bytecode = True
 
 import os
 from pathlib import Path
-import subprocess
-import tempfile
 import time
 import unittest
+
+from asfframework import VppAsfTestCase, VppTestRunner
 
 from scapy.layers.inet import IP, UDP
 from scapy.layers.dhcp import BOOTP, DHCP
@@ -27,80 +27,65 @@ from scapy.layers.inet6 import IPv6, ICMPv6ND_NS
 from scapy.layers.l2 import ARP, Dot1Q, Ether
 from scapy.packet import Raw
 from scapy.utils import rdpcap, wrpcap
-from vpp_papi import VPPApiClient
-from vpp_papi.vpp_stats import VPPStats
 
 
-BUILD = Path(__file__).resolve().parents[3] / "repo/build-root/build-vpp-native/vpp"
 NO_INDEX = 0xFFFFFFFF
 VLAN = 200
 ACCEPTED = "/err/sonic-ext-l2-vlan-filter/tagged frame VID matched access VLAN; tag popped and bridged"
 BAD_VID = "/err/sonic-ext-l2-vlan-filter/tagged frame VID not configured on access member; dropped"
 
 
-class NativeVlanFilterBase(unittest.TestCase):
-    extra_plugins = ""
+class NativeVlanFilterBase(VppAsfTestCase):
+    """Framework-managed VPP with native and tagged VLAN members."""
+
+    vpp_worker_count = 0
     pg_count = 3
+    extra_vpp_plugin_config = [
+        "plugin", "default", "{", "disable", "}",
+        "plugin", "acl_plugin.so", "{", "enable", "}",
+        "plugin", "linux_cp_plugin.so", "{", "enable", "}",
+        "plugin", "sonic_ext_plugin.so", "{", "enable", "}",
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        # run_tests.py assigns suite CPUs. Also support a direct invocation
+        # with VppTestRunner, which does not pass through that scheduler.
+        if not cls.cpus:
+            cls.assign_cores([[min(os.sched_getaffinity(0))]])
+        super().setUpClass()
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="sonic-native-vlan-")
-        self.path = Path(self.temp.name)
+        super().setUp()
+        self.api = self.vapi.papi
+        self.stats = self.statistics
+        self.path = Path(self.tempdir) / self._testMethodName
+        self.path.mkdir(exist_ok=True)
         self.sequence = 0
-        plugins = os.environ.get(
-            "VPP_PLUGIN_PATH", str(BUILD / "lib/x86_64-linux-gnu/vpp_plugins")
-        )
-        config = self.path / "startup.conf"
-        config.write_text(
-            f"unix {{ nodaemon runtime-dir {self.path} log {self.path}/vpp.log "
-            f"cli-listen {self.path}/cli.sock }}\n"
-            f"socksvr {{ socket-name {self.path}/api.sock }}\n"
-            f"statseg {{ socket-name {self.path}/stats.sock size 32m }}\n"
-            f"api-segment {{ prefix native-vlan-{os.getpid()} }}\n"
-            "memory { main-heap-size 256m }\n"
-            f"cpu {{ main-core {min(os.sched_getaffinity(0))} }}\n"
-            f"plugins {{ path {plugins} plugin default {{ disable }} "
-            "plugin acl_plugin.so { enable } plugin linux_cp_plugin.so { enable } "
-            f"plugin sonic_ext_plugin.so {{ enable }} {self.extra_plugins} }}\n"
-        )
-        self.log = (self.path / "console.log").open("w")
-        self.proc = subprocess.Popen(
-            [os.environ.get("VPP_BINARY", str(BUILD / "bin/vpp")), "-c", str(config)],
-            stdout=self.log, stderr=subprocess.STDOUT,
-        )
-        self.addCleanup(self.stop_vpp)
-        for _ in range(150):
-            if (self.path / "api.sock").exists():
-                break
-            if self.proc.poll() is not None:
-                self.log.flush()
-                self.fail((self.path / "console.log").read_text())
-            time.sleep(0.02)
-        api_dir = Path(os.environ.get("VPP_API_DIR", str(BUILD / "CMakeFiles")))
-        api_files = [str(path) for path in api_dir.rglob("*.api.json")
-                     if "plugins" not in path.parts or path.parent.name in
-                     ("acl", "linux-cp", "sonic_ext")]
-        self.client = VPPApiClient(apifiles=api_files,
-                                   server_address=str(self.path / "api.sock"))
-        self.client.connect("native-vlan-regression")
-        self.api = self.client.api
-        self.stats = VPPStats(socketname=str(self.path / "stats.sock"))
-        self.stats.connect()
+        self.cli("set acl-plugin use-hash-acl-matching 1")
+        self.addCleanup(self.cli, "set acl-plugin use-hash-acl-matching 1")
         self.rpc("acl_stats_intf_counters_enable", enable=1)
+        self.addCleanup(self.rpc, "acl_stats_intf_counters_enable", enable=0)
         self.pgs = []
         for i in range(self.pg_count):
             pg = self.rpc("pg_create_interface", interface_id=i).sw_if_index
+            self.addCleanup(self.rpc, "pg_delete_interface", sw_if_index=pg)
             self.rpc("sw_interface_set_flags", sw_if_index=pg, flags=1)
             self.pgs.append(pg)
 
         # pg0/pg2 are native members; pg1.<VID> is the tagged member.
         self.child = self.rpc("create_subif", sw_if_index=self.pgs[1], sub_id=VLAN,
                               outer_vlan_id=VLAN, sub_if_flags=2).sw_if_index
+        self.addCleanup(self.rpc, "delete_subif", sw_if_index=self.child)
         self.rpc("sw_interface_set_flags", sw_if_index=self.child, flags=1)
         self.rpc("bridge_domain_add_del_v2", bd_id=VLAN, is_add=1,
                  flood=1, uu_flood=1, learn=0, forward=1)
+        self.addCleanup(self.rpc, "bridge_domain_add_del_v2", bd_id=VLAN, is_add=0)
         for interface in (self.pgs[0], self.child, self.pgs[2]):
             self.rpc("sw_interface_set_l2_bridge", rx_sw_if_index=interface,
                      bd_id=VLAN, enable=1)
+            self.addCleanup(self.rpc, "sw_interface_set_l2_bridge",
+                            rx_sw_if_index=interface, bd_id=VLAN, enable=0)
         self.rpc("l2_interface_vlan_tag_rewrite", sw_if_index=self.child,
                  vtr_op=3, push_dot1q=1)
 
@@ -112,28 +97,26 @@ class NativeVlanFilterBase(unittest.TestCase):
                          memory_size=4096, skip_n_vectors=0, match_n_vectors=1,
                          next_table_index=NO_INDEX, miss_next_index=NO_INDEX,
                          mask=bytes(mask), mask_len=16).new_table_index
+        self.addCleanup(self.delete_table, self.native_table)
         match = bytearray(16)
         match[12:14] = b"\x81\x00"
         self.rpc("classify_add_del_session", is_add=1, table_index=self.native_table,
                  hit_next_index=next_index, match=bytes(match), match_len=16)
         for interface in (self.pgs[0], self.pgs[2]):
-            self.rpc("classify_set_interface_l2_tables", sw_if_index=interface,
-                     ip4_table_index=NO_INDEX, ip6_table_index=NO_INDEX,
-                     other_table_index=self.native_table, is_input=1)
+            self.set_classifiers(interface, other=self.native_table)
 
-    def stop_vpp(self):
-        if hasattr(self, "stats"):
-            self.stats.disconnect()
-        if hasattr(self, "client"):
-            self.client.disconnect()
-        self.proc.terminate()
-        try:
-            self.proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
-            self.proc.wait(timeout=5)
-        self.log.close()
-        self.temp.cleanup()
+    def set_classifiers(self, interface, ip4=NO_INDEX, ip6=NO_INDEX, other=NO_INDEX):
+        self.rpc("classify_set_interface_l2_tables", sw_if_index=interface,
+                 ip4_table_index=ip4, ip6_table_index=ip6,
+                 other_table_index=other, is_input=1)
+        self.addCleanup(self.rpc, "classify_set_interface_l2_tables",
+                        sw_if_index=interface, ip4_table_index=NO_INDEX,
+                        ip6_table_index=NO_INDEX, other_table_index=NO_INDEX,
+                        is_input=1)
+
+    def delete_table(self, table):
+        self.rpc("classify_add_del_table", is_add=0, table_index=table,
+                 match_n_vectors=0, mask=b"", mask_len=0)
 
     def rpc(self, name, **kwargs):
         reply = getattr(self.api, name)(**kwargs)
@@ -162,8 +145,11 @@ class NativeVlanFilterBase(unittest.TestCase):
     def bind(self, interface, rules):
         acl = self.rpc("acl_add_replace", acl_index=NO_INDEX, count=len(rules),
                        r=rules, tag="native-vlan-regression").acl_index
+        self.addCleanup(self.rpc, "acl_del", acl_index=acl)
         self.rpc("acl_interface_set_acl_list", sw_if_index=interface,
                  n_input=1, count=1, acls=[acl])
+        self.addCleanup(self.rpc, "acl_interface_set_acl_list",
+                        sw_if_index=interface, n_input=0, count=0, acls=[])
         return acl
 
     def acl_counter(self, acl, rule=0):
@@ -183,6 +169,7 @@ class NativeVlanFilterBase(unittest.TestCase):
             self.cli(f"packet-generator capture pg{pg} pcap {target}")
         self.cli(f"packet-generator new pcap {source} source pg{source_pg} "
                  f"name stream{self.sequence}")
+        self.addCleanup(self.cli, f"packet-generator delete stream{self.sequence}")
         self.cli(f"packet-generator enable-stream stream{self.sequence}")
         for _ in range(100):
             if "Yes" not in self.cli("show packet-generator"):
@@ -202,6 +189,7 @@ class NativeVlanFilterBase(unittest.TestCase):
 
 
 class TestNativeVlanFilter(NativeVlanFilterBase):
+    """Native VLAN admission, QinQ preservation and ACL enforcement."""
 
     def test_native_qinq_preserved_and_acl_runs_once(self):
         """Native QinQ validates only service VID, preserving different/same inner VID."""
@@ -233,7 +221,6 @@ class TestNativeVlanFilter(NativeVlanFilterBase):
             self.assertEqual(bytes(self.transmit(packet)[0]), bytes(packet))
             self.assertEqual(self.error_counter(ACCEPTED) - before, 1)
             self.assertEqual(self.acl_counter(acl), 2)
-
 
     def test_wrong_outer_vlan_drops_before_acl(self):
         """An inner access VID cannot override a wrong outer VID."""
@@ -268,15 +255,19 @@ class TestNativeVlanFilter(NativeVlanFilterBase):
             self.assertEqual(self.error_counter(ACCEPTED), before)
             self.assertEqual(self.acl_counter(acl), 2)
 
+
 class NativeVlanControlBase(NativeVlanFilterBase):
     """Use an LCP pg host endpoint; no kernel TAP or namespace is needed."""
 
-    extra_plugins = "plugin linux_cp_unittest_plugin.so { enable }"
+    extra_vpp_plugin_config = NativeVlanFilterBase.extra_vpp_plugin_config + [
+        "plugin", "linux_cp_unittest_plugin.so", "{", "enable", "}",
+    ]
     pg_count = 4
 
     def setUp(self):
         super().setUp()
         self.cli("test lcp add phy pg0 host pg3")
+        self.addCleanup(self.cli, "test lcp del phy pg0 host pg3")
         self.punt_next = self.rpc("add_node_next", node_name="l2-input-classify",
                                   next_name="linux-cp-punt").next_index
         bcast = {i: 0xFF for i in range(6)}
@@ -303,16 +294,15 @@ class NativeVlanControlBase(NativeVlanFilterBase):
                          match_n_vectors=size // 16, next_table_index=next_table,
                          miss_next_index=NO_INDEX, mask=bytes(mask),
                          mask_len=size).new_table_index
+        self.addCleanup(self.delete_table, table)
         self.rpc("classify_add_del_session", is_add=1, table_index=table,
                  hit_next_index=self.punt_next, match=bytes(match), match_len=size)
         return table
 
     def control_classifiers(self, arp=True, ip6mc=True):
-        self.rpc("classify_set_interface_l2_tables", sw_if_index=self.pgs[0],
-                 ip4_table_index=self.dhcp_table,
-                 ip6_table_index=self.ip6mc_table if ip6mc else NO_INDEX,
-                 other_table_index=self.arp_table if arp else self.native_table,
-                 is_input=1)
+        self.set_classifiers(self.pgs[0], ip4=self.dhcp_table,
+                             ip6=self.ip6mc_table if ip6mc else NO_INDEX,
+                             other=self.arp_table if arp else self.native_table)
 
     @staticmethod
     def control_packet(kind, tagged):
@@ -344,6 +334,7 @@ class NativeVlanControlBase(NativeVlanFilterBase):
 
 
 class TestNativeVlanControl(NativeVlanControlBase):
+    """Native control-packet trapping and configured flood suppression."""
 
     def test_native_single_tag_dhcp_trap_without_flood(self):
         """POP exposes DHCP to its IP4 classifier and the parent's LCP host."""
@@ -375,8 +366,11 @@ class TestNativeVlanControl(NativeVlanControlBase):
 
 
 class TestNativeVlanCopp(NativeVlanControlBase):
-    extra_plugins = (NativeVlanControlBase.extra_plugins +
-                     " plugin policer_plugin.so { enable }")
+    """Native ARP trapping through the simulated LCP host CoPP path."""
+
+    extra_vpp_plugin_config = NativeVlanControlBase.extra_vpp_plugin_config + [
+        "plugin", "policer_plugin.so", "{", "enable", "}",
+    ]
 
     def test_native_single_tag_arp_reaches_host_copp(self):
         """The reclassified ARP punt traverses the host output CoPP feature."""
@@ -385,8 +379,11 @@ class TestNativeVlanCopp(NativeVlanControlBase):
             self.cli(f"policer add name {name} type 1r2c cir 1000000 cb 1000000 "
                      f"rate kbps conform-action {action} exceed-action {action} "
                      f"violate-action {action}")
+            self.addCleanup(self.cli, f"policer del name {name}")
             self.rpc("sonic_ext_copp_ifout_bind", ethertype=0x0806,
                      policer_name=name, is_bind=True)
+            self.addCleanup(self.rpc, "sonic_ext_copp_ifout_bind", ethertype=0x0806,
+                            policer_name=name, is_bind=False)
             before = self.rpc("sonic_ext_copp_ifout_get_counters", ethertype=0x0806)
             captures = self.transmit_captures(self.control_packet("arp", True),
                                                {1: 0, 2: 0, 3: host_count})
@@ -399,6 +396,5 @@ class TestNativeVlanCopp(NativeVlanControlBase):
                                  bytes(self.control_packet("arp", False)))
 
 
-
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main(testRunner=VppTestRunner)
