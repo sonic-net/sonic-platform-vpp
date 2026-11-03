@@ -16,7 +16,7 @@ from asfframework import VppTestRunner, get_testcase_dirname
 from config import config
 from framework import VppTestCase
 from vpp_bond_interface import VppBondInterface
-from vpp_papi import VppEnum
+from vpp_papi import MACAddress, VppEnum
 from vpp_qemu_utils import create_namespace, delete_all_namespaces, set_interface_up
 
 from scapy.layers.inet import IP, UDP
@@ -281,6 +281,10 @@ class TestSonicExtDropReasonBond(SonicExtDropReasonMixin, VppTestCase):
 
     extra_vpp_plugin_config = PLUGINS
 
+    # Without a custom MAC the bond takes its first member's MAC when that
+    # member is added, so the address read at creation would be stale and
+    # ethernet-input would drop the test traffic as an L3 MAC mismatch.
+    BOND_MAC = "02:fe:38:30:59:3c"
     BOND_IP4 = "10.10.10.1"
     BOND_REMOTE_IP4 = "10.10.10.2"
     PREFIX_LEN = 24
@@ -332,6 +336,8 @@ class TestSonicExtDropReasonBond(SonicExtDropReasonMixin, VppTestCase):
             self,
             mode=VppEnum.vl_api_bond_mode_t.BOND_API_MODE_XOR,
             lb=VppEnum.vl_api_bond_lb_algo_t.BOND_API_LB_ALGO_L34,
+            use_custom_mac=1,
+            mac_address=MACAddress(self.BOND_MAC).packed,
         )
         self.bond.add_vpp_config()
         self.bond.admin_up()
@@ -366,12 +372,12 @@ class TestSonicExtDropReasonBond(SonicExtDropReasonMixin, VppTestCase):
         """A drop received on a bond member counts against the member"""
         idx = [self.pg0.sw_if_index, self.pg1.sw_if_index, self.bond.sw_if_index, 0]
         before = self.reason_counts(idx)
+        err_before = self.err(DIP_LL_ERR)
 
-        pkts = self.udp4(
-            self.pg0, self.bond.local_mac, self.BOND_REMOTE_IP4, LINK_LOCAL_IP4
-        )
+        pkts = self.udp4(self.pg0, self.BOND_MAC, self.BOND_REMOTE_IP4, LINK_LOCAL_IP4)
         self.send_dropped(self.pg0, pkts, [self.pg1])
 
+        self.assertEqual(self.err(DIP_LL_ERR), err_before + N_PKTS)
         self.assert_only_changed(
             before,
             self.reason_counts(idx),
