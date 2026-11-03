@@ -208,7 +208,8 @@ typedef enum
   _ (L2_TRAP_LEARN, l2_trap_learn, "l2-trap-learn", 1, SAIVPP)                \
   _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)             \
   _ (PBH, pbh, "pbh", 1, SAIVPP)                                              \
-  _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)
+  _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)             \
+  _ (DROP_REASON_STATS, drop_reason_stats, "drop-reason-stats", 1, VPP)
 
 /* Router-interface loopback (hairpin) packet action values, carried in the
  * sonic_ext_iface_loopback_set_action API and stored per sw_if_index. */

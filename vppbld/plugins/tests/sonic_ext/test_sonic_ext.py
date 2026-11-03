@@ -54,6 +54,7 @@ class SonicExtAllFeaturesBase(VppTestCase):
         "nd-punt": "vpp",
         "copp": "vpp",
         "trim": "vpp",
+        "drop-reason-stats": "vpp",
         "ip2me": "saivpp",
         "l2-trap-fixup": "saivpp",
         "l2-trap-learn": "saivpp",
@@ -432,8 +433,9 @@ class SonicExtPuntViaMemberBase(SonicExtArcBase):
 
     def assert_punt_via_member_state(self, punt_via_member, capture):
         self.assert_feature_get("punt-via-member", punt_via_member)
-        # capture has no keyword: it runs while punt-via-member or
-        # drop-member-stats, the two consumers of its cookie, is on
+        # capture has no keyword: it runs while punt-via-member,
+        # drop-member-stats or drop-reason-stats, the consumers of its
+        # cookie, is on
         self.assert_feature_get("capture", capture)
         for arc in ("ip4-drop", "ip6-drop"):
             self.assert_feature(
@@ -454,7 +456,7 @@ class TestSonicExtPuntViaMemberStartupOff(SonicExtPuntViaMemberBase):
 
 
 class TestSonicExtCaptureStartupOff(SonicExtPuntViaMemberBase):
-    """sonic-ext punt-via-member and drop-member-stats off in startup.conf"""
+    """sonic-ext punt-via-member, drop-member-stats and drop-reason-stats off"""
 
     extra_vpp_config = [
         "sonic-ext",
@@ -463,11 +465,13 @@ class TestSonicExtCaptureStartupOff(SonicExtPuntViaMemberBase):
         "off",
         "drop-member-stats",
         "off",
+        "drop-reason-stats",
+        "off",
         "}",
     ]
 
     def test_capture_startup_off(self):
-        """with both of its consumers off at startup, capture never runs"""
+        """with all of its consumers off at startup, capture never runs"""
         self.assert_punt_via_member_state(False, False)
 
 
