@@ -126,3 +126,9 @@
 #       (sflow_drop_policer_set API / "sflow drop-monitoring policer"); vpplib
 #       binds the VPP policer of the SONiC drop_monitor_limit SAI policer.
 0028-sflow-switch-wide-drop-monitoring-for-sonic.patch
+# 29. snort: zero-init the per-frame hash array. gcc 14 (trixie) fails the
+#     plugin's x86_64_v4 variant with -Werror=maybe-uninitialized on the
+#     AVX512 masked loads in clib_array_mask_u32(); the mask guards the
+#     unwritten tail lanes at run time, so the read is harmless. Build fix
+#     only, no behaviour change.
+0029-snort-zero-init-the-hash-array-for-gcc-14.patch
