@@ -194,6 +194,20 @@ ci-test-preflight:
 	fi
 	@ip netns del $(CI_NETNS_PROBE) >/dev/null 2>&1 || true
 	@echo "preflight: namespace creation OK, custom plugin tests will run"
+	# Same reasoning for NET_DM.  test_sflow_drop.py's drop-monitor case
+	# listens on the NET_DM generic netlink multicast group, which the kernel
+	# exposes only when built with CONFIG_NET_DROP_MONITOR, and skips itself
+	# when it is missing.  Resolving a genl family is an unprivileged unicast
+	# request, so probe for it the same way the test does: a CTRL_CMD_GETFAMILY
+	# for "NET_DM" answered with NLMSG_ERROR means the family is not there.
+	@if ! python3 -c 'import socket,struct;n=b"NET_DM\0";a=struct.pack("HH",4+len(n),2)+n;a+=b"\0"*(-len(a)%4);p=struct.pack("BBH",3,1,0)+a;s=socket.socket(socket.AF_NETLINK,socket.SOCK_RAW,16);s.bind((0,0));s.settimeout(2);s.send(struct.pack("IHHII",16+len(p),16,5,1,0)+p);raise SystemExit(struct.unpack_from("H",s.recv(32768),4)[0]==2)' >/dev/null 2>&1; then \
+		echo "ERROR: the kernel exposes no NET_DM generic netlink family."; \
+		echo "       The sFlow drop-monitor test case would be reported SKIP"; \
+		echo "       while the job stayed green.  Run on a host whose kernel"; \
+		echo "       has CONFIG_NET_DROP_MONITOR enabled."; \
+		exit 1; \
+	fi
+	@echo "preflight: NET_DM is available, the drop-monitor test will run"
 
 .PHONY: ci-test
 ci-test: ci-build ci-test-deps ci-test-preflight

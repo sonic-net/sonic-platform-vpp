@@ -102,3 +102,8 @@
 #     unchanged. The 6RD security_check "no tunnel" stays a drop.
 #     Includes both-halves tests in test_ipip.py.
 0027-ipip-add-punt-no-tunnel-startup-config-option.patch
+# 28. Emit NET_DM_ATTR_IN_PORT as the nested container the kernel
+#     drop_monitor uses, and carry the linux-cp tap ifIndex rather than the
+#     VPP hw_if_index, so NET_DM listeners such as hsflowd can parse the
+#     ingress port and resolve it to the right interface.
+0028-sflow-report-linux-cp-ifindex-in-drop-monitor-in-port.patch
