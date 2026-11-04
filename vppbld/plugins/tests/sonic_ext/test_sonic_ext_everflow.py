@@ -283,7 +283,7 @@ class TestSonicExtEverflowImmediate(SonicExtEverflowBase):
         fwd = self.expect_forward_only(miss)
         self.assert_forwarded(fwd[0], miss)
 
-    def test_span_clone_not_remirrored(self):
+    def test_catchall_produces_single_clone(self):
         """A catch-all mirror rule still produces exactly one clone"""
         pkt = self.routed_pkt()
         self.install_input_acl([self.mirror_rule()])
