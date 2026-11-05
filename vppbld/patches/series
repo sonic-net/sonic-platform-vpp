@@ -102,3 +102,9 @@
 #     unchanged. The 6RD security_check "no tunnel" stays a drop.
 #     Includes both-halves tests in test_ipip.py.
 0027-ipip-add-punt-no-tunnel-startup-config-option.patch
+# 28. snort: zero-init the per-frame hash array. gcc 14 (trixie) fails the
+#     plugin's x86_64_v4 variant with -Werror=maybe-uninitialized on the
+#     AVX512 masked loads in clib_array_mask_u32(); the mask guards the
+#     unwritten tail lanes at run time, so the read is harmless. Build fix
+#     only, no behaviour change.
+0028-snort-zero-init-the-hash-array-for-gcc-14.patch
