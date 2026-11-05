@@ -105,5 +105,9 @@
 # 28. Emit NET_DM_ATTR_IN_PORT as the nested container the kernel
 #     drop_monitor uses, and carry the linux-cp tap ifIndex rather than the
 #     VPP hw_if_index, so NET_DM listeners such as hsflowd can parse the
-#     ingress port and resolve it to the right interface.
+#     ingress port and resolve it to the right interface. Adds the
+#     "sflow dropmon-capture" CLI, which retains the encoded message so it
+#     can be inspected without a NET_DM listener (one needs CAP_NET_ADMIN
+#     and CONFIG_NET_DROP_MONITOR, which the CI image lacks), plus the
+#     SFlowDropMonInPortTestCase that checks the encoding through it.
 0028-sflow-report-linux-cp-ifindex-in-drop-monitor-in-port.patch

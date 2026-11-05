@@ -28,12 +28,22 @@ Note the packet-sample path (SFLOWPS_PSAMPLE_ATTR_IIFINDEX) is deliberately
 left alone: it is a plain u32 by PSAMPLE's own definition, and hsflowd's
 mod_vpp translates it from the VPP namespace itself.
 
+Verifying this needs the bytes that were encoded, but a NET_DM message is
+published to a netlink multicast group, so reading it back means attaching a
+listener - which needs CAP_NET_ADMIN and a kernel built with
+CONFIG_NET_DROP_MONITOR. Add "sflow dropmon-capture enable", which retains
+the last message exactly as it was handed to sendmsg(), and "show sflow
+dropmon-capture", which hexdumps it. That makes the encoding inspectable on
+a live system without a listener, and lets SFlowDropMonInPortTestCase in
+test_sflow_drop.py walk IN_PORT the way a listener would and assert it is a
+nested container carrying the linux-cp ifIndex rather than the VPP index.
+
 Signed-off-by: SONiC VPP <sonic-vpp@sonic-net.github.io>
 ---
 diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
 --- a/src/plugins/sflow/sflow.c
 +++ b/src/plugins/sflow/sflow.c
-@@ -349,6 +349,28 @@
+@@ -349,6 +349,28 @@ send_packet_sample (vlib_main_t *vm, sflow_main_t *smp, sflow_sample_t *sample)
    return 1;
  }
  
@@ -62,7 +72,7 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
  static int
  send_discard_sample (vlib_main_t *vm, sflow_main_t *smp,
  		     sflow_sample_t *sample)
-@@ -399,7 +421,20 @@
+@@ -399,7 +421,20 @@ send_discard_sample (vlib_main_t *vm, sflow_main_t *smp,
    // TODO: read from header? (really just needs to be non-zero for hsflowd)
    u16 proto = 0x0800;
    SFLOWDM_set_attr_int (dmt, NET_DM_ATTR_PROTO, proto);
@@ -84,10 +94,82 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
    SFLOWDM_set_attr (dmt, NET_DM_ATTR_PAYLOAD, sample->header,
  		    sample->header_bytes);
    if (SFLOWDM_send (dmt) < 0)
+@@ -1257,6 +1292,52 @@ show_sflow_command_fn (vlib_main_t *vm, unformat_input_t *input,
+   return error;
+ }
+ 
++/* Retain the last NET_DM message so that it can be inspected after the fact.
++   The message is published to a multicast group, so observing it otherwise
++   means attaching a listener, which needs CAP_NET_ADMIN and a kernel built
++   with CONFIG_NET_DROP_MONITOR.  This gives the same bytes with neither. */
++static clib_error_t *
++sflow_dropmon_capture_command_fn (vlib_main_t *vm, unformat_input_t *input,
++				  vlib_cli_command_t *cmd)
++{
++  sflow_main_t *smp = &sflow_main;
++  bool enable = true;
++
++  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
++    {
++      if (unformat (input, "enable"))
++	enable = true;
++      else if (unformat (input, "disable"))
++	enable = false;
++      else
++	return clib_error_return (0, "unknown input: %U",
++				  format_unformat_error, input);
++    }
++
++  smp->sflow_dropmon.nl.capture = enable;
++  if (!enable)
++    vec_free (smp->sflow_dropmon.nl.captured);
++  return 0;
++}
++
++static clib_error_t *
++show_sflow_dropmon_capture_command_fn (vlib_main_t *vm,
++				       unformat_input_t *input,
++				       vlib_cli_command_t *cmd)
++{
++  sflow_main_t *smp = &sflow_main;
++  u8 *captured = smp->sflow_dropmon.nl.captured;
++  u8 *hex = 0;
++
++  for (u32 ii = 0; ii < vec_len (captured); ii++)
++    hex = format (hex, "%02x", captured[ii]);
++
++  vlib_cli_output (vm, "dropmon capture %u bytes", vec_len (captured));
++  vlib_cli_output (vm, "%v", hex);
++  vec_free (hex);
++  return 0;
++}
++
+ VLIB_CLI_COMMAND (sflow_enable_disable_command, static) = {
+   .path = "sflow enable-disable",
+   .short_help = "sflow enable-disable <interface-name> [disable]",
+@@ -1299,6 +1380,18 @@ VLIB_CLI_COMMAND (show_sflow_command, static) = {
+   .function = show_sflow_command_fn,
+ };
+ 
++VLIB_CLI_COMMAND (sflow_dropmon_capture_command, static) = {
++  .path = "sflow dropmon-capture",
++  .short_help = "sflow dropmon-capture [enable|disable]",
++  .function = sflow_dropmon_capture_command_fn,
++};
++
++VLIB_CLI_COMMAND (show_sflow_dropmon_capture_command, static) = {
++  .path = "show sflow dropmon-capture",
++  .short_help = "show sflow dropmon-capture",
++  .function = show_sflow_dropmon_capture_command_fn,
++};
++
+ /* API message handler */
+ static void
+ vl_api_sflow_enable_disable_t_handler (vl_api_sflow_enable_disable_t *mp)
 diff --git a/src/plugins/sflow/sflow_dropmon.c b/src/plugins/sflow/sflow_dropmon.c
 --- a/src/plugins/sflow/sflow_dropmon.c
 +++ b/src/plugins/sflow/sflow_dropmon.c
-@@ -124,6 +124,12 @@
+@@ -124,6 +124,12 @@ SFLOWDM_set_attr (SFLOWDM *dmt, int field, void *val, int len)
    return sflow_netlink_set_attr (&dmt->nl, field, val, len);
  }
  
@@ -120,7 +202,7 @@ diff --git a/src/plugins/sflow/sflow_dropmon.h b/src/plugins/sflow/sflow_dropmon
  #define SFLOWDM_FAM	      NET_DM_GENL_NAME
  #define SFLOWDM_FAM_LEN	      sizeof (SFLOWDM_FAM)
  #define SFLOWDM_FAM_FOOTPRINT NLMSG_ALIGN (SFLOWDM_FAM_LEN)
-@@ -51,6 +61,7 @@
+@@ -51,6 +61,7 @@ EnumSFLOWNLState SFLOWDM_state (SFLOWDM *dmt);
  EnumSFLOWNLState SFLOWDM_open_step (SFLOWDM *dmt);
  
  bool SFLOWDM_set_attr (SFLOWDM *dmt, int field, void *buf, int len);
@@ -131,10 +213,11 @@ diff --git a/src/plugins/sflow/sflow_dropmon.h b/src/plugins/sflow/sflow_dropmon
 diff --git a/src/plugins/sflow/sflow_netlink.c b/src/plugins/sflow/sflow_netlink.c
 --- a/src/plugins/sflow/sflow_netlink.c
 +++ b/src/plugins/sflow/sflow_netlink.c
-@@ -187,6 +187,22 @@
+@@ -186,6 +186,22 @@ sflow_netlink_set_attr (SFLOWNL *nl, int field, void *val, int len)
+   return true;
  }
  
- /*_________________---------------------------__________________
++/*_________________---------------------------__________________
 +  _________________       set_attr_nested     __________________
 +  -----------------___________________________------------------
 +  As above, but flag the attribute as a nested container.  The caller
@@ -150,14 +233,41 @@ diff --git a/src/plugins/sflow/sflow_netlink.c b/src/plugins/sflow/sflow_netlink
 +  return true;
 +}
 +
-+/*_________________---------------------------__________________
+ /*_________________---------------------------__________________
    _________________     generic_send_cmd      __________________
    -----------------___________________________------------------
- */
+@@ -285,6 +301,13 @@ sflow_netlink_send_attrs (SFLOWNL *nl, bool ge)
+     }
+   ASSERT (nn == nl->n_attrs);
+ 
++  if (PREDICT_FALSE (nl->capture))
++    {
++      vec_reset_length (nl->captured);
++      for (u32 ii = 0; ii < frag; ii++)
++	vec_add (nl->captured, iov[ii].iov_base, iov[ii].iov_len);
++    }
++
+   struct sockaddr_nl da = { .nl_family = AF_NETLINK, .nl_groups = (1 << (nl->group_id - 1)) };
+ 
+   struct msghdr msg = {
 diff --git a/src/plugins/sflow/sflow_netlink.h b/src/plugins/sflow/sflow_netlink.h
 --- a/src/plugins/sflow/sflow_netlink.h
 +++ b/src/plugins/sflow/sflow_netlink.h
-@@ -79,6 +79,8 @@
+@@ -69,6 +69,13 @@ typedef struct _SFLOWNL
+   u32 attrs_len;
+   u32 iov_max;
+   struct iovec *iov;
++  /* Diagnostics: a NET_DM message goes to a multicast group, so once it has
++     been sent there is no way to inspect what was encoded unless a listener
++     happened to be attached - and attaching one needs CAP_NET_ADMIN and a
++     kernel built with CONFIG_NET_DROP_MONITOR.  When capture is set, keep a
++     copy of the last message exactly as it was handed to sendmsg(). */
++  bool capture;
++  u8 *captured;
+ } SFLOWNL;
+ 
+ void sflow_netlink_set_nonblocking (int fd);
+@@ -79,6 +86,8 @@ int sflow_netlink_generic_open (SFLOWNL *nl);
  int sflow_netlink_usersock_open (SFLOWNL *nl);
  int sflow_netlink_close (SFLOWNL *nl);
  bool sflow_netlink_set_attr (SFLOWNL *nl, int field, void *val, int len);
@@ -167,16 +277,13 @@ diff --git a/src/plugins/sflow/sflow_netlink.h b/src/plugins/sflow/sflow_netlink
  #define sflow_netlink_set_attr_int(nl, field, val)                            \
    sflow_netlink_set_attr ((nl), (field), &(val), sizeof (val))
 diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
-index d60e2f096..b7d1ca0ac 100644
 --- a/test/test_sflow_drop.py
 +++ b/test/test_sflow_drop.py
-@@ -1,14 +1,101 @@
+@@ -1,14 +1,46 @@
  #!/usr/bin/env python3
  
  import unittest
-+import socket
 +import struct
-+import time
  from framework import VppTestCase
  from asfframework import VppTestRunner
  from scapy.layers.l2 import Ether
@@ -187,26 +294,13 @@ index d60e2f096..b7d1ca0ac 100644
  import re  # for finding counters in "sh errors" output
  
 +# from linux/netlink.h
-+NETLINK_GENERIC = 16
-+SOL_NETLINK = 270
-+NETLINK_ADD_MEMBERSHIP = 1
 +NLMSG_HDRLEN = 16
 +NLA_F_NESTED = 1 << 15
 +# from linux/genetlink.h
-+GENL_ID_CTRL = 16
 +GENL_HDRLEN = 4
-+CTRL_CMD_GETFAMILY = 3
-+CTRL_ATTR_FAMILY_NAME = 2
-+CTRL_ATTR_MCAST_GROUPS = 7
-+CTRL_ATTR_MCAST_GRP_NAME = 1
-+CTRL_ATTR_MCAST_GRP_ID = 2
 +# from linux/net_dropmon.h
-+NET_DM_GENL_NAME = "NET_DM"
-+NET_DM_GRP_ALERT_NAME = "events"
 +NET_DM_ATTR_IN_PORT = 4
 +NET_DM_ATTR_PORT_NETDEV_IFINDEX = 0
-+# sflow stamps nlmsg_pid with (module << 16) + pid; SFLOWNL_DROPMON == 3
-+SFLOWNL_DROPMON = 3
 +
 +
 +def walk_netlink_attrs(payload):
@@ -229,50 +323,10 @@ index d60e2f096..b7d1ca0ac 100644
 +        offset += (nla_len + 3) & ~3
 +    return attrs
 +
-+
-+def netdm_alert_group():
-+    """Multicast group id of NET_DM/events, or None if NET_DM is absent.
-+
-+    Resolving a genl family is a unicast request to the kernel, so this
-+    needs no privilege even though joining the group does.
-+    """
-+    name = NET_DM_GENL_NAME.encode() + b"\x00"
-+    attr = struct.pack("HH", 4 + len(name), CTRL_ATTR_FAMILY_NAME) + name
-+    attr += b"\x00" * (-len(attr) % 4)
-+    body = struct.pack("BBH", CTRL_CMD_GETFAMILY, 1, 0) + attr
-+    req = (
-+        struct.pack("IHHII", NLMSG_HDRLEN + len(body), GENL_ID_CTRL, 0x05, 1, 0) + body
-+    )
-+
-+    sock = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, NETLINK_GENERIC)
-+    try:
-+        sock.bind((0, 0))
-+        sock.settimeout(2)
-+        sock.send(req)
-+        reply = sock.recv(32768)
-+    except OSError:
-+        return None
-+    finally:
-+        sock.close()
-+
-+    if len(reply) < NLMSG_HDRLEN + GENL_HDRLEN:
-+        return None
-+    attrs = walk_netlink_attrs(reply[NLMSG_HDRLEN + GENL_HDRLEN :])
-+    if CTRL_ATTR_MCAST_GROUPS not in attrs:
-+        return None
-+    for _, group in walk_netlink_attrs(attrs[CTRL_ATTR_MCAST_GROUPS][1]).values():
-+        fields = walk_netlink_attrs(group)
-+        if CTRL_ATTR_MCAST_GRP_NAME not in fields:
-+            continue
-+        gname = fields[CTRL_ATTR_MCAST_GRP_NAME][1].rstrip(b"\x00").decode()
-+        if gname == NET_DM_GRP_ALERT_NAME and CTRL_ATTR_MCAST_GRP_ID in fields:
-+            return struct.unpack("I", fields[CTRL_ATTR_MCAST_GRP_ID][1])[0]
-+    return None
-+
  
  class SFlowDropTestCase(VppTestCase):
      """sFlow test case"""
-@@ -147,3 +234,167 @@ class SFlowDropTestCase(VppTestCase):
+@@ -147,3 +179,139 @@ class SFlowDropTestCase(VppTestCase):
          self.sleep(1.0)
          # verify sflow counters
          self.verify_sflow(count)
@@ -306,6 +360,7 @@ index d60e2f096..b7d1ca0ac 100644
 +            i.resolve_arp()
 +
 +    def tearDown(self):
++        self.vapi.cli("sflow dropmon-capture disable")
 +        self.vapi.cli("test lcp del phy %s host %s" % (self.pg0.name, self.pg4.name))
 +        self.vapi.cli("test lcp del phy %s host %s" % (self.pg2.name, self.pg3.name))
 +        for i in self.pg_interfaces:
@@ -320,51 +375,21 @@ index d60e2f096..b7d1ca0ac 100644
 +                return p.vif_index
 +        return None
 +
-+    def join_netdm_alert(self):
-+        """Listen on NET_DM/events, as hsflowd would.
++    def dropmon_capture(self):
++        """The NET_DM message as it was handed to sendmsg().
 +
-+        ci-test-preflight asserts both preconditions, so in CI neither of
-+        these skips can fire; they only spare a developer running the suite
-+        by hand on a machine without drop_monitor or without privileges.
++        Reading it back from VPP rather than listening on the NET_DM group
++        keeps the test independent of CAP_NET_ADMIN and of whether the
++        kernel was built with CONFIG_NET_DROP_MONITOR - the CI image is
++        not, so a listener-based test could never run there.
 +        """
-+        group = netdm_alert_group()
-+        if group is None:
-+            self.skipTest("kernel has no NET_DM family (CONFIG_NET_DROP_MONITOR)")
-+        sock = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, NETLINK_GENERIC)
-+        sock.bind((0, 0))
-+        try:
-+            sock.setsockopt(SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, group)
-+        except OSError:
-+            sock.close()
-+            self.skipTest("joining the NET_DM alert group needs CAP_NET_ADMIN")
-+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
-+        return sock
-+
-+    def read_dropmon(self, sock, timeout):
-+        """The first NET_DM message VPP sent, ignoring any other sender.
-+
-+        The kernel's own drop_monitor publishes on this group too, so match
-+        on the nlmsg_pid that sflow_netlink_generic_pid() stamps in.
-+        """
-+        want_pid = (SFLOWNL_DROPMON << 16) + self.vpp.pid
-+        deadline = time.time() + timeout
-+        while True:
-+            remaining = deadline - time.time()
-+            if remaining <= 0:
-+                return None
-+            try:
-+                sock.settimeout(remaining)
-+                data = sock.recv(65536)
-+            except (socket.timeout, OSError):
-+                return None
-+            offset = 0
-+            while offset + NLMSG_HDRLEN <= len(data):
-+                msg_len, _, _, _, pid = struct.unpack_from("IHHII", data, offset)
-+                if msg_len < NLMSG_HDRLEN or offset + msg_len > len(data):
-+                    break
-+                if pid == want_pid:
-+                    return data[offset : offset + msg_len]
-+                offset += (msg_len + 3) & ~3
++        out = self.vapi.cli("show sflow dropmon-capture")
++        self.logger.info(out)
++        for line in out.split("\n"):
++            line = line.strip()
++            if line and all(c in "0123456789abcdef" for c in line):
++                return bytes.fromhex(line)
++        return b""
 +
 +    def test_dropmon_in_port(self):
 +        """NET_DM ingress port reports the linux-cp ifIndex"""
@@ -385,18 +410,13 @@ index d60e2f096..b7d1ca0ac 100644
 +            "not tell the two apart",
 +        )
 +
-+        # multicast is not buffered for non-members, so join before the drop
-+        sock = self.join_netdm_alert()
-+        self.addCleanup(sock.close)
-+
 +        # pg interfaces are their own hardware interfaces
 +        self.vapi.sflow_enable_disable(
 +            hw_if_index=self.pg0.sw_if_index, enable_disable=True
 +        )
 +        self.vapi.sflow_sampling_rate_set(sampling_N=1)
 +        self.vapi.sflow_drop_monitoring_set(drop_M=1)
-+        # the dropmon channel resolves its genl family asynchronously
-+        self.sleep(1.0)
++        self.vapi.cli("sflow dropmon-capture enable")
 +
 +        # ttl=1, so the packet is discarded instead of forwarded
 +        p = (
@@ -407,9 +427,15 @@ index d60e2f096..b7d1ca0ac 100644
 +        )
 +        self.pg0.add_stream([p])
 +        self.pg_start()
++        # allow the discard to reach the main thread and be encoded
++        self.sleep(1.0)
 +
-+        msg = self.read_dropmon(sock, 5)
-+        self.assertIsNotNone(msg, "VPP sent no NET_DM message for the discarded packet")
++        msg = self.dropmon_capture()
++        self.assertGreater(
++            len(msg),
++            NLMSG_HDRLEN + GENL_HDRLEN,
++            "no NET_DM message was encoded for the discarded packet",
++        )
 +
 +        nlmsg_len = struct.unpack_from("I", msg, 0)[0]
 +        self.assertEqual(
