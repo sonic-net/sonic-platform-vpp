@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Nikhil Hegde <nikhilhegde@microsoft.com>
+Date: Tue, 27 Oct 2026 21:32:00 +0000
+Subject: [PATCH] ip6: preserve packet destination during neighbor discovery
+
+An incomplete-adjacency lookup needs to solicit the adjacency's next-hop
+address, but it does not need to overwrite the destination address in the
+original packet that is subsequently dropped. Keep that packet intact and
+use a separate target pointer for throttling and neighbor solicitation.
+
+This also allows drop-arc consumers such as SONiC's NEIGHBOR_MISS trap to
+punt the original transit packet without handing Linux a destination-rewritten
+packet with a stale transport checksum.
+
+Signed-off-by: Nikhil Hegde <nikhilhegde@microsoft.com>
+---
+ src/vnet/ip-neighbor/ip6_neighbor.c | 18 ++++++++----------
+ 1 file changed, 8 insertions(+), 10 deletions(-)
+diff --git a/src/vnet/ip-neighbor/ip6_neighbor.c b/src/vnet/ip-neighbor/ip6_neighbor.c
+index f2e38a1018ebdc9b8445bb6e8db04c0104b58249..a91e51d8b6570df03ac115ae98794ff5c4e831d6 100644
+--- a/src/vnet/ip-neighbor/ip6_neighbor.c
++++ b/src/vnet/ip-neighbor/ip6_neighbor.c
+@@ -140,6 +140,7 @@ ip6_discover_neighbor_inline (vlib_main_t * vm,
+ 	  vnet_hw_interface_t *hw_if0;
+ 	  vlib_buffer_t *p0, *b0;
+ 	  ip_adjacency_t *adj0;
++	  const ip6_address_t *target0;
+ 	  ip6_address_t src;
+ 	  ip6_header_t *ip0;
+ 
+@@ -153,19 +154,16 @@ ip6_discover_neighbor_inline (vlib_main_t * vm,
+ 
+ 	  adj0 = adj_get (adj_index0);
+ 
+-	  if (!is_glean)
+-	    {
+-	      ip0->dst_address.as_u64[0] =
+-		adj0->sub_type.nbr.next_hop.ip6.as_u64[0];
+-	      ip0->dst_address.as_u64[1] =
+-		adj0->sub_type.nbr.next_hop.ip6.as_u64[1];
+-	    }
++	  /* Probe an incomplete adjacency's next hop without rewriting the
++	   * original transit packet that continues to the drop arc. */
++	  target0 = is_glean ? &ip0->dst_address :
++				 &adj0->sub_type.nbr.next_hop.ip6;
+ 
+ 	  sw_if_index0 = adj0->rewrite_header.sw_if_index;
+ 	  vnet_buffer (p0)->sw_if_index[VLIB_TX] = sw_if_index0;
+ 
+ 	  /* combine the address and interface for a hash */
+-	  r0 = ip6_address_hash_to_u64 (&ip0->dst_address) ^ sw_if_index0;
++	  r0 = ip6_address_hash_to_u64 (target0) ^ sw_if_index0;
+ 
+ 	  drop0 = throttle_check (&nd_throttle, thread_index, r0, seed);
+ 
+@@ -216,8 +214,8 @@ ip6_discover_neighbor_inline (vlib_main_t * vm,
+ 	    }
+ 	  ip6_address_copy (&src, ll);
+ 
+-	  b0 = ip6_neighbor_probe (vm, vnm, sw_if_index0, thread_index, &src,
+-				   &ip0->dst_address);
++	  b0 = ip6_neighbor_probe (vm, vnm, sw_if_index0, thread_index,
++				   &src, target0);
+ 
+ 	  if (PREDICT_TRUE (NULL != b0))
+ 	    {
+-- 
+2.43.0

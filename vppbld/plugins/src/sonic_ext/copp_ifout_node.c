@@ -14,7 +14,7 @@
  *
  * sonic-ext-copp-ifout
  *
- * CoPP per-ethertype rate policing for ARP/LACP/LLDP/UDLD/TTL_ERROR,
+ * CoPP policing for ARP/LACP/LLDP/UDLD/TTL_ERROR/NEIGHBOR_MISS/DHCP,
  * enforced on the `interface-output` arc of each linux-cp-paired TAP
  *
  * BACKGROUND (sonic-net/sonic-buildimage#25801, SONiC-on-VPP CoPP HLD):
@@ -27,6 +27,7 @@
  */
 
 #include <sonic_ext/sonic_ext.h>
+#include <sonic_ext/sonic_ext_vnet_buf.h>
 
 #include <vlib/vlib.h>
 #include <vnet/vnet.h>
@@ -34,6 +35,9 @@
 #include <vnet/feature/feature.h>
 #include <policer/policer.h>
 #include <vnet/ip/ip4_packet.h>
+#include <vnet/ip/ip6_inlines.h>
+#include <vnet/ip/ip6_packet.h>
+#include <vnet/udp/udp_packet.h>
 #include <vnet/llc/llc.h>
 #include <vnet/snap/snap.h>
 #include <vnet/ethernet/ethernet.h>
@@ -43,9 +47,68 @@ typedef struct
   u32 sw_if_index;
   u32 next_index;
   u16 ethertype;
+  u8 neighbor_miss;
   u32 policer_index;
   u32 verdict;
 } sonic_ext_copp_ifout_trace_t;
+
+#define SONIC_EXT_DHCP4_CLIENT_PORT 68
+#define SONIC_EXT_DHCP4_SERVER_PORT 67
+#define SONIC_EXT_DHCP6_CLIENT_PORT 546
+#define SONIC_EXT_DHCP6_SERVER_PORT 547
+
+static_always_inline int
+sonic_ext_copp_dhcp_ports_match (const udp_header_t *udp, int is_ipv6)
+{
+  u16 src = clib_net_to_host_u16 (udp->src_port);
+  u16 dst = clib_net_to_host_u16 (udp->dst_port);
+  u16 client = is_ipv6 ? SONIC_EXT_DHCP6_CLIENT_PORT :
+				 SONIC_EXT_DHCP4_CLIENT_PORT;
+  u16 server = is_ipv6 ? SONIC_EXT_DHCP6_SERVER_PORT :
+				 SONIC_EXT_DHCP4_SERVER_PORT;
+
+  return (src == client && dst == server) ||
+	 (src == server && dst == client);
+}
+
+static_always_inline int
+sonic_ext_copp_dhcp4_match (vlib_buffer_t *b, u8 *payload, u32 hdr_len)
+{
+  ip4_header_t *ip4;
+  u32 ihl;
+
+  if (b->current_length < hdr_len + sizeof (ip4_header_t))
+    return 0;
+
+  ip4 = (ip4_header_t *) payload;
+  ihl = ip4_header_bytes (ip4);
+  if (ip4->protocol != IP_PROTOCOL_UDP ||
+      ip4_get_fragment_offset (ip4) != 0 || ihl < sizeof (*ip4) ||
+      b->current_length < hdr_len + ihl + sizeof (udp_header_t))
+    return 0;
+
+  return sonic_ext_copp_dhcp_ports_match (
+    (udp_header_t *) (payload + ihl), 0);
+}
+
+static_always_inline int
+sonic_ext_copp_dhcp6_match (vlib_buffer_t *b, u8 *payload, u32 hdr_len)
+{
+  ip6_header_t *ip6;
+  u32 udp_offset = 0;
+
+  if (b->current_length < hdr_len + sizeof (ip6_header_t))
+    return 0;
+
+  ip6 = (ip6_header_t *) payload;
+  if (!sonic_ext_ip6_locate_transport (
+	ip6, b->current_length - hdr_len, IP_PROTOCOL_UDP, &udp_offset) ||
+      b->current_length < hdr_len + udp_offset + sizeof (udp_header_t))
+    return 0;
+
+  return sonic_ext_copp_dhcp_ports_match (
+    (udp_header_t *) (payload + udp_offset), 1);
+}
 
 static u8 *
 format_sonic_ext_copp_ifout_trace (u8 *s, va_list *args)
@@ -55,11 +118,17 @@ format_sonic_ext_copp_ifout_trace (u8 *s, va_list *args)
   sonic_ext_copp_ifout_trace_t *t =
     va_arg (*args, sonic_ext_copp_ifout_trace_t *);
 
-  s = format (s,
-	      "SONIC-EXT-COPP-IFOUT: sw_if_index %d next %d ethertype "
-	      "0x%04x policer_index %d verdict %d",
-	      t->sw_if_index, t->next_index, t->ethertype, t->policer_index,
-	      t->verdict);
+  if (t->neighbor_miss)
+    s = format (s,
+		"SONIC-EXT-COPP-IFOUT: sw_if_index %d next %d reason "
+		"neighbor-miss policer_index %d verdict %d",
+		t->sw_if_index, t->next_index, t->policer_index, t->verdict);
+  else
+    s = format (s,
+		"SONIC-EXT-COPP-IFOUT: sw_if_index %d next %d ethertype "
+		"0x%04x policer_index %d verdict %d",
+		t->sw_if_index, t->next_index, t->ethertype, t->policer_index,
+		t->verdict);
   return s;
 }
 
@@ -158,17 +227,54 @@ static_always_inline sonic_ext_copp_ifout_error_t
 sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 			  vlib_buffer_t *b, u16 *next, u16 *out_ethertype,
 			  u32 *out_policer_index, u32 *out_verdict,
-			  int *out_matched_idx)
+			  int *out_matched_idx, u8 *out_neighbor_miss)
 {
   ethernet_header_t *eth;
   u16 ethertype;
   u32 feat_next;
   sonic_ext_copp_ifout_entry_t *entry = 0;
+  sonic_ext_vnet_buf_t *sb;
   int idx = -1;
 
   vnet_feature_next (&feat_next, b);
   *next = (u16) feat_next;
   *out_matched_idx = -1;
+  *out_neighbor_miss = 0;
+
+  /*
+   * NEIGHBOR_MISS reaches this node after glean-redirect restored the
+   * original Ethernet header and selected the ingress member's TAP.  Its
+   * classifier is the explicit reason carried in sonic_ext's private
+   * side-band, not the restored frame's IPv4/IPv6 ethertype (which would
+   * also match unrelated host-bound IP traffic).  Consume the reason at
+   * most once, then use the existing bind table, metering, actions and
+   * counters unchanged.
+   */
+  sb = sonic_ext_vnet_buf_find (
+    vm, b, SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS);
+  if (PREDICT_FALSE (sb != 0))
+    {
+      sonic_ext_vnet_buf_release (
+	sb, SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS);
+
+      /* The reason is authoritative.  If an unbind races an in-flight
+	 * marked packet, pass it unpoliced rather than falling back to an
+	 * unrelated IPv4/IPv6 or TTL row. */
+      *out_neighbor_miss = 1;
+      *out_ethertype = 0;
+      idx = (int) sem->copp_neighbor_miss_entry_index;
+      if (idx >= 0 && idx < (int) sem->copp_ifout_n_entries &&
+	  sem->copp_ifout_entries[idx].in_use &&
+	  sem->copp_ifout_entries[idx].match_neighbor_miss)
+	{
+	  entry = &sem->copp_ifout_entries[idx];
+	  goto matched;
+	}
+
+      *out_policer_index = ~0;
+      *out_verdict = POLICE_CONFORM;
+      return SONIC_EXT_COPP_IFOUT_ERROR_PASS;
+    }
 
   if (PREDICT_FALSE (b->current_length < sizeof (ethernet_header_t)))
     {
@@ -245,28 +351,76 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
      * anything else with ethertype < 0x0600 falls through to the
      * drop below. */
     if (!entry && ethertype >= 0x0600)
-      for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
       {
-	sonic_ext_copp_ifout_entry_t *cand = &sem->copp_ifout_entries[i];
+	sonic_ext_copp_ifout_entry_t *dhcp = 0;
+	sonic_ext_copp_ifout_entry_t *ttl = 0;
+	sonic_ext_copp_ifout_entry_t *fallback = 0;
+	int dhcp_idx = -1;
+	int ttl_idx = -1;
+	int fallback_idx = -1;
 
-	if (!cand->in_use || cand->ethertype != ethertype)
-	  continue;
-
-	if (cand->match_ip4_ttl_expiring)
+	for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
 	  {
-	    ip4_header_t *ip4;
+	    sonic_ext_copp_ifout_entry_t *cand = &sem->copp_ifout_entries[i];
 
-	    if (b->current_length < hdr_len + sizeof (ip4_header_t))
+	    if (!cand->in_use || cand->match_neighbor_miss ||
+		cand->ethertype != ethertype)
 	      continue;
 
-	    ip4 = (ip4_header_t *) payload;
-	    if (ip4->ttl > 1)
+	    if (cand->match_ip4_ttl_expiring)
+	      {
+		ip4_header_t *ip4;
+
+		if (b->current_length < hdr_len + sizeof (ip4_header_t))
+		  continue;
+
+		ip4 = (ip4_header_t *) payload;
+		if (ip4->ttl > 1)
+		  continue;
+
+		ttl = cand;
+		ttl_idx = (int) i;
+		continue;
+	      }
+
+	    if (cand->match_dhcp4 &&
+		!sonic_ext_copp_dhcp4_match (b, payload, hdr_len))
 	      continue;
+
+	    if (cand->match_dhcp6 &&
+		!sonic_ext_copp_dhcp6_match (b, payload, hdr_len))
+	      continue;
+
+	    if (cand->match_dhcp4 || cand->match_dhcp6)
+	      {
+		dhcp = cand;
+		dhcp_idx = (int) i;
+		continue;
+	      }
+
+	    fallback = cand;
+	    fallback_idx = (int) i;
 	  }
 
-	entry = cand;
-	idx = (int) i;
-	break;
+	/* Qualified rows have a fixed semantic priority independent of bind
+	 * order. DHCP owns packets satisfying its complete UDP predicate, then
+	 * TTL_ERROR owns the remaining expiring IPv4 packets, and a plain
+	 * ethertype row is only the final fallback. */
+	if (dhcp)
+	  {
+	    entry = dhcp;
+	    idx = dhcp_idx;
+	  }
+	else if (ttl)
+	  {
+	    entry = ttl;
+	    idx = ttl_idx;
+	  }
+	else if (fallback)
+	  {
+	    entry = fallback;
+	    idx = fallback_idx;
+	  }
       }
   }
 
@@ -294,9 +448,22 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
       return SONIC_EXT_COPP_IFOUT_ERROR_PASS;
     }
 
+matched:
   *out_matched_idx = idx;
 
   {
+    /* Empty name is the explicit active-but-unpoliced form of a semantic
+	 * row. Preserve trap delivery while admitting the packet without
+	 * consulting an unrelated fallback policer. */
+    if (PREDICT_FALSE ((entry->match_neighbor_miss || entry->match_dhcp4 ||
+			entry->match_dhcp6) &&
+		      entry->name[0] == 0))
+      {
+	*out_policer_index = ~0;
+	*out_verdict = POLICE_CONFORM;
+	return SONIC_EXT_COPP_IFOUT_ERROR_PASS;
+      }
+
     u32 policer_index = sonic_ext_copp_ifout_resolve_index (entry);
     *out_policer_index = policer_index;
 
@@ -391,10 +558,12 @@ VLIB_NODE_FN (sonic_ext_copp_ifout_node)
       u32 policer_index = ~0;
       u32 verdict = POLICE_CONFORM;
       int matched_idx = -1;
+      u8 neighbor_miss = 0;
       sonic_ext_copp_ifout_error_t err;
 
       err = sonic_ext_copp_ifout_x1 (vm, sem, b[0], &next[0], &ethertype,
-				      &policer_index, &verdict, &matched_idx);
+				      &policer_index, &verdict, &matched_idx,
+				      &neighbor_miss);
       error_counts[err]++;
 
       if (matched_idx >= 0)
@@ -421,6 +590,7 @@ VLIB_NODE_FN (sonic_ext_copp_ifout_node)
 	  t->sw_if_index = vnet_buffer (b[0])->sw_if_index[VLIB_TX];
 	  t->next_index = next[0];
 	  t->ethertype = ethertype;
+	  t->neighbor_miss = neighbor_miss;
 	  t->policer_index = policer_index;
 	  t->verdict = verdict;
 	}
@@ -489,7 +659,24 @@ sonic_ext_copp_ifout_find_entry (sonic_ext_main_t *sem, u16 ethertype)
   for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
     {
       if (sem->copp_ifout_entries[i].in_use &&
+	  !sem->copp_ifout_entries[i].match_neighbor_miss &&
+	  !sem->copp_ifout_entries[i].match_dhcp4 &&
+	  !sem->copp_ifout_entries[i].match_dhcp6 &&
 	  sem->copp_ifout_entries[i].ethertype == ethertype)
+	return (int) i;
+    }
+  return -1;
+}
+
+static int
+sonic_ext_copp_dhcp_find_entry (sonic_ext_main_t *sem, int is_ipv6)
+{
+  for (u32 i = 0; i < sem->copp_ifout_n_entries; i++)
+    {
+      sonic_ext_copp_ifout_entry_t *entry = &sem->copp_ifout_entries[i];
+
+      if (entry->in_use &&
+	  (is_ipv6 ? entry->match_dhcp6 : entry->match_dhcp4))
 	return (int) i;
     }
   return -1;
@@ -553,4 +740,191 @@ sonic_ext_copp_ifout_bind (u16 ethertype, const char *policer_name,
   sem->copp_ifout_violate_packets[idx] = 0;
 
   return 0;
+}
+
+int
+sonic_ext_copp_dhcp_is_bound (sonic_ext_main_t *sem, int is_ipv6)
+{
+  return sonic_ext_copp_dhcp_find_entry (sem, is_ipv6) >= 0;
+}
+
+int
+sonic_ext_copp_dhcp_is_copy (sonic_ext_main_t *sem, int is_ipv6)
+{
+  int idx = sonic_ext_copp_dhcp_find_entry (sem, is_ipv6);
+
+  return idx >= 0 && sem->copp_ifout_entries[idx].dhcp_copy;
+}
+
+int
+sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_copy,
+			  int is_bind)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  vlib_main_t *vm = vlib_get_main ();
+  int idx = sonic_ext_copp_dhcp_find_entry (sem, is_ipv6);
+  int rv = 0;
+
+  if (is_bind && !sem->copp)
+    return VNET_API_ERROR_FEATURE_DISABLED;
+
+  if (is_bind)
+    sonic_ext_copp_dhcp_enable_all ();
+
+  /* Feature attachment can itself synchronize worker state. Do it before
+   * taking the explicit row-update barrier below. */
+  if (is_bind && is_ipv6)
+    sonic_ext_copp_enable_drop_redirect ();
+
+  /* ip2me and interface-output read the same semantic row on workers. Make
+   * replacement atomic across both nodes so a packet can never skip IP2ME
+   * under one generation and miss (or inherit a fallback) at ifout under
+   * another. */
+  vlib_worker_thread_barrier_sync (vm);
+
+  if (!is_bind)
+    {
+      if (idx < 0)
+	goto done;
+
+      /* A stale owner must not remove a newer replacement binding. */
+      if (policer_name && policer_name[0] &&
+	  strncmp ((char *) sem->copp_ifout_entries[idx].name, policer_name,
+		   SONIC_EXT_COPP_IFOUT_NAME_LEN) != 0)
+	goto done;
+
+      clib_memset (&sem->copp_ifout_entries[idx], 0,
+		   sizeof (sem->copp_ifout_entries[idx]));
+      sem->copp_ifout_conform_packets[idx] = 0;
+      sem->copp_ifout_exceed_packets[idx] = 0;
+      sem->copp_ifout_violate_packets[idx] = 0;
+	goto done;
+    }
+
+  if (idx < 0)
+    {
+      idx = sonic_ext_copp_ifout_alloc_slot (sem);
+      if (idx < 0)
+	{
+	  rv = VNET_API_ERROR_QUEUE_FULL;
+	  goto done;
+	}
+    }
+
+  clib_memset (&sem->copp_ifout_entries[idx], 0,
+	       sizeof (sem->copp_ifout_entries[idx]));
+  sem->copp_ifout_entries[idx].ethertype = is_ipv6 ? ETHERNET_TYPE_IP6 :
+						       ETHERNET_TYPE_IP4;
+  snprintf ((char *) sem->copp_ifout_entries[idx].name,
+	    sizeof (sem->copp_ifout_entries[idx].name), "%s", policer_name);
+  sem->copp_ifout_entries[idx].policer_index = ~0;
+  sem->copp_ifout_entries[idx].in_use = 1;
+  sem->copp_ifout_entries[idx].match_dhcp4 = is_ipv6 ? 0 : 1;
+  sem->copp_ifout_entries[idx].match_dhcp6 = is_ipv6 ? 1 : 0;
+  sem->copp_ifout_entries[idx].dhcp_copy = is_copy ? 1 : 0;
+  sem->copp_ifout_conform_packets[idx] = 0;
+  sem->copp_ifout_exceed_packets[idx] = 0;
+  sem->copp_ifout_violate_packets[idx] = 0;
+
+done:
+  vlib_worker_thread_barrier_release (vm);
+  return rv;
+}
+
+int
+sonic_ext_copp_neighbor_miss_is_bound (sonic_ext_main_t *sem)
+{
+  u32 idx = sem->copp_neighbor_miss_entry_index;
+
+  return idx != ~0 && idx < sem->copp_ifout_n_entries &&
+	 sem->copp_ifout_entries[idx].in_use &&
+	 sem->copp_ifout_entries[idx].match_neighbor_miss;
+}
+
+int
+sonic_ext_copp_neighbor_miss_bind (const char *policer_name, int is_bind)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  vlib_main_t *vm = vlib_get_main ();
+  u32 idx = sem->copp_neighbor_miss_entry_index;
+  int had_binding = sonic_ext_copp_neighbor_miss_is_bound (sem);
+  int rv = 0;
+
+  /* A semantic row is useful only when copp-ifout is wired onto LCP host
+   * TAPs. Refuse to publish one while CoPP is disabled: glean-redirect uses
+   * row presence to bypass its legacy throttle, so accepting this bind would
+   * otherwise leave unresolved-neighbour traffic with no rate limiter. */
+  if (is_bind && !sem->copp)
+    return VNET_API_ERROR_FEATURE_DISABLED;
+
+  if (is_bind)
+    sonic_ext_neighbor_miss_enable_redirect ();
+
+  /* The side-band table is global while its readers run on every worker.
+   * Quiesce them around first allocation/final release as well as row
+   * replacement so no in-flight marked buffer can outlive the table. */
+  vlib_worker_thread_barrier_sync (vm);
+
+  if (!is_bind)
+    {
+      if (!had_binding)
+	{
+	  sem->copp_neighbor_miss_entry_index = ~0;
+	  goto done;
+	}
+
+      /* Stop new producers first.  A packet already marked by
+	 * glean-redirect will observe no semantic row and pass without falling
+	 * through to raw ethertype matching. */
+      sem->copp_neighbor_miss_entry_index = ~0;
+      clib_memset (&sem->copp_ifout_entries[idx], 0,
+		   sizeof (sem->copp_ifout_entries[idx]));
+      sem->copp_ifout_conform_packets[idx] = 0;
+      sem->copp_ifout_exceed_packets[idx] = 0;
+      sem->copp_ifout_violate_packets[idx] = 0;
+      sonic_ext_vnet_buf_unref (vm);
+      goto done;
+    }
+
+  if (!had_binding)
+    {
+      /* Claim the side-band before publishing a row that can cause
+	 * glean-redirect to index it.  Refusal means bufmon (or another owner)
+	 * already owns the free callback, so fail the bind closed. */
+      if (sonic_ext_vnet_buf_ref (vm))
+	{
+	  rv = VNET_API_ERROR_UNSPECIFIED;
+	  goto done;
+	}
+
+      idx = (u32) sonic_ext_copp_ifout_alloc_slot (sem);
+      if (idx == (u32) -1)
+	{
+	  sonic_ext_vnet_buf_unref (vm);
+	  rv = VNET_API_ERROR_QUEUE_FULL;
+	  goto done;
+	}
+    }
+  else
+    {
+      /* Hide the singleton while replacing it, but retain the existing
+	 * side-band reference. */
+      sem->copp_neighbor_miss_entry_index = ~0;
+    }
+
+  clib_memset (&sem->copp_ifout_entries[idx], 0,
+	       sizeof (sem->copp_ifout_entries[idx]));
+  snprintf ((char *) sem->copp_ifout_entries[idx].name,
+	    sizeof (sem->copp_ifout_entries[idx].name), "%s", policer_name);
+  sem->copp_ifout_entries[idx].policer_index = ~0;
+  sem->copp_ifout_entries[idx].in_use = 1;
+  sem->copp_ifout_entries[idx].match_neighbor_miss = 1;
+  sem->copp_ifout_conform_packets[idx] = 0;
+  sem->copp_ifout_exceed_packets[idx] = 0;
+  sem->copp_ifout_violate_packets[idx] = 0;
+  sem->copp_neighbor_miss_entry_index = idx;
+
+done:
+  vlib_worker_thread_barrier_release (vm);
+  return rv;
 }
