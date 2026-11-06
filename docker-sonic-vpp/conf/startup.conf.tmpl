@@ -285,12 +285,15 @@ plugins {
 ## restart.  Each keyword takes on|off.
 ##
 ## VPP-wired: punt-via-member, host-xc, drop-member-stats, nd-punt,
-## copp.  A disabled feature's node is never attached to its feature arc.
-## sonic-ext-capture has no keyword -- it produces the per-buffer cookie that
-## punt-via-member and drop-member-stats consume, so it follows them.  nd-punt
-## has no node: it hands IPv6 ND (RS/RA/NS/NA) to the kernel, as ARP already
-## is, so VPP neither answers ND nor learns neighbors from it; off leaves ND to
-## VPP.
+## copp, drop-reason-stats.  A disabled feature's node is never attached to
+## its feature arc.  sonic-ext-capture has no keyword -- it produces the
+## per-buffer cookie that punt-via-member, drop-member-stats and
+## drop-reason-stats consume, so it follows them.  nd-punt has no node: it
+## hands IPv6 ND (RS/RA/NS/NA) to the kernel, as ARP already is, so VPP neither
+## answers ND nor learns neighbors from it; off leaves ND to VPP.
+## drop-reason-stats counts drops per SAI drop reason for configurable drop
+## counters; saivpp also asks for it, and advertises no drop reasons when it
+## is off.
 ##
 ## saivpp-wired: ip2me, l2-trap-fixup, l2-trap-learn, l2-vlan-filter.  VPP only
 ## stores these and answers sonic_ext_feature_get(); saivpp asks before
@@ -306,6 +309,7 @@ plugins {
     # drop-member-stats off
     # nd-punt off
     # copp off
+    # drop-reason-stats off
     # ip2me off
     # l2-trap-fixup off
     # l2-trap-learn off
