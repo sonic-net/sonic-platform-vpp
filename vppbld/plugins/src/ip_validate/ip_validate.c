@@ -81,12 +81,63 @@ done:
 /* API definitions */
 #include <ip_validate/ip_validate.api.c>
 
+static uword
+unformat_ip_validate_onoff (unformat_input_t *input, va_list *args)
+{
+  u8 *result = va_arg (*args, u8 *);
+
+  if (unformat (input, "on") || unformat (input, "enable"))
+    *result = 1;
+  else if (unformat (input, "off") || unformat (input, "disable"))
+    *result = 0;
+  else
+    return 0;
+
+  return 1;
+}
+
+/*
+ * "ip-validate { ... }" startup config.
+ *
+ * Runs after the init functions -- vlib_main() calls
+ * vlib_call_all_init_functions() before the late
+ * vlib_call_all_config_functions() -- so the defaults seeded in
+ * ip_validate_init() are already in place and get overridden here.
+ */
+static clib_error_t *
+ip_validate_config (vlib_main_t *vm, unformat_input_t *input)
+{
+  ip_validate_main_t *sm = &ip_validate_main;
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      u8 enable;
+
+      if (unformat (input, "link-local-drop %U", unformat_ip_validate_onoff,
+		    &enable))
+	{
+	  sm->link_local_drop = enable;
+	  continue;
+	}
+
+      return clib_error_return (0, "unknown ip-validate setting `%U'",
+				format_unformat_error, input);
+    }
+
+  return 0;
+}
+
+VLIB_CONFIG_FUNCTION (ip_validate_config, "ip-validate");
+
 static clib_error_t *
 ip_validate_init (vlib_main_t *vm)
 {
   ip_validate_main_t *sm = &ip_validate_main;
 
   sm->msg_id_base = setup_message_id_table ();
+
+  /* Defaults; may be overridden by ip_validate_config() below. */
+  sm->link_local_drop = 1;
 
   return 0;
 }
