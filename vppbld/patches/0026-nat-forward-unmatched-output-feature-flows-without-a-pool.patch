@@ -1,0 +1,198 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ryan Wolfe <rnwolfe@google.com>
+Date: Mon, 19 Oct 2026 16:42:56 -0400
+Subject: [PATCH] nat: forward unmatched output-feature flows when there is no
+ pool
+
+With forwarding enabled, nat44-ed documents that translation only occurs
+if an active session or static configuration exists and the rest of the
+traffic is passed without being translated. The in2out input feature
+does that (nat44_ed_not_translate). In output-feature mode a new flow
+from a host with no static mapping still reaches slow_path_ed, which
+asks nat_ed_alloc_addr_and_port for a pool address. With no pool
+configured that fails and the packet is dropped as "out of ports".
+
+A static NAT only setup (static mappings, forwarding enabled, an
+output-feature outside interface, no pool) therefore drops all traffic
+from unmapped inside hosts towards the outside interface, while return
+traffic and traffic from the outside are already passed untranslated
+through forwarding bypass sessions.
+
+When forwarding is enabled, the flow leaves through an output-feature
+interface, it matches no static mapping, it is not hairpinning to a
+static mapping's external address, and no pool address is configured
+or waiting for an interface address, pass the packet untranslated
+instead. Nothing changes with forwarding disabled or with a pool
+configured, so output-feature forwarding still translates dynamically
+from a pool as before (test_output_feature).
+
+Type: fix
+
+Signed-off-by: Ryan Wolfe <rnwolfe@google.com>
+---
+ src/plugins/nat/nat44-ed/nat44_ed_in2out.c | 31 ++++++++
+ test/test_nat44_ed_output.py               | 85 +++++++++++++++++++++-
+ 2 files changed, 115 insertions(+), 1 deletion(-)
+
+diff --git a/src/plugins/nat/nat44-ed/nat44_ed_in2out.c b/src/plugins/nat/nat44-ed/nat44_ed_in2out.c
+index 700f2691a..8ae6925c5 100644
+--- a/src/plugins/nat/nat44-ed/nat44_ed_in2out.c
++++ b/src/plugins/nat/nat44-ed/nat44_ed_in2out.c
+@@ -420,6 +420,28 @@ is_destination_resolvable (u32 rx_fib_index, ip4_address_t addr)
+   return 0;
+ }
+ 
++/*
++ * With forwarding enabled, translation only occurs if an active session or
++ * static configuration exists. In output-feature mode a new flow that matches
++ * neither still reaches slow_path_ed and needs a pool address; when no pool
++ * is configured there is nothing to translate it to, so forward it
++ * untranslated instead of dropping it as out of ports.
++ */
++static_always_inline int
++nat44_ed_fwd_no_pool (snat_main_t *sm, u32 tx_sw_if_index)
++{
++  snat_address_resolve_t *rp;
++
++  if (!sm->forwarding_enabled || tx_sw_if_index == ~0 || vec_len (sm->addresses))
++    return 0;
++  vec_foreach (rp, sm->addr_to_resolve)
++    {
++      if (!rp->is_twice_nat)
++	return 0;
++    }
++  return 1;
++}
++
+ static u32
+ slow_path_ed (vlib_main_t *vm, snat_main_t *sm, vlib_buffer_t *b,
+ 	      ip4_address_t l_addr, ip4_address_t r_addr, u16 l_port,
+@@ -468,6 +490,15 @@ slow_path_ed (vlib_main_t *vm, snat_main_t *sm, vlib_buffer_t *b,
+       is_sm = 1;
+     }
+ 
++  // forwarding mode, no static mapping, no pool and not hairpinning
++  ip4_address_t placeholder_addr;
++  if (!is_sm && nat44_ed_fwd_no_pool (sm, tx_sw_if_index) &&
++      !nat44_ed_external_sm_lookup (sm, r_addr, r_port, proto, &placeholder_addr, 0))
++    {
++      *sessionp = NULL;
++      return next;
++    }
++
+   if (PREDICT_TRUE (proto == IP_PROTOCOL_TCP))
+     {
+       if (PREDICT_FALSE (!tcp_flags_is_init (
+diff --git a/test/test_nat44_ed_output.py b/test/test_nat44_ed_output.py
+index 812cdec54..adaaab984 100644
+--- a/test/test_nat44_ed_output.py
++++ b/test/test_nat44_ed_output.py
+@@ -5,7 +5,7 @@ import random
+ import unittest
+ import struct
+ import socket
+-from scapy.layers.inet import Ether, IP, TCP
++from scapy.layers.inet import Ether, IP, TCP, UDP, ICMP
+ from scapy.packet import Raw
+ from scapy.data import IP_PROTOS
+ from framework import VppTestCase
+@@ -35,6 +35,7 @@ class TestNAT44EDOutput(VppTestCase):
+         super().setUpClass()
+         cls.create_pg_interfaces(range(2))
+         cls.interfaces = list(cls.pg_interfaces)
++        cls.pg0.generate_remote_hosts(2)
+ 
+     @classmethod
+     def tearDownClass(cls):
+@@ -257,6 +258,88 @@ class TestNAT44EDOutput(VppTestCase):
+         sessions = self.vapi.nat44_user_session_dump(pg0.remote_ip4, 0)
+         self.assertEqual(2, len(sessions))
+ 
++    def test_forwarding_static_only(self):
++        """Forwarding with static mappings only: unmapped hosts not translated"""
++
++        mapped = self.pg0.remote_hosts[0]
++        unmapped = self.pg0.remote_hosts[1]
++        remote_host = self.pg1.remote_ip4
++        nat_ip = "10.0.0.3"
++        drops = "/err/nat44-ed-in2out-output-slowpath/out of ports"
++
++        self.pg0.configure_ipv4_neighbors()
++        self.vapi.nat44_forwarding_enable_disable(enable=1)
++        self.vapi.nat44_ed_add_del_output_interface(
++            sw_if_index=self.pg1.sw_if_index, is_add=1
++        )
++        self.vapi.nat44_add_del_static_mapping(
++            is_add=1,
++            local_ip_address=mapped.ip4,
++            external_ip_address=nat_ip,
++            external_sw_if_index=0xFFFFFFFF,
++            flags=VppEnum.vl_api_nat_config_flags_t.NAT_IS_ADDR_ONLY,
++        )
++
++        def in2out(host, port):
++            eth = Ether(src=host.mac, dst=self.pg0.local_mac)
++            ip = IP(src=host.ip4, dst=remote_host)
++            return [
++                eth / ip / TCP(sport=port, dport=80, flags="S"),
++                eth / ip / UDP(sport=port, dport=53),
++                eth / ip / ICMP(id=port, type="echo-request"),
++            ]
++
++        def assert_src(capture, src, port):
++            for p in capture:
++                self.assertEqual(p[IP].src, src)
++                if ICMP in p:
++                    self.assertEqual(p[ICMP].id, port)
++                else:
++                    self.assertEqual(p[IP].payload.sport, port)
++
++        # unmapped host: forwarded untranslated, return traffic too
++        capture = self.send_and_expect(
++            self.pg0,
++            in2out(unmapped, 6000),
++            self.pg1,
++            stats_diff={"err": {drops: 0}},
++        )
++        assert_src(capture, unmapped.ip4, 6000)
++        eth = Ether(src=self.pg1.remote_mac, dst=self.pg1.local_mac)
++        ip = IP(src=remote_host, dst=unmapped.ip4)
++        out2in = [
++            eth / ip / TCP(sport=80, dport=6000, flags="SA"),
++            eth / ip / UDP(sport=53, dport=6000),
++            eth / ip / ICMP(id=6000, type="echo-reply"),
++        ]
++        capture = self.send_and_expect(self.pg1, out2in, self.pg0)
++        for p in capture:
++            self.assertEqual(p[IP].dst, unmapped.ip4)
++
++        # mapped host: translated
++        capture = self.send_and_expect(self.pg0, in2out(mapped, 6001), self.pg1)
++        assert_src(capture, nat_ip, 6001)
++
++        # forwarding disabled: unmapped host dropped as before
++        self.vapi.nat44_forwarding_enable_disable(enable=0)
++        pkts = in2out(unmapped, 6002)
++        self.send_and_assert_no_replies(
++            self.pg0, pkts, stats_diff={"err": {drops: len(pkts)}}
++        )
++
++        # forwarding enabled with a pool: unmapped host dynamically translated
++        self.vapi.nat44_forwarding_enable_disable(enable=1)
++        self.vapi.nat44_add_del_address_range(
++            first_ip_address=self.pg1.local_ip4,
++            last_ip_address=self.pg1.local_ip4,
++            vrf_id=0xFFFFFFFF,
++            is_add=1,
++            flags=0,
++        )
++        capture = self.send_and_expect(self.pg0, in2out(unmapped, 6003), self.pg1)
++        for p in capture:
++            self.assertEqual(p[IP].src, self.pg1.local_ip4)
++
+ 
+ if __name__ == "__main__":
+     unittest.main(testRunner=VppTestRunner)
+-- 
+2.56.0.218.g1ec904b173-goog
+
