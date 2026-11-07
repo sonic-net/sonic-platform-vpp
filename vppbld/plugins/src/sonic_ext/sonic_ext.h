@@ -45,9 +45,12 @@
  *   2. No memory allocation, no per-thread or atomic ops in the hot
  *      path -- the slot is buffer-local.
  *
- *   3. Self-cleaning -- when the buffer is freed and recycled, opaque2
- *      is reset by vlib_buffer_pool_init, so a stale value cannot be
- *      mis-attributed to an unrelated future packet.
+ *   3. Not self-cleaning -- freeing a buffer resets only its first
+ *      cache line from the pool template, so opaque2, magic included,
+ *      survives into whatever packet the buffer carries next.  Capture
+ *      therefore also sets SONIC_EXT_BUFFER_F_CAPTURED in b->flags,
+ *      which that reset does clear: orig_rx_sw_if_index belongs to
+ *      this packet only if the flag is set.
  *
  *   4. No conflict with stock VPP plugins.  We use only the trailing
  *      `unused[]` array of vnet_buffer_opaque2_t, never the union with
@@ -60,8 +63,9 @@
 
 /* --- Deferred egress mirror (Everflow MIRROR_EGRESS) extension ----------- *
  * mirror_sw_if_index carries the ERSPAN/GRE tunnel the deferred clone is
- * sent to; the ACL dataplane node stamps it into the cookie alongside the
- * magic when a matched rule has ACL_MIRROR_F_DEFERRED set. */
+ * sent to; the ACL dataplane node stamps it into the cookie, flagged by
+ * SONIC_EXT_BUFFER_F_MIRROR_PENDING rather than the magic, when a matched
+ * rule has ACL_MIRROR_F_DEFERRED set. */
 #define SONIC_EXT_INVALID_SW_IF_INDEX ~0U
 #define SONIC_EXT_INVALID_VLAN_TAG ~0U
 /* Buffer flag: a deferred egress-mirror clone is pending on this packet. */
@@ -72,6 +76,9 @@
  * beside the facility it guards.  Noted here so the plugin's claims on the
  * nine shared AVAIL bits stay visible in one place.
  */
+/* Buffer flag: sonic-ext-capture stamped orig_rx_sw_if_index for this
+ * packet (see "Not self-cleaning" above). */
+#define SONIC_EXT_BUFFER_F_CAPTURED VNET_BUFFER_F_AVAIL3
 
 /*
  * orig_vlan_tag: outermost 802.1Q (or 802.1ad) tag observed on the
@@ -113,6 +120,29 @@ static_always_inline sonic_ext_buffer_opaque_t *
 sonic_ext_buffer (vlib_buffer_t *b)
 {
   return (sonic_ext_buffer_opaque_t *) vnet_buffer2 (b)->unused;
+}
+
+/* The capture cookie (magic, orig_rx_sw_if_index, orig_vlan_tag) if
+ * sonic-ext-capture stamped it for this very packet, else NULL.  Readers of
+ * those fields must come through here rather than test the magic: opaque2
+ * survives buffer recycling, SONIC_EXT_BUFFER_F_CAPTURED does not. */
+static_always_inline sonic_ext_buffer_opaque_t *
+sonic_ext_buffer_captured (vlib_buffer_t *b)
+{
+  sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b);
+
+  if (!(b->flags & SONIC_EXT_BUFFER_F_CAPTURED) ||
+      seb->magic != SONIC_EXT_BUFFER_MAGIC)
+    return 0;
+  return seb;
+}
+
+/* Consume the capture cookie so no later node acts on it again. */
+static_always_inline void
+sonic_ext_buffer_consume (vlib_buffer_t *b)
+{
+  sonic_ext_buffer (b)->magic = 0;
+  b->flags &= ~SONIC_EXT_BUFFER_F_CAPTURED;
 }
 
 /*

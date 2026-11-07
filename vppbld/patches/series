@@ -102,3 +102,17 @@
 #     unchanged. The 6RD security_check "no tunnel" stays a drop.
 #     Includes both-halves tests in test_ipip.py.
 0027-ipip-add-punt-no-tunnel-startup-config-option.patch
+# 28. sflow: make drop monitoring usable by SONiC.
+#     - Emit NET_DM_ATTR_IN_PORT as the nested container the kernel
+#       drop_monitor uses, carrying the linux-cp tap ifIndex rather than the
+#       VPP hw_if_index, so NET_DM listeners such as hsflowd can parse the
+#       ingress port and resolve it to the right interface.
+#     - Report the port the packet arrived on (sonic_ext's capture
+#       orig_rx_sw_if_index, when available) rather than the bond / BVI /
+#       sub-interface its RX sw_if_index was since rewritten to.
+#     - Drop monitoring is switch-wide: sflow-drop goes on every interface's
+#       error-drop arc while it is on (and on interfaces created later)
+#       instead of only on ports with packet sampling enabled, so discards
+#       dispatched on a bond / sub-interface / BVI are seen, and drop
+#       monitoring alone starts the sample process.
+0028-sflow-switch-wide-drop-monitoring-for-sonic.patch
