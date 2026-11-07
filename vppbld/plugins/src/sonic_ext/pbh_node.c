@@ -423,8 +423,8 @@ sonic_ext_pbh_shadow_admits (vlib_buffer_t *b, u32 rx_sw_if_index,
                     pm->bvi_refcount_by_sw_if_index[rx_sw_if_index] == 0))
     return 1;
 
-  seb = sonic_ext_buffer (b);
-  if (seb->magic != SONIC_EXT_BUFFER_MAGIC)
+  seb = sonic_ext_buffer_captured (b);
+  if (!seb)
     return 1;
 
   /* Capture stamps the parent phy, never a sub-interface, and PBH binds the

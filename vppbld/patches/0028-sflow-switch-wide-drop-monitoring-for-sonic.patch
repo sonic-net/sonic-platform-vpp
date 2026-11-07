@@ -1,7 +1,15 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: SONiC VPP <sonic-vpp@sonic-net.github.io>
 Date: Tue, 3 Nov 2026 00:00:00 +0000
-Subject: [PATCH] sflow: report linux-cp ifIndex in drop-monitor IN_PORT
+Subject: [PATCH] sflow: switch-wide drop monitoring with a usable IN_PORT
+
+Make the drop monitor usable by SONiC: report the ingress port in a form a
+NET_DM listener can parse and resolve, report it against the port the
+packet actually arrived on, and monitor drops on every interface rather
+than only on ports with packet sampling enabled.
+
+IN_PORT encoding
+----------------
 
 send_discard_sample() writes NET_DM_ATTR_IN_PORT as a bare u32 holding the
 VPP hw_if_index. Both halves of that are wrong for a NET_DM listener.
@@ -19,7 +27,9 @@ resolves the pairing for the counter channel, where it dlsyms linux-cp's
 lcp_itf_pair_get_vif_index_by_phy() and advertises the result as
 SFLOW_VPP_ATTR_OSINDEX. Reuse that here so a discard on, say, VPP interface
 bobm0 is reported against the ifIndex of its host tap, matching the ifIndex
-the same listener already has counters and packet samples for.
+the same listener already has counters and packet samples for. The pairing
+is looked up from the hw interface rather than per_interface_data, since
+discards are reported from interfaces sampling is not enabled on too.
 
 Fall back to the hw_if_index when linux-cp is absent or the interface has no
 pairing, which is no worse than the current behaviour.
@@ -28,9 +38,56 @@ Note the packet-sample path (SFLOWPS_PSAMPLE_ATTR_IIFINDEX) is deliberately
 left alone: it is a plain u32 by PSAMPLE's own definition, and hsflowd's
 mod_vpp translates it from the VPP namespace itself.
 
-Verifying this needs the bytes that were encoded, but a NET_DM message is
-published to a netlink multicast group, so reading it back means attaching a
-listener - which needs CAP_NET_ADMIN and a kernel built with
+Original ingress port
+---------------------
+
+The RX sw_if_index a discard carries is often no longer the port the
+packet arrived on: bond-input rewrites it to the bond, l2-input to a BVI,
+ethernet-input to a sub-interface, and so on, so the drop would be reported
+against a port-channel or VLAN rather than a physical port.  SONiC wants the
+port the packet came in on.  The sonic_ext plugin's sonic-ext-capture node
+records exactly that, on the device-input arc before any of those nodes run,
+so dlsym sonic_ext's sonic_ext_buffer_orig_rx_sw_if_index() alongside the
+linux-cp lookup and report the port it returns whenever it returns one.
+That accessor only answers for a packet capture actually ran on - capture
+flags the buffer, and the flag, unlike the value it guards, is cleared when
+the buffer is recycled - so otherwise, or when sonic_ext is not loaded, the
+current RX interface is reported as before.
+
+Switch-wide drop monitoring
+---------------------------
+
+Drop monitoring is a switch-wide setting, but sflow-drop was only put on
+the error-drop arc of interfaces that packet sampling had been enabled on.
+SONiC has no per-port drop monitor: drop_monitor_limit lives in
+SFLOW|global and orchagent binds its TAM object to the switch, and hsflowd's
+mod_dropmon reports every discard it receives against one datasource.
+
+Tying the two together also loses discards on ports where sampling *is*
+enabled.  error-drop dispatches a frame on the RX sw_if_index its packets
+carry, and that is the bond once bond-input has run, a sub-interface after
+ethernet-input, or a BVI after l2-input - none of which SONiC enables
+sampling on.  A discard on a port-channel member was therefore never seen,
+whatever IN_PORT it would have been given.
+
+Put sflow-drop on every interface while drop monitoring is on, and on any
+interface created while it is; sflow enable/disable no longer touches it.
+That also drops the per-interface toggle, which passed smp->dropM rather
+than the desired state and so, on disabling sampling on a port with drop
+monitoring on, enabled sflow-drop a second time instead of removing it.
+
+Drop monitoring alone now starts and stops the sample-processing process
+as well.  sflow_sampling_start_stop() already counted dropM as a reason to
+run, but nothing called it when dropM changed, so with no port sampling
+the discards sat in the worker FIFOs - and sflow-drop could be reached
+before per_thread_data had been allocated.
+
+Tests
+-----
+
+Verifying the encoding needs the bytes that were sent, but a NET_DM message
+is published to a netlink multicast group, so reading it back means
+attaching a listener - which needs CAP_NET_ADMIN and a kernel built with
 CONFIG_NET_DROP_MONITOR. Add "sflow dropmon-capture enable", which retains
 the last message exactly as it was handed to sendmsg(), and "show sflow
 dropmon-capture", which hexdumps it. That makes the encoding inspectable on
@@ -38,8 +95,54 @@ a live system without a listener, and lets SFlowDropMonInPortTestCase in
 test_sflow_drop.py walk IN_PORT the way a listener would and assert it is a
 nested container carrying the linux-cp ifIndex rather than the VPP index.
 
+SFlowDropAllInterfacesTestCase enables drop monitoring with sampling off on
+every interface and checks that sflow-drop is on each interface's arc,
+including one created afterwards, that a discard is processed, and that
+the feature is removed again when drop monitoring is turned off.
+
 Signed-off-by: SONiC VPP <sonic-vpp@sonic-net.github.io>
 ---
+diff --git a/src/plugins/sflow/node.c b/src/plugins/sflow/node.c
+--- a/src/plugins/sflow/node.c
++++ b/src/plugins/sflow/node.c
+@@ -391,6 +391,28 @@ buffer_rewind_current (vlib_buffer_t *bN)
+     }
+ }
+ 
++/*
++ * The RX sw_if_index a discard carries is often no longer the port the packet
++ * arrived on: bond-input rewrites it to the bond, l2-input to a BVI, and so
++ * on.  Report the port recorded by sonic_ext's sonic-ext-capture whenever it
++ * is available, and the current RX interface otherwise.
++ */
++static_always_inline u32
++sflow_drop_rx_sw_if_index (sflow_main_t *smp, vlib_buffer_t *bN)
++{
++  u32 rx = vnet_buffer (bN)->sw_if_index[VLIB_RX];
++
++  if (smp->sonic_ext_buffer_orig_rx_sw_if_index == 0)
++    return rx;
++
++  u32 orig_rx = (*smp->sonic_ext_buffer_orig_rx_sw_if_index) (bN);
++  /* the port may have been deleted while the packet was in flight */
++  if (orig_rx == ~0 ||
++      !vnet_get_sw_interface_or_null (smp->vnet_main, orig_rx))
++    return rx;
++  return orig_rx;
++}
++
+ VLIB_NODE_FN (sflow_drop_node)
+ (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+ {
+@@ -416,7 +438,7 @@ VLIB_NODE_FN (sflow_drop_node)
+       ethernet_header_t *en = vlib_buffer_get_current (bN);
+       // Where did this packet come in originally?
+       // (Doesn't have to be known)
+-      u32 if_index = vnet_buffer (bN)->sw_if_index[VLIB_RX];
++      u32 if_index = sflow_drop_rx_sw_if_index (smp, bN);
+       if (if_index)
+ 	{
+ 	  vnet_hw_interface_t *hw =
 diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
 --- a/src/plugins/sflow/sflow.c
 +++ b/src/plugins/sflow/sflow.c
@@ -54,19 +157,19 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
 +static u32
 +sflow_linux_if_index (sflow_main_t *smp, u32 hw_if_index)
 +{
-+  if (smp->lcp_itf_pair_get_vif_index_by_phy == 0 ||
-+      hw_if_index >= vec_len (smp->per_interface_data))
++  if (smp->lcp_itf_pair_get_vif_index_by_phy == 0)
 +    return 0;
-+  sflow_per_interface_data_t *sfif =
-+    vec_elt_at_index (smp->per_interface_data, hw_if_index);
-+  /* The counter-polling path refreshes this periodically, but a discard can
-+     turn up before the first poll, so resolve it on demand if necessary. */
-+  if (sfif->linux_if_index == 0)
-+    sfif->linux_if_index =
-+      (*smp->lcp_itf_pair_get_vif_index_by_phy) (sfif->sw_if_index);
-+  if (sfif->linux_if_index == INDEX_INVALID)
++  /* Discards are monitored on every interface, not just the ones sampling is
++     enabled on, so per_interface_data cannot be relied on to describe it. */
++  vnet_hw_interface_t *hw =
++    vnet_get_hw_interface_or_null (smp->vnet_main, hw_if_index);
++  if (!hw)
 +    return 0;
-+  return sfif->linux_if_index;
++  u32 linux_if_index =
++    (*smp->lcp_itf_pair_get_vif_index_by_phy) (hw->sw_if_index);
++  if (linux_if_index == INDEX_INVALID)
++    return 0;
++  return linux_if_index;
 +}
 +
  static int
@@ -94,7 +197,92 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
    SFLOWDM_set_attr (dmt, NET_DM_ATTR_PAYLOAD, sample->header,
  		    sample->header_bytes);
    if (SFLOWDM_send (dmt) < 0)
-@@ -1257,6 +1292,52 @@ show_sflow_command_fn (vlib_main_t *vm, unformat_input_t *input,
+@@ -801,14 +836,11 @@ sflow_enable_disable_interface (sflow_main_t *smp,
+   bool egress_on =
+     sfif->sflow_enabled &&
+     (direction == SFLOW_DIRN_EGRESS || direction == SFLOW_DIRN_BOTH);
+-  bool drop_on = sfif->sflow_enabled && smp->dropM;
+   bool ingress_enabled = (vnet_feature_is_enabled ("device-input", "sflow",
+ 						   sfif->sw_if_index) == 1);
+   bool egress_enabled =
+     (vnet_feature_is_enabled ("interface-output", "sflow-egress",
+ 			      sfif->sw_if_index) == 1);
+-  bool drop_enabled = (vnet_feature_is_enabled ("error-drop", "sflow-drop",
+-						sfif->sw_if_index) == 1);
+ 
+   if (ingress_on != ingress_enabled)
+     vnet_feature_enable_disable ("device-input", "sflow", sfif->sw_if_index,
+@@ -816,11 +848,50 @@ sflow_enable_disable_interface (sflow_main_t *smp,
+   if (egress_on != egress_enabled)
+     vnet_feature_enable_disable ("interface-output", "sflow-egress",
+ 				 sfif->sw_if_index, egress_on, 0, 0);
+-  if (drop_on != drop_enabled)
+-    vnet_feature_enable_disable ("error-drop", "sflow-drop", sfif->sw_if_index,
++}
++
++/*
++ * Drop monitoring is switch-wide, independent of which ports are sampled:
++ * SONiC binds its drop-monitor TAM object to the switch.  error-drop also
++ * dispatches a frame on the RX sw_if_index its packets carry, which may be a
++ * bond, a sub-interface or a BVI rather than a port sampling is enabled on, so
++ * sflow-drop has to be on every interface while drop monitoring is on.
++ */
++static void
++sflow_drop_enable_disable_interface (sflow_main_t *smp, u32 sw_if_index)
++{
++  bool drop_enabled = (vnet_feature_is_enabled ("error-drop", "sflow-drop",
++						sw_if_index) == 1);
++
++  /* vnet_feature_enable_disable() is not idempotent: enabling twice would
++     add sflow-drop to the arc twice and report every discard twice. */
++  if (smp->dropM != drop_enabled)
++    vnet_feature_enable_disable ("error-drop", "sflow-drop", sw_if_index,
+ 				 smp->dropM, 0, 0);
+ }
+ 
++static void
++sflow_drop_enable_disable_all (sflow_main_t *smp)
++{
++  vnet_sw_interface_t *si;
++
++  pool_foreach (si, smp->vnet_main->interface_main.sw_interfaces)
++    sflow_drop_enable_disable_interface (smp, si->sw_if_index);
++}
++
++static clib_error_t *
++sflow_sw_interface_add_del (vnet_main_t *vnm, u32 sw_if_index, u32 is_add)
++{
++  /* Deletion strips every feature from the interface already.  Interfaces
++     created during early init may arrive before the feature arcs exist, but
++     drop monitoring cannot be on by then. */
++  if (is_add && sflow_main.dropM)
++    sflow_drop_enable_disable_interface (&sflow_main, sw_if_index);
++  return 0;
++}
++
++VNET_SW_INTERFACE_ADD_DEL_FUNCTION (sflow_sw_interface_add_del);
++
+ void
+ sflow_enable_disable_all (sflow_main_t *smp)
+ {
+@@ -852,8 +923,14 @@ sflow_drop_monitoring (sflow_main_t *smp, bool dropM)
+     {
+       // drop-monitoring changed.
+       smp->dropM = dropM;
+-      // Tell all active interfaces.
+-      sflow_enable_disable_all (smp);
++      /* sflow-drop writes into per_thread_data and its FIFOs are only read
++	 while running, so start before attaching it and stop after detaching
++	 it. */
++      if (dropM)
++	sflow_sampling_start_stop (smp);
++      sflow_drop_enable_disable_all (smp);
++      if (!dropM)
++	sflow_sampling_start_stop (smp);
+     }
+   return 0;
+ }
+@@ -1257,6 +1334,52 @@ show_sflow_command_fn (vlib_main_t *vm, unformat_input_t *input,
    return error;
  }
  
@@ -147,7 +335,7 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
  VLIB_CLI_COMMAND (sflow_enable_disable_command, static) = {
    .path = "sflow enable-disable",
    .short_help = "sflow enable-disable <interface-name> [disable]",
-@@ -1299,6 +1380,18 @@ VLIB_CLI_COMMAND (show_sflow_command, static) = {
+@@ -1299,6 +1422,18 @@ VLIB_CLI_COMMAND (show_sflow_command, static) = {
    .function = show_sflow_command_fn,
  };
  
@@ -166,6 +354,54 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
  /* API message handler */
  static void
  vl_api_sflow_enable_disable_t_handler (vl_api_sflow_enable_disable_t *mp)
+@@ -1533,6 +1668,13 @@ sflow_init (vlib_main_t *vm)
+       SFLOW_NOTICE ("linux-cp not found - using VPP sw_if_index");
+     }
+ 
++  smp->sonic_ext_buffer_orig_rx_sw_if_index = vlib_get_plugin_symbol (
++    SFLOW_SONIC_EXT_LIB, SFLOW_SONIC_EXT_SYM_GET_ORIG_RX);
++  if (smp->sonic_ext_buffer_orig_rx_sw_if_index)
++    {
++      SFLOW_NOTICE ("sonic_ext found - reporting discards on bond members");
++    }
++
+   return error;
+ }
+ 
+diff --git a/src/plugins/sflow/sflow.h b/src/plugins/sflow/sflow.h
+--- a/src/plugins/sflow/sflow.h
++++ b/src/plugins/sflow/sflow.h
+@@ -192,6 +192,7 @@ typedef struct
+ } sflow_per_thread_data_t;
+ 
+ typedef u32 (*IfIndexLookupFn) (u32);
++typedef u32 (*BufferIfIndexLookupFn) (vlib_buffer_t *);
+ 
+ typedef struct
+ {
+@@ -241,6 +242,7 @@ typedef struct
+   u32 csample_send_drops;
+   u32 unixsock_seq;
+   IfIndexLookupFn lcp_itf_pair_get_vif_index_by_phy;
++  BufferIfIndexLookupFn sonic_ext_buffer_orig_rx_sw_if_index;
+ } sflow_main_t;
+ 
+ extern sflow_main_t sflow_main;
+diff --git a/src/plugins/sflow/sflow_dlapi.h b/src/plugins/sflow/sflow_dlapi.h
+--- a/src/plugins/sflow/sflow_dlapi.h
++++ b/src/plugins/sflow/sflow_dlapi.h
+@@ -13,4 +13,11 @@
+  */
+ #define SFLOW_LCP_LIB		     "linux_cp_plugin.so"
+ #define SFLOW_LCP_SYM_GET_VIF_BY_PHY "lcp_itf_pair_get_vif_index_by_phy"
++/* If present, sonic_ext plugin will be queried for the port a
++ * discarded packet was received on, before bond-input, l2-input
++ * and the like rewrote its RX sw_if_index, so that the discard is
++ * reported against that port rather than a bond, BVI etc.
++ */
++#define SFLOW_SONIC_EXT_LIB		    "sonic_ext_plugin.so"
++#define SFLOW_SONIC_EXT_SYM_GET_ORIG_RX "sonic_ext_buffer_orig_rx_sw_if_index"
+ #endif /* __included_sflow_dyn_api_h__ */
 diff --git a/src/plugins/sflow/sflow_dropmon.c b/src/plugins/sflow/sflow_dropmon.c
 --- a/src/plugins/sflow/sflow_dropmon.c
 +++ b/src/plugins/sflow/sflow_dropmon.c
@@ -279,7 +515,7 @@ diff --git a/src/plugins/sflow/sflow_netlink.h b/src/plugins/sflow/sflow_netlink
 diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
 --- a/test/test_sflow_drop.py
 +++ b/test/test_sflow_drop.py
-@@ -1,14 +1,46 @@
+@@ -1,14 +1,47 @@
  #!/usr/bin/env python3
  
  import unittest
@@ -291,6 +527,7 @@ diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
  from scapy.layers.inet import IP, UDP
  from random import randint
 +from config import config
++from vpp_lo_interface import VppLoInterface
  import re  # for finding counters in "sh errors" output
  
 +# from linux/netlink.h
@@ -326,7 +563,7 @@ diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
  
  class SFlowDropTestCase(VppTestCase):
      """sFlow test case"""
-@@ -147,3 +179,139 @@ class SFlowDropTestCase(VppTestCase):
+@@ -147,3 +180,227 @@ class SFlowDropTestCase(VppTestCase):
          self.sleep(1.0)
          # verify sflow counters
          self.verify_sflow(count)
@@ -466,3 +703,91 @@ diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
 +            vif_index,
 +            "IN_PORT should report the linux-cp ifIndex, not the VPP index",
 +        )
++
++
++class SFlowDropAllInterfacesTestCase(VppTestCase):
++    """sFlow drop monitoring is switch-wide"""
++
++    def setUp(self):
++        super(SFlowDropAllInterfacesTestCase, self).setUp()
++        self.create_pg_interfaces(range(2))
++        for i in self.pg_interfaces:
++            i.admin_up()
++            i.config_ip4()
++            i.resolve_arp()
++
++    def tearDown(self):
++        self.vapi.sflow_drop_monitoring_set(drop_M=0)
++        for i in self.pg_interfaces:
++            i.admin_down()
++            i.unconfig()
++        super(SFlowDropAllInterfacesTestCase, self).tearDown()
++
++    def sflow_drop_enabled(self, name):
++        """Is sflow-drop on the error-drop arc of this interface?"""
++        out = self.vapi.cli("show interface features %s" % name)
++        in_arc = False
++        for line in out.split("\n"):
++            line = line.strip()
++            if line.endswith(":"):
++                in_arc = line == "error-drop:"
++            elif in_arc and line.split()[-1:] == ["sflow-drop"]:
++                return True
++        return False
++
++    def get_sflow_counter(self, counter):
++        for line in self.vapi.cli("sh errors").split("\n")[1:]:
++            results = line.split()
++            if len(results) > 1 and results[1] == "sflow":
++                if re.search(counter, line) is not None:
++                    return int(results[0])
++        return None
++
++    def test_drop_monitoring_all_interfaces(self):
++        """discards are reported from ports sampling is not enabled on"""
++
++        # sampling is deliberately left disabled on every interface
++        self.vapi.sflow_drop_monitoring_set(drop_M=1)
++        for i in self.pg_interfaces:
++            self.assertTrue(
++                self.sflow_drop_enabled(i.name),
++                "sflow-drop is not on %s's error-drop arc" % i.name,
++            )
++
++        # an interface created afterwards is covered too
++        lo = VppLoInterface(self)
++        self.assertTrue(
++            self.sflow_drop_enabled(lo.name),
++            "sflow-drop is not on the error-drop arc of a new interface",
++        )
++        lo.remove_vpp_config()
++
++        # ttl=1, so the packet is discarded instead of forwarded
++        p = (
++            Ether(dst=self.pg0.local_mac, src=self.pg0.remote_mac)
++            / IP(src=self.pg0.remote_ip4, dst=self.pg1.remote_ip4, ttl=1)
++            / UDP(sport=randint(49152, 65535), dport=5678)
++            / Raw(b"\xa5" * 64)
++        )
++        self.pg0.add_stream([p])
++        self.pg_start()
++        # allow the discard to reach the main thread
++        self.sleep(1.0)
++        self.assert_equal(
++            self.get_sflow_counter("sflow discards processed"),
++            1,
++            "sflow discards processed",
++        )
++        # no sampling is enabled, so no packet samples were taken
++        self.assert_equal(
++            self.get_sflow_counter("sflow packets processed"),
++            None,
++            "sflow packets processed",
++        )
++
++        self.vapi.sflow_drop_monitoring_set(drop_M=0)
++        for i in self.pg_interfaces:
++            self.assertFalse(
++                self.sflow_drop_enabled(i.name),
++                "sflow-drop is still on %s's error-drop arc" % i.name,
++            )
