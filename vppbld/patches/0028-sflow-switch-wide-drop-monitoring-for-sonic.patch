@@ -82,6 +82,41 @@ run, but nothing called it when dropM changed, so with no port sampling
 the discards sat in the worker FIFOs - and sflow-drop could be reached
 before per_thread_data had been allocated.
 
+Drop notification rate limit
+----------------------------
+
+SONiC caps drop monitoring at drop_monitor_limit notifications per second,
+which orchagent expresses as a packet-mode policer (CIR = CBS = limit) on
+the trap group its TAM collector traps to.  An ASIC meters the mirrored
+drops with it; here nothing did, so a drop storm went to hsflowd at
+whatever rate the 4-deep worker drop FIFOs and the 1 ms poll let through.
+
+The SAI layer already turns every SAI policer into a VPP policer, so meter
+the notifications with that one rather than with a limiter of our own: the
+policer is then created, updated, removed and counted exactly like any
+other, and only how it is attached differs.  The main-thread FIFO drain
+runs each discard through vnet_police_packet() before send_discard_sample()
+and drops it if the policer's action for the verdict is drop, the way the
+sonic_ext copp-ip2me node meters punted packets.  A pps policer is metered
+at the policer plugin's fixed 256-byte packet size, so it counts
+notifications; a byte-rate one at the sampled packet size.  The verdicts
+are added to the policer's own conform/exceed/violate counters.  Metering
+on the main thread gives one exact switch-wide limit with no cross-thread
+state, and nothing else polices through this policer, so it needs no lock.
+
+The policer is bound by name and resolved once per FIFO drain, at the first
+drop dequeued, rather than per notification: policer add/update/delete and
+the binding API run on the main thread too and a drain never suspends, so
+the policer cannot change mid-drain and a change is seen by the next 1 ms
+poll.  So it may be bound before it exists and replaced or deleted
+afterwards; while it does not resolve the
+notifications are unlimited, as they are with no name bound, the default.
+The policer plugin is reached through vlib_get_plugin_symbol(), so sflow
+does not need it loaded.  Suppressed discards are counted in a new "sflow
+DROPMON rate-limited" node counter and in "show sflow".  Configured by the
+sflow_drop_policer_set API, read back by sflow_drop_policer_get, and by
+"sflow drop-monitoring policer <name>|none".
+
 Tests
 -----
 
@@ -100,9 +135,18 @@ every interface and checks that sflow-drop is on each interface's arc,
 including one created afterwards, that a discard is processed, and that
 the feature is removed again when drop monitoring is turned off.
 
+SFlowDropPolicerTestCase binds a policer name before the policer exists
+and checks nothing is limited, then creates a 1 pps policer and sends
+discards one at a time (so the worker FIFO never overflows).  It checks
+that no more than the 9KB minimum bucket plus rate * elapsed reach the
+sender, that the rest are counted as rate-limited, that the policer's own
+stats account for every notification at 256 bytes each, and that nothing
+is limited once the policer is unbound or deleted.
+
 Signed-off-by: SONiC VPP <sonic-vpp@sonic-net.github.io>
 ---
 diff --git a/src/plugins/sflow/node.c b/src/plugins/sflow/node.c
+index 3f45c97e2..b59924d8c 100644
 --- a/src/plugins/sflow/node.c
 +++ b/src/plugins/sflow/node.c
 @@ -391,6 +391,28 @@ buffer_rewind_current (vlib_buffer_t *bN)
@@ -143,10 +187,74 @@ diff --git a/src/plugins/sflow/node.c b/src/plugins/sflow/node.c
        if (if_index)
  	{
  	  vnet_hw_interface_t *hw =
+diff --git a/src/plugins/sflow/sflow.api b/src/plugins/sflow/sflow.api
+index 9b722bc20..45927f0ce 100644
+--- a/src/plugins/sflow/sflow.api
++++ b/src/plugins/sflow/sflow.api
+@@ -263,6 +263,50 @@ define sflow_drop_monitoring_get_reply
+   option in_progress;
+ };
+ 
++/** @brief API to meter sflow drop notifications through a VPP policer
++    @param client_index - opaque cookie to identify the sender
++    @param context - sender context, to match reply w/ request
++    @param name - policer name, empty = unlimited.  Resolved on use, so the
++                  policer need not exist yet.
++*/
++
++autoreply define sflow_drop_policer_set {
++    /* Client identifier, set from api_main.my_client_index */
++    u32 client_index;
++
++    /* Arbitrary context, so client can match reply to request */
++    u32 context;
++
++    string name[64];
++};
++
++/** @brief API to get the policer sflow drop notifications are metered by
++    @param client_index - opaque cookie to identify the sender
++    @param context - sender context, to match reply w/ request
++*/
++
++define sflow_drop_policer_get {
++    /* Client identifier, set from api_main.my_client_index */
++    u32 client_index;
++
++    /* Arbitrary context, so client can match reply to request */
++    u32 context;
++};
++
++/** \brief reply to get the policer sflow drop notifications are metered by
++    @param context - sender context, to match reply w/ request
++    @param name - policer name, empty = unlimited
++    @param rate_limited - drop notifications the policer dropped
++*/
++
++define sflow_drop_policer_get_reply
++{
++  u32 context;
++  string name[64];
++  u32 rate_limited;
++  option in_progress;
++};
++
+ /** \brief Dump sflow enabled interface(s)
+     @param client_index - opaque cookie to identify the sender
+     @param hw_if_index - hw_if_index of a specific interface, or -1 (default)
 diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
+index d8e371d18..b5be83f36 100644
 --- a/src/plugins/sflow/sflow.c
 +++ b/src/plugins/sflow/sflow.c
-@@ -349,6 +349,28 @@ send_packet_sample (vlib_main_t *vm, sflow_main_t *smp, sflow_sample_t *sample)
+@@ -14,6 +14,7 @@
+ #include <sflow/sflow.api_enum.h>
+ #include <sflow/sflow.api_types.h>
+ #include <sflow/sflow_dlapi.h>
++#include <policer/policer.h>
+ 
+ #include <vpp-api/client/stat_client.h>
+ #include <vlib/stats/stats.h>
+@@ -349,6 +350,28 @@ send_packet_sample (vlib_main_t *vm, sflow_main_t *smp, sflow_sample_t *sample)
    return 1;
  }
  
@@ -175,7 +283,7 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
  static int
  send_discard_sample (vlib_main_t *vm, sflow_main_t *smp,
  		     sflow_sample_t *sample)
-@@ -399,7 +421,20 @@ send_discard_sample (vlib_main_t *vm, sflow_main_t *smp,
+@@ -399,7 +422,20 @@ send_discard_sample (vlib_main_t *vm, sflow_main_t *smp,
    // TODO: read from header? (really just needs to be non-zero for hsflowd)
    u16 proto = 0x0800;
    SFLOWDM_set_attr_int (dmt, NET_DM_ATTR_PROTO, proto);
@@ -197,7 +305,133 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
    SFLOWDM_set_attr (dmt, NET_DM_ATTR_PAYLOAD, sample->header,
  		    sample->header_bytes);
    if (SFLOWDM_send (dmt) < 0)
-@@ -801,14 +836,11 @@ sflow_enable_disable_interface (sflow_main_t *smp,
+@@ -407,6 +443,67 @@ send_discard_sample (vlib_main_t *vm, sflow_main_t *smp,
+   return 1;
+ }
+ 
++/* the packet size the policer plugin's xlate.c converts a pps rate with, so
++   metering every notification at this size meters them in packets */
++#define SFLOW_DROP_POLICER_PPS_BYTES 256
++
++static policer_main_t *sflow_policer_main;
++static vlib_combined_counter_main_t *sflow_policer_counters;
++
++/* Resolved lazily by name, so the policer may be created, replaced or
++   deleted independently of the binding. */
++static policer_t *
++sflow_drop_policer_resolve (sflow_main_t *smp)
++{
++  if (vec_len (smp->drop_policer_name) == 0)
++    return 0;
++  if (!sflow_policer_main)
++    {
++      sflow_policer_main = policer_get_main ();
++      sflow_policer_counters = policer_get_counters ();
++      if (!sflow_policer_main)
++	return 0;
++    }
++
++  policer_main_t *pm = sflow_policer_main;
++  uword *p = hash_get_mem (pm->policer_index_by_name, smp->drop_policer_name);
++  if (!p || pool_is_free_index (pm->policers, p[0]))
++    {
++      smp->drop_policer_index = ~0;
++      return 0;
++    }
++  smp->drop_policer_index = p[0];
++
++  /* an in-place replace may change the rate type */
++  uword *cfg =
++    hash_get_mem (pm->policer_config_by_name, smp->drop_policer_name);
++  smp->drop_policer_pps =
++    cfg && pm->configs[cfg[0]].rate_type == QOS_RATE_PPS;
++
++  return pool_elt_at_index (pm->policers, smp->drop_policer_index);
++}
++
++/* Only this process node meters through the drop policer - it is on no
++   packet path - so vnet_police_packet() needs no lock here. */
++static bool
++sflow_drop_police (vlib_main_t *vm, sflow_main_t *smp, policer_t *policer,
++		   sflow_sample_t *sample)
++{
++  if (!policer)
++    return true;
++
++  u32 len = smp->drop_policer_pps ? SFLOW_DROP_POLICER_PPS_BYTES :
++				    sample->sampled_packet_size;
++  policer_result_e verdict =
++    vnet_police_packet (policer, len, POLICE_CONFORM,
++			clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT);
++  if (sflow_policer_counters)
++    vlib_increment_combined_counter (&sflow_policer_counters[verdict],
++				     vm->thread_index,
++				     smp->drop_policer_index, 1, len);
++  return policer->action[verdict] != QOS_ACTION_DROP;
++}
++
+ static u32
+ read_worker_fifos (vlib_main_t *vm, sflow_main_t *smp)
+ {
+@@ -434,12 +531,17 @@ read_worker_fifos (vlib_main_t *vm, sflow_main_t *smp)
+   // designed to be tolerant to random packet-loss in transit. For example, 1%
+   // loss should just make it look like the sampling-rate setting was 1:10100
+   // instead of 1:10000.
++  // The drop policer is resolved once per drain, at the first drop sample:
++  // policer add/update/delete and sflow_drop_policer_set() run on this
++  // thread too, and this drain never suspends, so it cannot change mid-drain.
++  policer_t *drop_policer = 0;
++  bool drop_policer_resolved = false;
+   u32 batch = 0;
+   for (; batch < SFLOW_READ_BATCH; batch++)
+     {
+       u32 psample_found = 0, dropmon_found = 0;
+       u32 psample_send = 0, psample_send_fail = 0;
+-      u32 dropmon_send = 0, dropmon_send_fail = 0;
++      u32 dropmon_send = 0, dropmon_send_fail = 0, dropmon_rate_limited = 0;
+       for (clib_thread_index_t thread_index = 0;
+ 	   thread_index < smp->total_threads; thread_index++)
+ 	{
+@@ -458,6 +560,16 @@ read_worker_fifos (vlib_main_t *vm, sflow_main_t *smp)
+ 	  if (sflow_drop_fifo_dequeue (&sfwk->drop_fifo, &sample))
+ 	    {
+ 	      dropmon_found++;
++	      if (!drop_policer_resolved)
++		{
++		  drop_policer = sflow_drop_policer_resolve (smp);
++		  drop_policer_resolved = true;
++		}
++	      if (!sflow_drop_police (vm, smp, drop_policer, &sample))
++		{
++		  dropmon_rate_limited++;
++		  continue;
++		}
+ 	      int sent = send_discard_sample (vm, smp, &sample);
+ 	      if (sent == 1)
+ 		dropmon_send++;
+@@ -500,6 +612,13 @@ read_worker_fifos (vlib_main_t *vm, sflow_main_t *smp)
+ 					   dropmon_send_fail);
+ 	      smp->dropmon_send_drops += dropmon_send_fail;
+ 	    }
++	  if (dropmon_rate_limited > 0)
++	    {
++	      vlib_node_increment_counter (smp->vlib_main, sflow_node.index,
++					   SFLOW_ERROR_DROPMON_RATE_LIMITED,
++					   dropmon_rate_limited);
++	      smp->dropmon_rate_limited += dropmon_rate_limited;
++	    }
+ 	}
+     }
+   return batch;
+@@ -702,6 +821,7 @@ sflow_sampling_start (sflow_main_t *smp)
+   smp->csample_send_drops = 0;
+   smp->dropmon_send = 0;
+   smp->dropmon_send_drops = 0;
++  smp->dropmon_rate_limited = 0;
+ 
+   /* open PSAMPLE netlink channel for writing packet samples */
+   SFLOWPS_init (&smp->sflow_psample);
+@@ -801,14 +921,11 @@ sflow_enable_disable_interface (sflow_main_t *smp,
    bool egress_on =
      sfif->sflow_enabled &&
      (direction == SFLOW_DIRN_EGRESS || direction == SFLOW_DIRN_BOTH);
@@ -212,7 +446,7 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
  
    if (ingress_on != ingress_enabled)
      vnet_feature_enable_disable ("device-input", "sflow", sfif->sw_if_index,
-@@ -816,11 +848,50 @@ sflow_enable_disable_interface (sflow_main_t *smp,
+@@ -816,11 +933,50 @@ sflow_enable_disable_interface (sflow_main_t *smp,
    if (egress_on != egress_enabled)
      vnet_feature_enable_disable ("interface-output", "sflow-egress",
  				 sfif->sw_if_index, egress_on, 0, 0);
@@ -265,7 +499,7 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
  void
  sflow_enable_disable_all (sflow_main_t *smp)
  {
-@@ -852,8 +923,14 @@ sflow_drop_monitoring (sflow_main_t *smp, bool dropM)
+@@ -852,12 +1008,28 @@ sflow_drop_monitoring (sflow_main_t *smp, bool dropM)
      {
        // drop-monitoring changed.
        smp->dropM = dropM;
@@ -282,7 +516,77 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
      }
    return 0;
  }
-@@ -1257,6 +1334,52 @@ show_sflow_command_fn (vlib_main_t *vm, unformat_input_t *input,
+ 
++int
++sflow_drop_policer (sflow_main_t *smp, const char *name)
++{
++  vec_free (smp->drop_policer_name);
++  if (name && name[0])
++    smp->drop_policer_name = format (0, "%s%c", name, 0);
++  smp->drop_policer_index = ~0;
++  return 0;
++}
++
+ int
+ sflow_enable_disable (sflow_main_t *smp, u32 sw_if_index, bool enable_disable)
+ {
+@@ -1138,6 +1310,37 @@ sflow_drop_monitoring_command_fn (vlib_main_t *vm, unformat_input_t *input,
+   return 0;
+ }
+ 
++static clib_error_t *
++sflow_drop_policer_command_fn (vlib_main_t *vm, unformat_input_t *input,
++			       vlib_cli_command_t *cmd)
++{
++  sflow_main_t *smp = &sflow_main;
++  u8 *name = 0;
++  bool none = false;
++
++  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
++    {
++      if (unformat (input, "none"))
++	none = true;
++      else if (unformat (input, "%s", &name))
++	;
++      else
++	{
++	  vec_free (name);
++	  return clib_error_return (0, "unknown input: %U",
++				    format_unformat_error, input);
++	}
++    }
++
++  if (!none && !name)
++    return clib_error_return (0, "Please specify a policer name or none");
++
++  vec_add1 (name, 0);
++  sflow_drop_policer (smp, none ? 0 : (char *) name);
++  vec_free (name);
++  return 0;
++}
++
+ static clib_error_t *
+ sflow_enable_disable_command_fn (vlib_main_t *vm, unformat_input_t *input,
+ 				 vlib_cli_command_t *cmd)
+@@ -1217,6 +1420,12 @@ show_sflow_command_fn (vlib_main_t *vm, unformat_input_t *input,
+   vlib_cli_output (vm, "sflow header-bytes %u\n", smp->headerB);
+   vlib_cli_output (vm, "sflow drop-monitoring %s\n",
+ 		   smp->dropM ? "enable" : "disable");
++  if (vec_len (smp->drop_policer_name))
++    vlib_cli_output (vm, "sflow drop-monitoring policer %s%s\n",
++		     (char *) smp->drop_policer_name,
++		     sflow_drop_policer_resolve (smp) ? "" : " (unresolved)");
++  else
++    vlib_cli_output (vm, "sflow drop-monitoring policer none\n");
+   u32 itfs_enabled = 0;
+   for (int ii = 0; ii < vec_len (smp->per_interface_data); ii++)
+     {
+@@ -1254,9 +1463,57 @@ show_sflow_command_fn (vlib_main_t *vm, unformat_input_t *input,
+   vlib_cli_output (vm, "  drop samples sent: %u\n", smp->dropmon_send);
+   vlib_cli_output (vm, "  drop samples dropped: %u\n",
+ 		   smp->dropmon_send_drops);
++  vlib_cli_output (vm, "  drop samples rate-limited: %u\n",
++		   smp->dropmon_rate_limited);
    return error;
  }
  
@@ -335,7 +639,19 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
  VLIB_CLI_COMMAND (sflow_enable_disable_command, static) = {
    .path = "sflow enable-disable",
    .short_help = "sflow enable-disable <interface-name> [disable]",
-@@ -1299,6 +1422,18 @@ VLIB_CLI_COMMAND (show_sflow_command, static) = {
+@@ -1293,12 +1550,30 @@ VLIB_CLI_COMMAND (sflow_drop_monitoring_command, static) = {
+   .function = sflow_drop_monitoring_command_fn,
+ };
+ 
++VLIB_CLI_COMMAND (sflow_drop_policer_command, static) = {
++  .path = "sflow drop-monitoring policer",
++  .short_help = "sflow drop-monitoring policer <policer-name>|none",
++  .function = sflow_drop_policer_command_fn,
++};
++
+ VLIB_CLI_COMMAND (show_sflow_command, static) = {
+   .path = "show sflow",
+   .short_help = "show sflow",
    .function = show_sflow_command_fn,
  };
  
@@ -354,7 +670,54 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
  /* API message handler */
  static void
  vl_api_sflow_enable_disable_t_handler (vl_api_sflow_enable_disable_t *mp)
-@@ -1533,6 +1668,13 @@ sflow_init (vlib_main_t *vm)
+@@ -1425,6 +1700,38 @@ vl_api_sflow_drop_monitoring_get_t_handler (
+ 			({ rmp->drop_M = ntohl (smp->dropM); }));
+ }
+ 
++static void
++vl_api_sflow_drop_policer_set_t_handler (vl_api_sflow_drop_policer_set_t *mp)
++{
++  vl_api_sflow_drop_policer_set_reply_t *rmp;
++  sflow_main_t *smp = &sflow_main;
++  char name[sizeof (mp->name)];
++  int rv;
++
++  /* the API string is not guaranteed to be terminated */
++  clib_memcpy_fast (name, mp->name, sizeof (name));
++  name[sizeof (name) - 1] = 0;
++  rv = sflow_drop_policer (smp, name);
++
++  REPLY_MACRO (VL_API_SFLOW_DROP_POLICER_SET_REPLY);
++}
++
++static void
++vl_api_sflow_drop_policer_get_t_handler (vl_api_sflow_drop_policer_get_t *mp)
++{
++  vl_api_sflow_drop_policer_get_reply_t *rmp;
++  sflow_main_t *smp = &sflow_main;
++
++  REPLY_MACRO_DETAILS2 (VL_API_SFLOW_DROP_POLICER_GET_REPLY, ({
++			  clib_memset (rmp->name, 0, sizeof (rmp->name));
++			  if (vec_len (smp->drop_policer_name))
++			    strncpy ((char *) rmp->name,
++				     (char *) smp->drop_policer_name,
++				     sizeof (rmp->name) - 1);
++			  rmp->rate_limited = ntohl (smp->dropmon_rate_limited);
++			}));
++}
++
+ static void
+ send_sflow_interface_details (vpe_api_main_t *am, vl_api_registration_t *reg,
+ 			      u32 context, const u32 hw_if_index)
+@@ -1515,6 +1822,7 @@ sflow_init (vlib_main_t *vm)
+   smp->headerB = SFLOW_DEFAULT_HEADER_BYTES;
+   smp->samplingD = SFLOW_DIRN_INGRESS;
+   smp->dropM = false;
++  smp->drop_policer_index = ~0;
+ 
+   /* Add our API messages to the global name_crc hash table */
+   smp->msg_id_base = setup_message_id_table ();
+@@ -1533,6 +1841,13 @@ sflow_init (vlib_main_t *vm)
        SFLOW_NOTICE ("linux-cp not found - using VPP sw_if_index");
      }
  
@@ -369,9 +732,20 @@ diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
  }
  
 diff --git a/src/plugins/sflow/sflow.h b/src/plugins/sflow/sflow.h
+index e26896b1a..13f7d2718 100644
 --- a/src/plugins/sflow/sflow.h
 +++ b/src/plugins/sflow/sflow.h
-@@ -192,6 +192,7 @@ typedef struct
+@@ -43,7 +43,8 @@
+   _ (PSAMPLE_SEND, "sflow PSAMPLE sent")                                      \
+   _ (PSAMPLE_SEND_FAIL, "sflow PSAMPLE send failed")                          \
+   _ (DROPMON_SEND, "sflow DROPMON sent")                                      \
+-  _ (DROPMON_SEND_FAIL, "sflow DROPMON send failed")
++  _ (DROPMON_SEND_FAIL, "sflow DROPMON send failed")                          \
++  _ (DROPMON_RATE_LIMITED, "sflow DROPMON rate-limited")
+ 
+ typedef enum
+ {
+@@ -192,6 +193,7 @@ typedef struct
  } sflow_per_thread_data_t;
  
  typedef u32 (*IfIndexLookupFn) (u32);
@@ -379,7 +753,23 @@ diff --git a/src/plugins/sflow/sflow.h b/src/plugins/sflow/sflow.h
  
  typedef struct
  {
-@@ -241,6 +242,7 @@ typedef struct
+@@ -209,6 +211,10 @@ typedef struct
+   u32 headerB;
+   sflow_direction_t samplingD;
+   bool dropM;
++  /* VPP policer drop notifications are metered by, empty = unlimited */
++  u8 *drop_policer_name;
++  u32 drop_policer_index;
++  bool drop_policer_pps;
+   u32 total_threads;
+   sflow_per_interface_data_t *per_interface_data;
+   sflow_per_thread_data_t *per_thread_data;
+@@ -237,10 +243,12 @@ typedef struct
+   u32 psample_send_drops;
+   u32 dropmon_send;
+   u32 dropmon_send_drops;
++  u32 dropmon_rate_limited;
+   u32 csample_send;
    u32 csample_send_drops;
    u32 unixsock_seq;
    IfIndexLookupFn lcp_itf_pair_get_vif_index_by_phy;
@@ -388,6 +778,7 @@ diff --git a/src/plugins/sflow/sflow.h b/src/plugins/sflow/sflow.h
  
  extern sflow_main_t sflow_main;
 diff --git a/src/plugins/sflow/sflow_dlapi.h b/src/plugins/sflow/sflow_dlapi.h
+index 60c82007f..19700767e 100644
 --- a/src/plugins/sflow/sflow_dlapi.h
 +++ b/src/plugins/sflow/sflow_dlapi.h
 @@ -13,4 +13,11 @@
@@ -403,6 +794,7 @@ diff --git a/src/plugins/sflow/sflow_dlapi.h b/src/plugins/sflow/sflow_dlapi.h
 +#define SFLOW_SONIC_EXT_SYM_GET_ORIG_RX "sonic_ext_buffer_orig_rx_sw_if_index"
  #endif /* __included_sflow_dyn_api_h__ */
 diff --git a/src/plugins/sflow/sflow_dropmon.c b/src/plugins/sflow/sflow_dropmon.c
+index a2c5f63f9..0bedb155b 100644
 --- a/src/plugins/sflow/sflow_dropmon.c
 +++ b/src/plugins/sflow/sflow_dropmon.c
 @@ -124,6 +124,12 @@ SFLOWDM_set_attr (SFLOWDM *dmt, int field, void *val, int len)
@@ -419,6 +811,7 @@ diff --git a/src/plugins/sflow/sflow_dropmon.c b/src/plugins/sflow/sflow_dropmon
    _________________    SFLOWDMSpec_send       __________________
    -----------------___________________________------------------
 diff --git a/src/plugins/sflow/sflow_dropmon.h b/src/plugins/sflow/sflow_dropmon.h
+index 724d2dfb3..0dd18f490 100644
 --- a/src/plugins/sflow/sflow_dropmon.h
 +++ b/src/plugins/sflow/sflow_dropmon.h
 @@ -30,6 +30,16 @@
@@ -447,6 +840,7 @@ diff --git a/src/plugins/sflow/sflow_dropmon.h b/src/plugins/sflow/sflow_dropmon
    SFLOWDM_set_attr ((dmt), (field), &(val), sizeof (val))
  
 diff --git a/src/plugins/sflow/sflow_netlink.c b/src/plugins/sflow/sflow_netlink.c
+index 6b790c062..2f89f066c 100644
 --- a/src/plugins/sflow/sflow_netlink.c
 +++ b/src/plugins/sflow/sflow_netlink.c
 @@ -186,6 +186,22 @@ sflow_netlink_set_attr (SFLOWNL *nl, int field, void *val, int len)
@@ -487,6 +881,7 @@ diff --git a/src/plugins/sflow/sflow_netlink.c b/src/plugins/sflow/sflow_netlink
  
    struct msghdr msg = {
 diff --git a/src/plugins/sflow/sflow_netlink.h b/src/plugins/sflow/sflow_netlink.h
+index 062c7d332..c5d900888 100644
 --- a/src/plugins/sflow/sflow_netlink.h
 +++ b/src/plugins/sflow/sflow_netlink.h
 @@ -69,6 +69,13 @@ typedef struct _SFLOWNL
@@ -512,14 +907,80 @@ diff --git a/src/plugins/sflow/sflow_netlink.h b/src/plugins/sflow/sflow_netlink
  
  #define sflow_netlink_set_attr_int(nl, field, val)                            \
    sflow_netlink_set_attr ((nl), (field), &(val), sizeof (val))
+diff --git a/src/plugins/sflow/sflow_test.c b/src/plugins/sflow/sflow_test.c
+index 675bdd0ba..cba942187 100644
+--- a/src/plugins/sflow/sflow_test.c
++++ b/src/plugins/sflow/sflow_test.c
+@@ -467,6 +467,59 @@ api_sflow_drop_monitoring_set (vat_main_t *vam)
+   return ret;
+ }
+ 
++static void
++vl_api_sflow_drop_policer_get_reply_t_handler (
++  vl_api_sflow_drop_policer_get_reply_t *mp)
++{
++  vat_main_t *vam = sflow_test_main.vat_main;
++  clib_warning ("sflow drop policer: %.*s rate-limited %u",
++		(int) sizeof (mp->name), (char *) mp->name,
++		ntohl (mp->rate_limited));
++  vam->result_ready = 1;
++}
++
++static int
++api_sflow_drop_policer_get (vat_main_t *vam)
++{
++  vl_api_sflow_drop_policer_get_t *mp;
++  int ret;
++
++  M (SFLOW_DROP_POLICER_GET, mp);
++  S (mp);
++  W (ret);
++  return ret;
++}
++
++static int
++api_sflow_drop_policer_set (vat_main_t *vam)
++{
++  unformat_input_t *i = vam->input;
++  u8 *name = 0;
++  vl_api_sflow_drop_policer_set_t *mp;
++  int ret;
++
++  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
++    {
++      if (unformat (i, "none"))
++	vec_reset_length (name);
++      else if (unformat (i, "%s", &name))
++	;
++      else
++	break;
++    }
++
++  M (SFLOW_DROP_POLICER_SET, mp);
++  clib_memset (mp->name, 0, sizeof (mp->name));
++  if (vec_len (name))
++    clib_memcpy_fast (mp->name, name,
++		      clib_min (vec_len (name), sizeof (mp->name) - 1));
++  vec_free (name);
++
++  S (mp);
++  W (ret);
++  return ret;
++}
++
+ static void
+ vl_api_sflow_interface_details_t_handler (vl_api_sflow_interface_details_t *mp)
+ {
 diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
+index d60e2f096..a0f57ef11 100644
 --- a/test/test_sflow_drop.py
 +++ b/test/test_sflow_drop.py
-@@ -1,14 +1,47 @@
+@@ -1,14 +1,49 @@
  #!/usr/bin/env python3
  
  import unittest
 +import struct
++import time
  from framework import VppTestCase
  from asfframework import VppTestRunner
  from scapy.layers.l2 import Ether
@@ -528,6 +989,7 @@ diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
  from random import randint
 +from config import config
 +from vpp_lo_interface import VppLoInterface
++from vpp_policer import VppPolicer
  import re  # for finding counters in "sh errors" output
  
 +# from linux/netlink.h
@@ -563,7 +1025,7 @@ diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
  
  class SFlowDropTestCase(VppTestCase):
      """sFlow test case"""
-@@ -147,3 +180,227 @@ class SFlowDropTestCase(VppTestCase):
+@@ -147,3 +182,356 @@ class SFlowDropTestCase(VppTestCase):
          self.sleep(1.0)
          # verify sflow counters
          self.verify_sflow(count)
@@ -791,3 +1253,132 @@ diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
 +                self.sflow_drop_enabled(i.name),
 +                "sflow-drop is still on %s's error-drop arc" % i.name,
 +            )
++
++
++class SFlowDropPolicerTestCase(VppTestCase):
++    """sFlow drop notifications metered by a VPP policer"""
++
++    # QOS_POL_MIN_BURST_BYTE floors every bucket at 9KB, which is 36
++    # notifications at the fixed 256-byte packet size of a pps policer
++    MIN_BURST_PKTS = 36
++    CIR_PPS = 1
++
++    def setUp(self):
++        super(SFlowDropPolicerTestCase, self).setUp()
++        self.create_pg_interfaces(range(2))
++        for i in self.pg_interfaces:
++            i.admin_up()
++            i.config_ip4()
++            i.resolve_arp()
++
++    def tearDown(self):
++        self.vapi.sflow_drop_policer_set(name="")
++        self.vapi.sflow_drop_monitoring_set(drop_M=0)
++        for i in self.pg_interfaces:
++            i.admin_down()
++            i.unconfig()
++        super(SFlowDropPolicerTestCase, self).tearDown()
++
++    def get_sflow_counter(self, counter):
++        for line in self.vapi.cli("sh errors").split("\n")[1:]:
++            results = line.split()
++            if len(results) > 1 and results[1] == "sflow":
++                if re.search(counter, line) is not None:
++                    return int(results[0])
++        return 0
++
++    def send_discards(self, count):
++        """One pg run per packet, so the 4-deep worker drop FIFO never
++        overflows and every discard reaches the main-thread policer."""
++        for _ in range(count):
++            p = (
++                Ether(dst=self.pg0.local_mac, src=self.pg0.remote_mac)
++                / IP(src=self.pg0.remote_ip4, dst=self.pg1.remote_ip4, ttl=1)
++                / UDP(sport=randint(49152, 65535), dport=5678)
++                / Raw(b"\xa5" * 64)
++            )
++            self.pg0.add_stream([p])
++            self.pg_start()
++        # allow the last discard to reach the main thread
++        self.sleep(0.5)
++
++    def dequeued(self):
++        return self.get_sflow_counter(
++            "sflow discards processed"
++        ) - self.get_sflow_counter("sflow discards dropped")
++
++    def rate_limited(self):
++        return self.vapi.sflow_drop_policer_get().rate_limited
++
++    def test_drop_policer(self):
++        """drop notifications the policer drops are suppressed and counted"""
++
++        ret = self.vapi.sflow_drop_policer_get()
++        self.assertEqual(ret.name, "", "a drop policer is bound by default")
++
++        # bound by name before the policer exists: unlimited until it does
++        self.vapi.sflow_drop_policer_set(name="sflow-drop")
++        self.assertEqual(self.vapi.sflow_drop_policer_get().name, "sflow-drop")
++        self.vapi.sflow_drop_monitoring_set(drop_M=1)
++        self.send_discards(3)
++        self.assertEqual(self.rate_limited(), 0, "limited by a missing policer")
++
++        self.vapi.cli("sflow drop-monitoring policer none")
++        self.assertEqual(self.vapi.sflow_drop_policer_get().name, "")
++        self.vapi.cli("sflow drop-monitoring policer sflow-drop")
++        self.assertIn("policer sflow-drop (unresolved)", self.vapi.cli("show sflow"))
++
++        # 1R2C pps policer: conform transmits, exceed/violate drop
++        policer = VppPolicer(
++            self, "sflow-drop", self.CIR_PPS, 0, 1000, 0, rate_type=1
++        ).add_vpp_config()
++        self.assertIn("policer sflow-drop\n", self.vapi.cli("show sflow") + "\n")
++
++        before = self.dequeued()
++        count = self.MIN_BURST_PKTS + 24
++        t0 = time.monotonic()
++        self.send_discards(count)
++        elapsed = time.monotonic() - t0
++
++        dequeued = self.dequeued() - before
++        limited = self.rate_limited()
++        stats = policer.get_stats()
++        self.logger.info(
++            "dequeued=%d rate_limited=%d elapsed=%.3f stats=%s"
++            % (dequeued, limited, elapsed, stats)
++        )
++        self.assertGreater(limited, 0, "the policer dropped nothing")
++        self.assertEqual(
++            limited,
++            self.get_sflow_counter("sflow DROPMON rate-limited"),
++            "API and node counter disagree",
++        )
++        passed = dequeued - limited
++        self.assertGreaterEqual(passed, self.MIN_BURST_PKTS - 1)
++        self.assertLessEqual(
++            passed,
++            self.MIN_BURST_PKTS + int(self.CIR_PPS * elapsed) + 1,
++            "more drop notifications than burst + rate * elapsed",
++        )
++
++        # the notifications show up in the policer's own stats, metered in
++        # packets at the pps fixed packet size
++        self.assertEqual(stats["conform_packets"], passed)
++        self.assertEqual(stats["conform_bytes"], passed * 256)
++        self.assertEqual(stats["exceed_packets"] + stats["violate_packets"], limited)
++
++        # unbinding stops the metering, the policer itself is untouched
++        self.vapi.sflow_drop_policer_set(name="")
++        self.send_discards(5)
++        self.assertEqual(
++            self.rate_limited(),
++            limited,
++            "notifications were rate-limited with no policer bound",
++        )
++        self.assertEqual(policer.get_stats(), stats)
++
++        # deleting a bound policer also leaves the notifications unlimited
++        self.vapi.sflow_drop_policer_set(name="sflow-drop")
++        policer.remove_vpp_config()
++        self.send_discards(5)
++        self.assertEqual(self.rate_limited(), limited)
