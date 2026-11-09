@@ -133,7 +133,12 @@ nested container carrying the linux-cp ifIndex rather than the VPP index.
 SFlowDropAllInterfacesTestCase enables drop monitoring with sampling off on
 every interface and checks that sflow-drop is on each interface's arc,
 including one created afterwards, that a discard is processed, and that
-the feature is removed again when drop monitoring is turned off.
+the feature is removed again when drop monitoring is turned off.  It also
+replays the per-port toggle bug: with sampling on two ports and drop
+monitoring on, disabling sampling on one must leave sflow-drop on its arc
+exactly once, and turning drop monitoring off must then remove it from both
+and stop that port's discards being processed while the other port is still
+sampled.
 
 SFlowDropPolicerTestCase binds a policer name before the policer exists
 and checks nothing is limited, then creates a 1 pps policer and sends
@@ -972,7 +977,7 @@ index 675bdd0ba..cba942187 100644
  vl_api_sflow_interface_details_t_handler (vl_api_sflow_interface_details_t *mp)
  {
 diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
-index d60e2f096..a0f57ef11 100644
+index d60e2f096..cee0336e7 100644
 --- a/test/test_sflow_drop.py
 +++ b/test/test_sflow_drop.py
 @@ -1,14 +1,49 @@
@@ -1025,7 +1030,7 @@ index d60e2f096..a0f57ef11 100644
  
  class SFlowDropTestCase(VppTestCase):
      """sFlow test case"""
-@@ -147,3 +182,356 @@ class SFlowDropTestCase(VppTestCase):
+@@ -147,3 +182,406 @@ class SFlowDropTestCase(VppTestCase):
          self.sleep(1.0)
          # verify sflow counters
          self.verify_sflow(count)
@@ -1181,21 +1186,43 @@ index d60e2f096..a0f57ef11 100644
 +    def tearDown(self):
 +        self.vapi.sflow_drop_monitoring_set(drop_M=0)
 +        for i in self.pg_interfaces:
++            self.vapi.sflow_enable_disable(
++                hw_if_index=i.sw_if_index, enable_disable=False
++            )
 +            i.admin_down()
 +            i.unconfig()
 +        super(SFlowDropAllInterfacesTestCase, self).tearDown()
 +
-+    def sflow_drop_enabled(self, name):
-+        """Is sflow-drop on the error-drop arc of this interface?"""
++    def sflow_drop_count(self, name):
++        """How many times is sflow-drop on the error-drop arc of this
++        interface?"""
 +        out = self.vapi.cli("show interface features %s" % name)
 +        in_arc = False
++        count = 0
 +        for line in out.split("\n"):
 +            line = line.strip()
 +            if line.endswith(":"):
 +                in_arc = line == "error-drop:"
 +            elif in_arc and line.split()[-1:] == ["sflow-drop"]:
-+                return True
-+        return False
++                count += 1
++        return count
++
++    def sflow_drop_enabled(self, name):
++        """Is sflow-drop on the error-drop arc of this interface?"""
++        return self.sflow_drop_count(name) > 0
++
++    def send_discard(self):
++        # ttl=1, so the packet is discarded instead of forwarded
++        p = (
++            Ether(dst=self.pg0.local_mac, src=self.pg0.remote_mac)
++            / IP(src=self.pg0.remote_ip4, dst=self.pg1.remote_ip4, ttl=1)
++            / UDP(sport=randint(49152, 65535), dport=5678)
++            / Raw(b"\xa5" * 64)
++        )
++        self.pg0.add_stream([p])
++        self.pg_start()
++        # allow the discard to reach the main thread
++        self.sleep(1.0)
 +
 +    def get_sflow_counter(self, counter):
 +        for line in self.vapi.cli("sh errors").split("\n")[1:]:
@@ -1224,17 +1251,7 @@ index d60e2f096..a0f57ef11 100644
 +        )
 +        lo.remove_vpp_config()
 +
-+        # ttl=1, so the packet is discarded instead of forwarded
-+        p = (
-+            Ether(dst=self.pg0.local_mac, src=self.pg0.remote_mac)
-+            / IP(src=self.pg0.remote_ip4, dst=self.pg1.remote_ip4, ttl=1)
-+            / UDP(sport=randint(49152, 65535), dport=5678)
-+            / Raw(b"\xa5" * 64)
-+        )
-+        self.pg0.add_stream([p])
-+        self.pg_start()
-+        # allow the discard to reach the main thread
-+        self.sleep(1.0)
++        self.send_discard()
 +        self.assert_equal(
 +            self.get_sflow_counter("sflow discards processed"),
 +            1,
@@ -1253,6 +1270,44 @@ index d60e2f096..a0f57ef11 100644
 +                self.sflow_drop_enabled(i.name),
 +                "sflow-drop is still on %s's error-drop arc" % i.name,
 +            )
++
++    def test_sampling_off_leaves_drop_monitoring(self):
++        """per-port sampling changes neither add nor strand sflow-drop"""
++
++        # pg interfaces are their own hardware interfaces
++        for i in self.pg_interfaces:
++            self.vapi.sflow_enable_disable(
++                hw_if_index=i.sw_if_index, enable_disable=True
++            )
++        self.vapi.sflow_sampling_rate_set(sampling_N=1)
++        self.vapi.sflow_drop_monitoring_set(drop_M=1)
++        for i in self.pg_interfaces:
++            self.assert_equal(self.sflow_drop_count(i.name), 1, i.name)
++
++        # Upstream re-enabled sflow-drop here (passing dropM rather than the
++        # desired state), so it was on pg0's arc twice ...
++        self.vapi.sflow_enable_disable(
++            hw_if_index=self.pg0.sw_if_index, enable_disable=False
++        )
++        self.assert_equal(
++            self.sflow_drop_count(self.pg0.name),
++            1,
++            "sflow-drop on pg0 after disabling its sampling",
++        )
++
++        # ... and turning drop monitoring off only visited sampled ports, so
++        # pg0 kept reporting discards while pg1 kept the process running.
++        self.vapi.sflow_drop_monitoring_set(drop_M=0)
++        for i in self.pg_interfaces:
++            self.assert_equal(self.sflow_drop_count(i.name), 0, i.name)
++
++        processed = self.get_sflow_counter("sflow discards processed")
++        self.send_discard()
++        self.assert_equal(
++            self.get_sflow_counter("sflow discards processed"),
++            processed,
++            "discard on pg0 reported with drop monitoring off",
++        )
 +
 +
 +class SFlowDropPolicerTestCase(VppTestCase):
