@@ -193,9 +193,12 @@ sonic_ext_redirect_to_ingress_tap (vlib_buffer_t *b, u32 orig_rx,
 	  clib_memcpy_fast (new_cur, save_macs, 12);
 	  clib_memcpy_fast (new_cur + 12, &saved_vlan_tag, 4);
 	  vnet_buffer (b)->l2_hdr_offset -= 4;
-	  *pushed_tpid = clib_net_to_host_u16 (*(u16 *) &saved_vlan_tag);
-	  *pushed_vlan_id =
-	    clib_net_to_host_u16 (*((u16 *) &saved_vlan_tag + 1)) & 0x0fff;
+	  /* Split the raw TPID+TCI snapshot through memcpy: reading the u32
+	   * through a u16 * is a strict-aliasing violation (gcc 14 -Werror). */
+	  u16 tag_halves[2];
+	  clib_memcpy_fast (tag_halves, &saved_vlan_tag, sizeof (tag_halves));
+	  *pushed_tpid = clib_net_to_host_u16 (tag_halves[0]);
+	  *pushed_vlan_id = clib_net_to_host_u16 (tag_halves[1]) & 0x0fff;
 	}
     }
 
