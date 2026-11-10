@@ -104,6 +104,16 @@ are added to the policer's own conform/exceed/violate counters.  Metering
 on the main thread gives one exact switch-wide limit with no cross-thread
 state, and nothing else polices through this policer, so it needs no lock.
 
+vnet_police_packet() scales the packet length in 32 bits by the shift that
+just fits the policer's bucket limits, so a length beyond every bucket
+wraps.  For drop_monitor_limit = 1, CIR = CBS = 1 is a 250-byte bucket
+(xlate.c rounds 1 pps to 2 kbps, and a pps burst is in ms of that rate),
+and a 256-byte notification scaled by clz(250) = 24 is exactly 2^32: it
+was metered as 0 bytes and every one conformed.  A length that cannot fit
+a bucket can never conform or exceed, so it is now a violate without
+calling vnet_police_packet(); the skipped refill is caught up from
+last_update_time by the next call.
+
 The policer is bound by name and resolved once per FIFO drain, at the first
 drop dequeued, rather than per notification: policer add/update/delete and
 the binding API run on the main thread too and a drain never suspends, so
@@ -141,12 +151,14 @@ and stop that port's discards being processed while the other port is still
 sampled.
 
 SFlowDropPolicerTestCase binds a policer name before the policer exists
-and checks nothing is limited, then creates a 1 pps policer and sends
-discards one at a time (so the worker FIFO never overflows).  It checks
-that no more than the 9KB minimum bucket plus rate * elapsed reach the
-sender, that the rest are counted as rate-limited, that the policer's own
-stats account for every notification at 256 bytes each, and that nothing
-is limited once the policer is unbound or deleted.
+and checks nothing is limited, then creates a 1 pps policer with a 36 s
+(9000-byte, 35-notification) burst and sends discards one at a time (so
+the worker FIFO never overflows).  It checks that no more than the burst
+plus rate * elapsed reach the sender, that the rest are counted as
+rate-limited, that the policer's own stats account for every notification
+at 256 bytes each, and that nothing is limited once the policer is unbound
+or deleted.  A second test binds the 250-byte 1 pps, 1 s policer and
+checks that every notification is dropped rather than wrapped to 0 bytes.
 
 Signed-off-by: SONiC VPP <sonic-vpp@sonic-net.github.io>
 ---
@@ -248,7 +260,7 @@ index 9b722bc20..45927f0ce 100644
      @param client_index - opaque cookie to identify the sender
      @param hw_if_index - hw_if_index of a specific interface, or -1 (default)
 diff --git a/src/plugins/sflow/sflow.c b/src/plugins/sflow/sflow.c
-index d8e371d18..b5be83f36 100644
+index d8e371d18..f12c78f5a 100644
 --- a/src/plugins/sflow/sflow.c
 +++ b/src/plugins/sflow/sflow.c
 @@ -14,6 +14,7 @@
@@ -310,7 +322,7 @@ index d8e371d18..b5be83f36 100644
    SFLOWDM_set_attr (dmt, NET_DM_ATTR_PAYLOAD, sample->header,
  		    sample->header_bytes);
    if (SFLOWDM_send (dmt) < 0)
-@@ -407,6 +443,67 @@ send_discard_sample (vlib_main_t *vm, sflow_main_t *smp,
+@@ -407,6 +443,76 @@ send_discard_sample (vlib_main_t *vm, sflow_main_t *smp,
    return 1;
  }
  
@@ -365,9 +377,18 @@ index d8e371d18..b5be83f36 100644
 +
 +  u32 len = smp->drop_policer_pps ? SFLOW_DROP_POLICER_PPS_BYTES :
 +				    sample->sampled_packet_size;
-+  policer_result_e verdict =
-+    vnet_police_packet (policer, len, POLICE_CONFORM,
-+			clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT);
++  policer_result_e verdict;
++  /* vnet_police_packet() scales the length in 32 bits by the shift that just
++     fits the bucket limits, so a length beyond every bucket wraps - a 256-byte
++     notification against a 1 pps, 1 s bucket of 250 bytes wraps to 0 - and
++     conforms.  It can never fit a bucket, so it violates; skipping the refill
++     loses nothing, since the next one catches up from last_update_time. */
++  if (((u64) len << policer->scale) >> 32)
++    verdict = POLICE_VIOLATE;
++  else
++    verdict =
++      vnet_police_packet (policer, len, POLICE_CONFORM,
++			  clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT);
 +  if (sflow_policer_counters)
 +    vlib_increment_combined_counter (&sflow_policer_counters[verdict],
 +				     vm->thread_index,
@@ -378,7 +399,7 @@ index d8e371d18..b5be83f36 100644
  static u32
  read_worker_fifos (vlib_main_t *vm, sflow_main_t *smp)
  {
-@@ -434,12 +531,17 @@ read_worker_fifos (vlib_main_t *vm, sflow_main_t *smp)
+@@ -434,12 +540,17 @@ read_worker_fifos (vlib_main_t *vm, sflow_main_t *smp)
    // designed to be tolerant to random packet-loss in transit. For example, 1%
    // loss should just make it look like the sampling-rate setting was 1:10100
    // instead of 1:10000.
@@ -397,7 +418,7 @@ index d8e371d18..b5be83f36 100644
        for (clib_thread_index_t thread_index = 0;
  	   thread_index < smp->total_threads; thread_index++)
  	{
-@@ -458,6 +560,16 @@ read_worker_fifos (vlib_main_t *vm, sflow_main_t *smp)
+@@ -458,6 +569,16 @@ read_worker_fifos (vlib_main_t *vm, sflow_main_t *smp)
  	  if (sflow_drop_fifo_dequeue (&sfwk->drop_fifo, &sample))
  	    {
  	      dropmon_found++;
@@ -414,7 +435,7 @@ index d8e371d18..b5be83f36 100644
  	      int sent = send_discard_sample (vm, smp, &sample);
  	      if (sent == 1)
  		dropmon_send++;
-@@ -500,6 +612,13 @@ read_worker_fifos (vlib_main_t *vm, sflow_main_t *smp)
+@@ -500,6 +621,13 @@ read_worker_fifos (vlib_main_t *vm, sflow_main_t *smp)
  					   dropmon_send_fail);
  	      smp->dropmon_send_drops += dropmon_send_fail;
  	    }
@@ -428,7 +449,7 @@ index d8e371d18..b5be83f36 100644
  	}
      }
    return batch;
-@@ -702,6 +821,7 @@ sflow_sampling_start (sflow_main_t *smp)
+@@ -702,6 +830,7 @@ sflow_sampling_start (sflow_main_t *smp)
    smp->csample_send_drops = 0;
    smp->dropmon_send = 0;
    smp->dropmon_send_drops = 0;
@@ -436,7 +457,7 @@ index d8e371d18..b5be83f36 100644
  
    /* open PSAMPLE netlink channel for writing packet samples */
    SFLOWPS_init (&smp->sflow_psample);
-@@ -801,14 +921,11 @@ sflow_enable_disable_interface (sflow_main_t *smp,
+@@ -801,14 +930,11 @@ sflow_enable_disable_interface (sflow_main_t *smp,
    bool egress_on =
      sfif->sflow_enabled &&
      (direction == SFLOW_DIRN_EGRESS || direction == SFLOW_DIRN_BOTH);
@@ -451,7 +472,7 @@ index d8e371d18..b5be83f36 100644
  
    if (ingress_on != ingress_enabled)
      vnet_feature_enable_disable ("device-input", "sflow", sfif->sw_if_index,
-@@ -816,11 +933,50 @@ sflow_enable_disable_interface (sflow_main_t *smp,
+@@ -816,11 +942,50 @@ sflow_enable_disable_interface (sflow_main_t *smp,
    if (egress_on != egress_enabled)
      vnet_feature_enable_disable ("interface-output", "sflow-egress",
  				 sfif->sw_if_index, egress_on, 0, 0);
@@ -504,7 +525,7 @@ index d8e371d18..b5be83f36 100644
  void
  sflow_enable_disable_all (sflow_main_t *smp)
  {
-@@ -852,12 +1008,28 @@ sflow_drop_monitoring (sflow_main_t *smp, bool dropM)
+@@ -852,12 +1017,28 @@ sflow_drop_monitoring (sflow_main_t *smp, bool dropM)
      {
        // drop-monitoring changed.
        smp->dropM = dropM;
@@ -535,7 +556,7 @@ index d8e371d18..b5be83f36 100644
  int
  sflow_enable_disable (sflow_main_t *smp, u32 sw_if_index, bool enable_disable)
  {
-@@ -1138,6 +1310,37 @@ sflow_drop_monitoring_command_fn (vlib_main_t *vm, unformat_input_t *input,
+@@ -1138,6 +1319,37 @@ sflow_drop_monitoring_command_fn (vlib_main_t *vm, unformat_input_t *input,
    return 0;
  }
  
@@ -573,7 +594,7 @@ index d8e371d18..b5be83f36 100644
  static clib_error_t *
  sflow_enable_disable_command_fn (vlib_main_t *vm, unformat_input_t *input,
  				 vlib_cli_command_t *cmd)
-@@ -1217,6 +1420,12 @@ show_sflow_command_fn (vlib_main_t *vm, unformat_input_t *input,
+@@ -1217,6 +1429,12 @@ show_sflow_command_fn (vlib_main_t *vm, unformat_input_t *input,
    vlib_cli_output (vm, "sflow header-bytes %u\n", smp->headerB);
    vlib_cli_output (vm, "sflow drop-monitoring %s\n",
  		   smp->dropM ? "enable" : "disable");
@@ -586,7 +607,7 @@ index d8e371d18..b5be83f36 100644
    u32 itfs_enabled = 0;
    for (int ii = 0; ii < vec_len (smp->per_interface_data); ii++)
      {
-@@ -1254,9 +1463,57 @@ show_sflow_command_fn (vlib_main_t *vm, unformat_input_t *input,
+@@ -1254,9 +1472,57 @@ show_sflow_command_fn (vlib_main_t *vm, unformat_input_t *input,
    vlib_cli_output (vm, "  drop samples sent: %u\n", smp->dropmon_send);
    vlib_cli_output (vm, "  drop samples dropped: %u\n",
  		   smp->dropmon_send_drops);
@@ -644,7 +665,7 @@ index d8e371d18..b5be83f36 100644
  VLIB_CLI_COMMAND (sflow_enable_disable_command, static) = {
    .path = "sflow enable-disable",
    .short_help = "sflow enable-disable <interface-name> [disable]",
-@@ -1293,12 +1550,30 @@ VLIB_CLI_COMMAND (sflow_drop_monitoring_command, static) = {
+@@ -1293,12 +1559,30 @@ VLIB_CLI_COMMAND (sflow_drop_monitoring_command, static) = {
    .function = sflow_drop_monitoring_command_fn,
  };
  
@@ -675,7 +696,7 @@ index d8e371d18..b5be83f36 100644
  /* API message handler */
  static void
  vl_api_sflow_enable_disable_t_handler (vl_api_sflow_enable_disable_t *mp)
-@@ -1425,6 +1700,38 @@ vl_api_sflow_drop_monitoring_get_t_handler (
+@@ -1425,6 +1709,38 @@ vl_api_sflow_drop_monitoring_get_t_handler (
  			({ rmp->drop_M = ntohl (smp->dropM); }));
  }
  
@@ -714,7 +735,7 @@ index d8e371d18..b5be83f36 100644
  static void
  send_sflow_interface_details (vpe_api_main_t *am, vl_api_registration_t *reg,
  			      u32 context, const u32 hw_if_index)
-@@ -1515,6 +1822,7 @@ sflow_init (vlib_main_t *vm)
+@@ -1515,6 +1831,7 @@ sflow_init (vlib_main_t *vm)
    smp->headerB = SFLOW_DEFAULT_HEADER_BYTES;
    smp->samplingD = SFLOW_DIRN_INGRESS;
    smp->dropM = false;
@@ -722,7 +743,7 @@ index d8e371d18..b5be83f36 100644
  
    /* Add our API messages to the global name_crc hash table */
    smp->msg_id_base = setup_message_id_table ();
-@@ -1533,6 +1841,13 @@ sflow_init (vlib_main_t *vm)
+@@ -1533,6 +1850,13 @@ sflow_init (vlib_main_t *vm)
        SFLOW_NOTICE ("linux-cp not found - using VPP sw_if_index");
      }
  
@@ -977,7 +998,7 @@ index 675bdd0ba..cba942187 100644
  vl_api_sflow_interface_details_t_handler (vl_api_sflow_interface_details_t *mp)
  {
 diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
-index d60e2f096..11dcf559c 100644
+index d60e2f096..d0bf204f0 100644
 --- a/test/test_sflow_drop.py
 +++ b/test/test_sflow_drop.py
 @@ -1,14 +1,49 @@
@@ -1030,7 +1051,7 @@ index d60e2f096..11dcf559c 100644
  
  class SFlowDropTestCase(VppTestCase):
      """sFlow test case"""
-@@ -147,3 +182,413 @@ class SFlowDropTestCase(VppTestCase):
+@@ -147,3 +182,441 @@ class SFlowDropTestCase(VppTestCase):
          self.sleep(1.0)
          # verify sflow counters
          self.verify_sflow(count)
@@ -1320,13 +1341,18 @@ index d60e2f096..11dcf559c 100644
 +class SFlowDropPolicerTestCase(VppTestCase):
 +    """sFlow drop notifications metered by a VPP policer"""
 +
-+    # QOS_POL_MIN_BURST_BYTE floors every bucket at 9KB, which is 36
-+    # notifications at the fixed 256-byte packet size of a pps policer
-+    MIN_BURST_PKTS = 36
++    # A pps policer's burst is in ms of its rate, and nothing floors the
++    # bucket the software policer uses.  xlate.c rounds 1 pps at the fixed
++    # 256-byte packet size to 2 kbps, so 36 s of it is 9000 bytes: 35
++    # notifications.
 +    CIR_PPS = 1
++    BURST_MS = 36000
++    BURST_PKTS = 35
 +
 +    def setUp(self):
 +        super(SFlowDropPolicerTestCase, self).setUp()
++        # the tests share one VPP, and "sh errors" counters are cumulative
++        self.vapi.cli("clear errors")
 +        self.create_pg_interfaces(range(2))
 +        for i in self.pg_interfaces:
 +            i.admin_up()
@@ -1392,12 +1418,12 @@ index d60e2f096..11dcf559c 100644
 +
 +        # 1R2C pps policer: conform transmits, exceed/violate drop
 +        policer = VppPolicer(
-+            self, "sflow-drop", self.CIR_PPS, 0, 1000, 0, rate_type=1
++            self, "sflow-drop", self.CIR_PPS, 0, self.BURST_MS, 0, rate_type=1
 +        ).add_vpp_config()
 +        self.assertIn("policer sflow-drop\n", self.vapi.cli("show sflow") + "\n")
 +
 +        before = self.dequeued()
-+        count = self.MIN_BURST_PKTS + 24
++        count = self.BURST_PKTS + 24
 +        t0 = time.monotonic()
 +        self.send_discards(count)
 +        elapsed = time.monotonic() - t0
@@ -1416,10 +1442,10 @@ index d60e2f096..11dcf559c 100644
 +            "API and node counter disagree",
 +        )
 +        passed = dequeued - limited
-+        self.assertGreaterEqual(passed, self.MIN_BURST_PKTS - 1)
++        self.assertGreaterEqual(passed, self.BURST_PKTS)
 +        self.assertLessEqual(
 +            passed,
-+            self.MIN_BURST_PKTS + int(self.CIR_PPS * elapsed) + 1,
++            self.BURST_PKTS + int(self.CIR_PPS * elapsed) + 1,
 +            "more drop notifications than burst + rate * elapsed",
 +        )
 +
@@ -1444,3 +1470,26 @@ index d60e2f096..11dcf559c 100644
 +        policer.remove_vpp_config()
 +        self.send_discards(5)
 +        self.assertEqual(self.rate_limited(), limited)
++
++    def test_drop_policer_bucket_below_one_notification(self):
++        """a bucket smaller than one notification drops every notification"""
++
++        # 1000 ms at 1 pps is a 250-byte bucket.  vnet_police_packet() would
++        # scale a 256-byte notification against it to 2^32, wrapping to 0,
++        # and let every one through.
++        policer = VppPolicer(
++            self, "sflow-drop", self.CIR_PPS, 0, 1000, 0, rate_type=1
++        ).add_vpp_config()
++        self.vapi.sflow_drop_policer_set(name="sflow-drop")
++        self.vapi.sflow_drop_monitoring_set(drop_M=1)
++
++        before = self.dequeued()
++        limited_before = self.rate_limited()
++        self.send_discards(5)
++        dequeued = self.dequeued() - before
++
++        self.assertEqual(dequeued, 5)
++        self.assertEqual(self.rate_limited() - limited_before, dequeued)
++        stats = policer.get_stats()
++        self.assertEqual(stats["conform_packets"], 0)
++        self.assertEqual(stats["violate_packets"], dequeued)
