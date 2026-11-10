@@ -977,7 +977,7 @@ index 675bdd0ba..cba942187 100644
  vl_api_sflow_interface_details_t_handler (vl_api_sflow_interface_details_t *mp)
  {
 diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
-index d60e2f096..cee0336e7 100644
+index d60e2f096..11dcf559c 100644
 --- a/test/test_sflow_drop.py
 +++ b/test/test_sflow_drop.py
 @@ -1,14 +1,49 @@
@@ -1030,7 +1030,7 @@ index d60e2f096..cee0336e7 100644
  
  class SFlowDropTestCase(VppTestCase):
      """sFlow test case"""
-@@ -147,3 +182,406 @@ class SFlowDropTestCase(VppTestCase):
+@@ -147,3 +182,413 @@ class SFlowDropTestCase(VppTestCase):
          self.sleep(1.0)
          # verify sflow counters
          self.verify_sflow(count)
@@ -1182,16 +1182,28 @@ index d60e2f096..cee0336e7 100644
 +            i.admin_up()
 +            i.config_ip4()
 +            i.resolve_arp()
++        self.sampled = set()
 +
 +    def tearDown(self):
 +        self.vapi.sflow_drop_monitoring_set(drop_M=0)
 +        for i in self.pg_interfaces:
-+            self.vapi.sflow_enable_disable(
-+                hw_if_index=i.sw_if_index, enable_disable=False
-+            )
++            if i in self.sampled:
++                self.set_sampling(i, False)
 +            i.admin_down()
 +            i.unconfig()
 +        super(SFlowDropAllInterfacesTestCase, self).tearDown()
++
++    def set_sampling(self, intf, enable):
++        """sflow_enable_disable() rejects a no-op toggle, so track which
++        interfaces are sampled for tearDown."""
++        # pg interfaces are their own hardware interfaces
++        self.vapi.sflow_enable_disable(
++            hw_if_index=intf.sw_if_index, enable_disable=enable
++        )
++        if enable:
++            self.sampled.add(intf)
++        else:
++            self.sampled.discard(intf)
 +
 +    def sflow_drop_count(self, name):
 +        """How many times is sflow-drop on the error-drop arc of this
@@ -1274,11 +1286,8 @@ index d60e2f096..cee0336e7 100644
 +    def test_sampling_off_leaves_drop_monitoring(self):
 +        """per-port sampling changes neither add nor strand sflow-drop"""
 +
-+        # pg interfaces are their own hardware interfaces
 +        for i in self.pg_interfaces:
-+            self.vapi.sflow_enable_disable(
-+                hw_if_index=i.sw_if_index, enable_disable=True
-+            )
++            self.set_sampling(i, True)
 +        self.vapi.sflow_sampling_rate_set(sampling_N=1)
 +        self.vapi.sflow_drop_monitoring_set(drop_M=1)
 +        for i in self.pg_interfaces:
@@ -1286,9 +1295,7 @@ index d60e2f096..cee0336e7 100644
 +
 +        # Upstream re-enabled sflow-drop here (passing dropM rather than the
 +        # desired state), so it was on pg0's arc twice ...
-+        self.vapi.sflow_enable_disable(
-+            hw_if_index=self.pg0.sw_if_index, enable_disable=False
-+        )
++        self.set_sampling(self.pg0, False)
 +        self.assert_equal(
 +            self.sflow_drop_count(self.pg0.name),
 +            1,
