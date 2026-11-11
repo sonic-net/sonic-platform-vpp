@@ -418,19 +418,6 @@ sonic_ext_host_xc_walk_enable_cb (index_t lipi, void *ctx)
   return WALK_CONTINUE;
 }
 
-/* The duplicate suppressor belongs on every LCP host tap, including the
- * aggregate/BVI tap where a COPY flood can land while punt-via-member is
- * disabled. */
-static walk_rc_t
-sonic_ext_dhcp_suppress_walk_enable_cb (index_t lipi, void *ctx)
-{
-  const lcp_itf_pair_t *lip = lcp_itf_pair_get (lipi);
-  if (lip)
-    sonic_ext_dhcp_copy_suppress_enable_disable (
-      lip->lip_host_sw_if_index, 1);
-  return WALK_CONTINUE;
-}
-
 /*
  * lcp_itf_pair_walk callback: enable sonic-ext-capture on this pair's
  * phy if (and only if) the phy is a real wire port -- i.e. NOT an
@@ -481,26 +468,6 @@ sonic_ext_capture_enable_all (void)
 }
 
 void
-sonic_ext_copp_dhcp_enable_all (void)
-{
-  sonic_ext_main_t *sem = &sonic_ext_main;
-  vnet_main_t *vnm = vnet_get_main ();
-  vnet_sw_interface_t *sw_if;
-
-  sonic_ext_capture_enable_all ();
-  if (sem->dhcp_l2_enabled)
-    return;
-
-  sem->dhcp_l2_enabled = 1;
-  lcp_itf_pair_walk (sonic_ext_dhcp_suppress_walk_enable_cb, NULL);
-  pool_foreach (sw_if, vnm->interface_main.sw_interfaces)
-    {
-      if (sw_if->sw_if_index != 0)
-	sonic_ext_dhcp_enable_disable (sw_if->sw_if_index, 1);
-    }
-}
-
-void
 sonic_ext_set_punt_via_member (u8 is_enable)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
@@ -535,7 +502,7 @@ sonic_ext_set_punt_via_member (u8 is_enable)
  * when it is off, only packets carrying an active NEIGHBOR_MISS reason may
  * pass glean-redirect's run-time gate. */
 void
-sonic_ext_copp_enable_drop_redirect (void)
+sonic_ext_neighbor_miss_enable_redirect (void)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
 
@@ -545,12 +512,6 @@ sonic_ext_copp_enable_drop_redirect (void)
       sonic_ext_glean_redirect_enable_disable (1);
       sem->glean_redirect_enabled = 1;
     }
-}
-
-void
-sonic_ext_neighbor_miss_enable_redirect (void)
-{
-  sonic_ext_copp_enable_drop_redirect ();
 }
 
 void
@@ -645,9 +606,9 @@ sonic_ext_set_nd_punt (u8 is_enable)
  *   - sonic-ext-aggr-tap-redirect on the host  -- only if phy is an
  *     aggregate (BVI today, bond tomorrow) and punt-via-member is on.
  *
- * DHCP client traffic is intercepted on l2-input-ip4/ip6 after VLAN
- * admission; the per-pair hook keeps that feature attached as interfaces
- * appear after the semantic row is first bound.
+ * DHCP client traffic is trapped or copied by the classifier sessions
+ * installed by sairedis; the resulting host-bound packet is policed by
+ * sonic-ext-copp-ifout on the selected LCP TAP.
  *
  * This is the only place we know both (a) the host tap sw_if_index
  * and (b) which phy it shadows.
@@ -661,12 +622,6 @@ sonic_ext_lcp_pair_add_cb (lcp_itf_pair_t *lip)
   if (sem->capture_enabled
       && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_capture_enable_disable (lip->lip_phy_sw_if_index, 1);
-  if (sem->dhcp_l2_enabled
-      && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
-    sonic_ext_dhcp_enable_disable (lip->lip_phy_sw_if_index, 1);
-  if (sem->dhcp_l2_enabled)
-    sonic_ext_dhcp_copy_suppress_enable_disable (
-      lip->lip_host_sw_if_index, 1);
   if (sem->host_xc_enabled)
     sonic_ext_host_xc_enable_disable (lip->lip_host_sw_if_index, 1);
   if (sem->aggr_tap_redirect_enabled
@@ -685,12 +640,6 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
   if (sem->capture_enabled
       && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_capture_enable_disable (lip->lip_phy_sw_if_index, 0);
-  if (sem->dhcp_l2_enabled
-      && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
-    sonic_ext_dhcp_enable_disable (lip->lip_phy_sw_if_index, 0);
-  if (sem->dhcp_l2_enabled)
-    sonic_ext_dhcp_copy_suppress_enable_disable (
-      lip->lip_host_sw_if_index, 0);
   if (sem->host_xc_enabled)
     sonic_ext_host_xc_enable_disable (lip->lip_host_sw_if_index, 0);
   if (sem->aggr_tap_redirect_enabled

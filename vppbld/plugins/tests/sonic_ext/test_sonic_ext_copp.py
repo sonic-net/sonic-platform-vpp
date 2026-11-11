@@ -60,7 +60,14 @@ from config import config
 from framework import VppTestCase
 from vpp_papi import VppEnum
 from vpp_ip import INVALID_INDEX
-from vpp_ip_route import FibPathType, VppIpRoute, VppRoutePath
+from vpp_ip_route import (
+    FibPathProto,
+    FibPathType,
+    VppIpMRoute,
+    VppIpRoute,
+    VppMRoutePath,
+    VppRoutePath,
+)
 from vpp_policer import PolicerAction, VppPolicer
 from vpp_sub_interface import VppDot1QSubint
 
@@ -746,40 +753,32 @@ class TestSonicExtCoppDhcp(SonicExtCoppDataplaneBase):
 
         self.assert_policed(self.dhcp6_to_me(), dhcp6, lambda: self.dhcp_counters(True))
 
-    def test_routed_dhcp6_extension_header_is_policed(self):
-        """DHCPv6 interception walks the IPv6 extension-header chain"""
-        dhcp6 = self.policer(name="dhcp6-extension")
-        self.bind_dhcp(dhcp6, is_ipv6=True)
-
-        self.assert_policed(
-            self.dhcp6_multicast(extension=True),
-            dhcp6,
-            lambda: self.dhcp_counters(True),
-        )
-
-    def test_active_unpoliced_dhcp6_redirects_multicast(self):
-        """A null-policer DHCPv6 trap still rescues routed multicast"""
-        self.vapi.sonic_ext_copp_dhcp_bind(
-            policer_name="", is_ipv6=True, is_copy=False, is_bind=True
-        )
-        self.addCleanup(
-            self.vapi.sonic_ext_copp_dhcp_bind,
-            policer_name="",
-            is_ipv6=True,
-            is_copy=False,
-            is_bind=False,
-        )
-        counters_before = self.dhcp_counters(True)
-
-        self.send_and_expect(self.phy, self.dhcp6_multicast(extension=True), self.host)
-        self.assertEqual(
-            self.delta(self.dhcp_counters(True), counters_before)["conform"],
-            self.N_PKTS,
-        )
-
-    def test_routed_dhcp6_multicast_is_redirected_and_policed(self):
-        """ff02::1:2 traffic is intercepted before MFIB RPF drop"""
-        dhcp6 = self.policer(name="dhcp6-routed")
+    def test_dhcp6_mfib_receive_route_reaches_copp_ifout(self):
+        """Sairedis' accept+local MFIB route replaces drop-arc rescue."""
+        itf_flags = VppEnum.vl_api_mfib_itf_flags_t
+        entry_flags = VppEnum.vl_api_mfib_entry_flags_t
+        route = VppIpMRoute(
+            self,
+            "::",
+            "ff02::1:2",
+            128,
+            entry_flags.MFIB_API_ENTRY_FLAG_NONE,
+            [
+                VppMRoutePath(
+                    self.phy.sw_if_index,
+                    itf_flags.MFIB_API_ITF_FLAG_ACCEPT,
+                    proto=FibPathProto.FIB_PATH_NH_PROTO_IP6,
+                ),
+                VppMRoutePath(
+                    INVALID_INDEX,
+                    itf_flags.MFIB_API_ITF_FLAG_FORWARD,
+                    proto=FibPathProto.FIB_PATH_NH_PROTO_IP6,
+                    type=FibPathType.FIB_PATH_TYPE_LOCAL,
+                ),
+            ],
+        ).add_vpp_config()
+        self.addCleanup(route.remove_vpp_config)
+        dhcp6 = self.policer(name="dhcp6-mfib-local")
         self.bind_dhcp(dhcp6, is_ipv6=True)
 
         self.assert_policed(
