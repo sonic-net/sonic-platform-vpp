@@ -152,8 +152,11 @@ sampled.
 
 SFlowDropPolicerTestCase binds a policer name before the policer exists
 and checks nothing is limited, then creates a 1 pps policer with a 36 s
-(9000-byte, 35-notification) burst and sends discards one at a time (so
-the worker FIFO never overflows).  It checks that no more than the burst
+(9000-byte, 35-notification) burst and sends discards one at a time,
+waiting for the main thread to dequeue each one ("show sflow" counts it as
+sent, dropped or rate-limited) so the 3-entry worker FIFO never overflows
+however often the drain runs, and a send that fails for want of a NET_DM
+family still counts.  It checks that no more than the burst
 plus rate * elapsed reach the sender, that the rest are counted as
 rate-limited, that the policer's own stats account for every notification
 at 256 bytes each, and that nothing is limited once the policer is unbound
@@ -998,7 +1001,7 @@ index 675bdd0ba..cba942187 100644
  vl_api_sflow_interface_details_t_handler (vl_api_sflow_interface_details_t *mp)
  {
 diff --git a/test/test_sflow_drop.py b/test/test_sflow_drop.py
-index d60e2f096..d0bf204f0 100644
+index d60e2f096..b404e8ed6 100644
 --- a/test/test_sflow_drop.py
 +++ b/test/test_sflow_drop.py
 @@ -1,14 +1,49 @@
@@ -1051,7 +1054,7 @@ index d60e2f096..d0bf204f0 100644
  
  class SFlowDropTestCase(VppTestCase):
      """sFlow test case"""
-@@ -147,3 +182,441 @@ class SFlowDropTestCase(VppTestCase):
+@@ -147,3 +182,459 @@ class SFlowDropTestCase(VppTestCase):
          self.sleep(1.0)
          # verify sflow counters
          self.verify_sflow(count)
@@ -1375,10 +1378,24 @@ index d60e2f096..d0bf204f0 100644
 +                    return int(results[0])
 +        return 0
 +
++    def drained(self):
++        """Drop notifications the main thread has dequeued, whether sent,
++        failed to send (there is no NET_DM family without
++        CONFIG_NET_DROP_MONITOR) or rate-limited."""
++        return sum(
++            int(n)
++            for n in re.findall(
++                r"drop samples (?:sent|dropped|rate-limited): (\d+)",
++                self.vapi.cli("show sflow"),
++            )
++        )
++
 +    def send_discards(self, count):
-+        """One pg run per packet, so the 4-deep worker drop FIFO never
-+        overflows and every discard reaches the main-thread policer."""
++        """One discard at a time, each waited for until the main thread has
++        dequeued it: the worker drop FIFO holds only 3, and how often the main
++        thread drains it is not something to race."""
 +        for _ in range(count):
++            target = self.drained() + 1
 +            p = (
 +                Ether(dst=self.pg0.local_mac, src=self.pg0.remote_mac)
 +                / IP(src=self.pg0.remote_ip4, dst=self.pg1.remote_ip4, ttl=1)
@@ -1387,8 +1404,12 @@ index d60e2f096..d0bf204f0 100644
 +            )
 +            self.pg0.add_stream([p])
 +            self.pg_start()
-+        # allow the last discard to reach the main thread
-+        self.sleep(0.5)
++            deadline = time.monotonic() + 5
++            while self.drained() < target:
++                self.assertLess(
++                    time.monotonic(), deadline, "a discard was never dequeued"
++                )
++                self.sleep(0.01)
 +
 +    def dequeued(self):
 +        return self.get_sflow_counter(
