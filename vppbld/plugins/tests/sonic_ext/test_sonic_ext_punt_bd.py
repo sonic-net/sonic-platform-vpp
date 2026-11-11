@@ -66,7 +66,7 @@ from scapy.contrib.lldp import (
 )
 from scapy.layers.dhcp import BOOTP, DHCP
 from scapy.layers.inet import IP, UDP
-from scapy.layers.inet6 import IPv6
+from scapy.layers.inet6 import IPv6, IPv6ExtHdrHopByHop
 from scapy.layers.l2 import ARP, Dot1Q, Ether
 from scapy.packet import Raw
 
@@ -95,6 +95,8 @@ LLDP_ETHERTYPE = 0x88CC
 ARP_ETHERTYPE = 0x0806
 DHCP_CLIENT_PORT = 68
 DHCP_SERVER_PORT = 67
+DHCP6_CLIENT_PORT = 546
+DHCP6_SERVER_PORT = 547
 
 REDIRECTED = (
     "/err/sonic-ext-aggr-tap-redirect/aggregate tap punt redirected to member tap"
@@ -446,6 +448,18 @@ class SonicExtL2PuntBase(VppTestCase):
             return eth / Dot1Q(vlan=self.VLAN_ID) / payload
         return eth / payload
 
+    def _dhcp6_request(self, phy, tagged=False, extension=False):
+        eth = Ether(dst="33:33:00:01:00:02", src=phy.remote_mac)
+        l4 = UDP(sport=DHCP6_CLIENT_PORT, dport=DHCP6_SERVER_PORT)
+        if extension:
+            l4 = IPv6ExtHdrHopByHop(options=[]) / l4
+        payload = IPv6(src="::1", dst="ff02::1:2", hlim=64) / l4 / Raw(
+            b"dhcp6-client"
+        )
+        if tagged:
+            return eth / Dot1Q(vlan=self.VLAN_ID) / payload
+        return eth / payload
+
     def _lldp(self, phy):
         return (
             Ether(dst=LLDP_MCAST_MAC, src=phy.remote_mac, type=LLDP_ETHERTYPE)
@@ -466,6 +480,10 @@ class SonicExtL2PuntBase(VppTestCase):
     @staticmethod
     def _not_dhcp(p):
         return not (p.haslayer(UDP) and p[UDP].dport == DHCP_SERVER_PORT)
+
+    @staticmethod
+    def _not_dhcp6(p):
+        return not (p.haslayer(UDP) and p[UDP].dport == DHCP6_SERVER_PORT)
 
     @staticmethod
     def _not_lldp(p):
@@ -496,6 +514,21 @@ class SonicExtL2PuntBase(VppTestCase):
 
     def _err(self, name):
         return self.statistics.get_err_counter(name)
+
+    def _bind_dhcp6(self, is_copy=False, policer_name=""):
+        self.vapi.sonic_ext_copp_dhcp_bind(
+            policer_name=policer_name,
+            is_ipv6=True,
+            is_copy=is_copy,
+            is_bind=True,
+        )
+        self.addCleanup(
+            self.vapi.sonic_ext_copp_dhcp_bind,
+            policer_name=policer_name,
+            is_ipv6=True,
+            is_copy=is_copy,
+            is_bind=False,
+        )
 
     def _punt(self, phy, pkt, tap, filter_out_fn, flood_to=()):
         """Inject one frame on *phy* and return the copy seen on *tap*.
@@ -627,8 +660,8 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
         self.assertEqual(rx[ARP].pdst, "10.0.0.1")
         self.assertEqual(self._err(REDIRECTED), before + 1)
 
-    def test_classifier_punted_dhcp_uses_semantic_policer(self):
-        """Sairedis' classifier owns TRAP; copp-ifout owns its policer."""
+    def test_classifier_punted_dhcp_copy_is_not_duplicated(self):
+        """DHCPv4 stays classifier-owned even when the API says COPY."""
         pol = VppPolicer(
             self,
             "copp-classifier-dhcp4",
@@ -641,7 +674,7 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
         self.vapi.sonic_ext_copp_dhcp_bind(
             policer_name=pol.name,
             is_ipv6=False,
-            is_copy=False,
+            is_copy=True,
             is_bind=True,
         )
         try:
@@ -659,7 +692,7 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
             self.vapi.sonic_ext_copp_dhcp_bind(
                 policer_name=pol.name,
                 is_ipv6=False,
-                is_copy=False,
+                is_copy=True,
                 is_bind=False,
             )
             pol.remove_vpp_config()
@@ -675,6 +708,108 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
 
         self._assert_tagged(rx)
         self.assertEqual(rx[UDP].dport, DHCP_SERVER_PORT)
+
+    def test_unbound_dhcp6_preserves_vlan_flooding(self):
+        """Absent DHCPv6 binding leaves admitted traffic on the bridge."""
+        pkt = self._dhcp6_request(self.access_phy, extension=True)
+        self.access_tap.enable_capture()
+        self.pg_enable_capture(self.pg_interfaces)
+        self.access_phy.add_stream([pkt])
+        self.pg_start(trace=True)
+
+        self.access_tap.get_capture(
+            expected_count=0, timeout=1, filter_out_fn=self._not_dhcp6
+        )
+        flooded = self.trunk_phy.get_capture(
+            1, filter_out_fn=self._not_from(pkt[Ether].src)
+        )[0]
+        self._assert_flooded(pkt, flooded, self.trunk_phy, True)
+
+    def test_untagged_dhcp6_copy_is_policed_once_and_floods(self):
+        """COPY with an extension header emits one CPU copy and still floods."""
+        policer = VppPolicer(
+            self,
+            "copp-dhcp6-copy-once",
+            1000,
+            0,
+            100000,
+            0,
+            rate_type=RATE.SSE2_QOS_RATE_API_KBPS,
+        ).add_vpp_config()
+        self._bind_dhcp6(is_copy=True, policer_name=policer.name)
+        pkt = self._dhcp6_request(self.access_phy, extension=True)
+        before = self.vapi.sonic_ext_copp_dhcp_get_counters(is_ipv6=True)
+
+        rx = self._punt(
+            self.access_phy,
+            pkt,
+            self.access_tap,
+            self._not_dhcp6,
+            flood_to=[(self.trunk_phy, True)],
+        )
+
+        after = self.vapi.sonic_ext_copp_dhcp_get_counters(is_ipv6=True)
+        self._assert_untagged(rx)
+        self.assertEqual(rx[UDP].dport, DHCP6_SERVER_PORT)
+        self.assertEqual(after.conform_packets, before.conform_packets + 1)
+
+    def test_tagged_dhcp6_trap_with_extension_suppresses_flood(self):
+        """TRAP recognizes, polices, and consumes tagged admitted traffic."""
+        policer = VppPolicer(
+            self,
+            "copp-dhcp6-tagged-trap",
+            1000,
+            0,
+            100000,
+            0,
+            rate_type=RATE.SSE2_QOS_RATE_API_KBPS,
+        ).add_vpp_config()
+        self._bind_dhcp6(policer_name=policer.name)
+        pkt = self._dhcp6_request(self.trunk_phy, tagged=True, extension=True)
+        before = self.vapi.sonic_ext_copp_dhcp_get_counters(is_ipv6=True)
+        self.trunk_tap.enable_capture()
+        self.pg_enable_capture(self.pg_interfaces)
+        self.trunk_phy.add_stream([pkt])
+        self.pg_start(trace=True)
+
+        rx = self.trunk_tap.get_capture(
+            expected_count=1, timeout=5, filter_out_fn=self._not_dhcp6
+        )[0]
+        self.access_phy.get_capture(
+            0, timeout=1, filter_out_fn=self._not_from(pkt[Ether].src)
+        )
+        self._assert_tagged(rx)
+        self.assertEqual(rx[UDP].dport, DHCP6_SERVER_PORT)
+        after = self.vapi.sonic_ext_copp_dhcp_get_counters(is_ipv6=True)
+        self.assertEqual(after.conform_packets, before.conform_packets + 1)
+
+    def test_dhcp6_does_not_bypass_vlan_admission(self):
+        """A DHCPv6 binding cannot admit an access or trunk VLAN non-member."""
+        self._bind_dhcp6(is_copy=True)
+        access_bad = self._dhcp6_request(self.access_phy, tagged=True, extension=True)
+        access_bad[Dot1Q].vlan = self.VLAN_ID + 1
+        trunk_bad = self._dhcp6_request(self.trunk_phy, tagged=True, extension=True)
+        trunk_bad[Dot1Q].vlan = self.VLAN_ID + 1
+
+        self.access_tap.enable_capture()
+        self.trunk_tap.enable_capture()
+        self.pg_enable_capture(self.pg_interfaces)
+        self.access_phy.add_stream([access_bad])
+        self.trunk_phy.add_stream([trunk_bad])
+        self.pg_start(trace=True)
+
+        self.access_tap.get_capture(
+            expected_count=0, timeout=1, filter_out_fn=self._not_dhcp6
+        )
+        self.trunk_tap.get_capture(
+            expected_count=0, timeout=1, filter_out_fn=self._not_dhcp6
+        )
+        self.access_phy.get_capture(
+            0, timeout=1, filter_out_fn=self._not_from(trunk_bad[Ether].src)
+        )
+        self.trunk_phy.get_capture(
+            0, timeout=1, filter_out_fn=self._not_from(access_bad[Ether].src)
+        )
 
     def test_lldp_on_trunk_to_own_tap(self):
         """LLDP on the trunk phy is punted via the L3 ethertype path to its tap"""

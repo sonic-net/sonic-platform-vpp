@@ -749,6 +749,14 @@ sonic_ext_copp_dhcp_is_bound (sonic_ext_main_t *sem, int is_ipv6)
 }
 
 int
+sonic_ext_copp_dhcp_is_copy (sonic_ext_main_t *sem, int is_ipv6)
+{
+  int idx = sonic_ext_copp_dhcp_find_entry (sem, is_ipv6);
+
+  return idx >= 0 && sem->copp_ifout_entries[idx].dhcp_copy;
+}
+
+int
 sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_copy,
 			  int is_bind)
 {
@@ -757,13 +765,13 @@ sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_copy,
   int idx = sonic_ext_copp_dhcp_find_entry (sem, is_ipv6);
   int rv = 0;
 
-  /* Packet action is retained in the compatibility API, but the existing
-   * sairedis classifier/MFIB programming owns TRAP versus COPY. The provider
-   * only selects and polices the resulting host-bound DHCP packet. */
-  (void) is_copy;
-
   if (is_bind && !sem->copp)
     return VNET_API_ERROR_FEATURE_DISABLED;
+
+  /* sairedis retains DHCPv4 classifiers, so provider-side semantic
+   * interception is enabled only for DHCPv6. */
+  if (is_bind && is_ipv6)
+    sonic_ext_copp_dhcp6_enable_all ();
 
   /* ip2me and interface-output read the same semantic row on workers. Make
    * replacement atomic across both nodes so a packet can never skip IP2ME
@@ -810,6 +818,7 @@ sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_copy,
   sem->copp_ifout_entries[idx].in_use = 1;
   sem->copp_ifout_entries[idx].match_dhcp4 = is_ipv6 ? 0 : 1;
   sem->copp_ifout_entries[idx].match_dhcp6 = is_ipv6 ? 1 : 0;
+  sem->copp_ifout_entries[idx].dhcp_copy = is_ipv6 && is_copy;
   sem->copp_ifout_conform_packets[idx] = 0;
   sem->copp_ifout_exceed_packets[idx] = 0;
   sem->copp_ifout_violate_packets[idx] = 0;
