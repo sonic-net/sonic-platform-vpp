@@ -539,8 +539,9 @@ sonic_ext_pbh_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
             n_stale++;
           else
             {
-              sonic_ext_vnet_buf_t *sb = sonic_ext_vnet_buf_claim (
-                vm, b[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
+              sonic_ext_vnet_buf_t *sb = sonic_ext_vnet_buf_flags_set (
+                vm, b[0], SONIC_EXT_VNET_BUF_PBH_LAG_HASH,
+                SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
 
               hash = sonic_ext_pbh_hash_inner (p, &inner);
               sb->pbh_lag_hash = hash;
@@ -680,7 +681,7 @@ VNET_FEATURE_INIT (sonic_ext_pbh_ip6, static) = {
  * live SONIC_EXT_VNET_BUF_PBH_LAG_HASH are replaced; everything else keeps
  * the configured algorithm's answer.
  *
- * sonic_ext_vnet_buf_find() short-circuits on SONIC_EXT_BUFFER_F_VNET_BUF
+ * sonic_ext_vnet_buf_slot_if_set() short-circuits on SONIC_EXT_BUFFER_F_VNET_BUF
  * before it touches the side-band table, so a bond carrying no PBH traffic
  * stays entirely off that cache line.  The prefetch is gated on the same
  * flag for the same reason.
@@ -690,7 +691,7 @@ VNET_FEATURE_INIT (sonic_ext_pbh_ip6, static) = {
  * located from buffer_pool_index and the buffer index, so the buffer itself
  * is read-only.
  *
- * The field bit is released on a hit so the tag is applied at most once.
+ * The PBH_LAG_HASH bit is cleared on a hit so the tag is applied at most once.
  * That keeps a frame replicated after the producer ran from re-consuming a
  * tag that was meant for the original -- the clone inherits the flag, but
  * its own slot is clean.
@@ -707,12 +708,12 @@ sonic_ext_pbh_lag_hash_override (vlib_main_t *vm, vlib_buffer_t **b, u32 *h,
           (b[i + 8]->flags & SONIC_EXT_BUFFER_F_VNET_BUF))
         clib_prefetch_load (sonic_ext_vnet_buf_slot (vm, b[i + 8]));
 
-      sb = sonic_ext_vnet_buf_find (vm, b[i],
-                                    SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
+      sb = sonic_ext_vnet_buf_slot_if_set (vm, b[i],
+                                           SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
       if (PREDICT_FALSE (sb != 0))
         {
           h[i] = sb->pbh_lag_hash;
-          sonic_ext_vnet_buf_release (sb, SONIC_EXT_VNET_BUF_PBH_LAG_HASH);
+          sb->flags &= ~SONIC_EXT_VNET_BUF_PBH_LAG_HASH;
         }
     }
 }

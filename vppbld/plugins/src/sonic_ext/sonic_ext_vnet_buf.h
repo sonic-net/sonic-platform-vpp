@@ -30,11 +30,12 @@
  * scarce resource shared with every other plugin.  So the payload lives
  * here and only a one-bit witness is charged to the buffer.
  *
- * VALIDITY.  Two things must hold before a consumer trusts a field: the
- * side-band flag SONIC_EXT_BUFFER_F_VNET_BUF in b->flags, and the field's
- * own bit in `valid`.  They cover different failure modes and neither is
- * enough alone.  Both are handled by the accessors below -- claim() sets
- * the flag, find() tests it -- so no feature has to remember either.
+ * VALIDITY.  Two things must hold before a consumer trusts a slot: the
+ * side-band flag SONIC_EXT_BUFFER_F_VNET_BUF in b->flags, and the feature's
+ * own bits in `flags`.  They cover different failure modes and neither is
+ * enough alone.  Both are handled by the accessors below -- flags_set()
+ * sets the buffer flag, flags_get() and slot_if_set() test it -- so no
+ * feature has to remember either.
  *
  *   b->flags is the per-incarnation witness, shared by every field.  It
  *   lives in vlib_buffer_template_t, the first cache line that VPP
@@ -50,16 +51,22 @@
  *   that scrubs slots.  Such a buffer re-enters the dataplane with its slot
  *   still populated; the template reset is what makes that harmless.
  *
- *   `valid` is the per-field witness, and gives at-most-once consumption
- *   within one incarnation: a consumer releases its bit on a hit.
+ *   `flags` is the per-feature word, and each feature owns a disjoint mask in
+ *   it.  The slot is all-zero at the start of every incarnation, so "never
+ *   set" and "set to zero" are the same state.  A feature that needs only a
+ *   bit or a small enum keeps its whole value there.  A feature with a
+ *   payload field, for which zero may be a legitimate value, owns a bit that
+ *   marks the payload as written; clearing that bit on a hit gives
+ *   at-most-once consumption within one incarnation.
  *
- * Note what is deliberately NOT done: nothing here ever clears the flag.
- * Clearing it on release would be wrong -- one feature's consume would hide
- * every other feature's field in the same slot, which is precisely what the
- * per-field `valid` bitmap exists to prevent.  Clearing it in the free
- * callback would be useless twice over: on VPP's path the template has
- * already zeroed b->flags before the callback runs, and on the DPDK path
- * the callback does not run at all -- which is the very gap the flag closes.
+ * Note what is deliberately NOT done: nothing here ever clears the buffer
+ * flag.  Clearing it when a feature clears its bits would be wrong -- one
+ * feature's consume would hide every other feature's state in the same
+ * slot, which is precisely what per-feature masks exist to prevent.
+ * Clearing it in the free callback would be useless twice over: on VPP's
+ * path the template has already zeroed b->flags before the callback runs,
+ * and on the DPDK path the callback does not run at all -- which is the
+ * very gap the buffer flag closes.
  * Clearing is the buffer template's job, because only the template is on
  * every path.
  *
@@ -74,7 +81,7 @@
  * That is what keeps clones safe.  b->flags IS inherited by
  * vlib_buffer_clone() / vlib_buffer_copy() -- their mask keeps every bit
  * above VLIB_BUFFER_FLAGS_ALL -- but a clone's index comes from
- * vlib_buffer_alloc(), so it finds `valid` clear and reads no field it
+ * vlib_buffer_alloc(), so it finds `flags` clear and reads no field it
  * never wrote.  A future field that needs inheritance instead must copy
  * itself explicitly at its own duplication sites; VPP offers no clone hook.
  */
@@ -83,27 +90,31 @@
  * Buffer flag: this incarnation of the buffer has claimed side-band
  * storage.  One bit for the whole facility rather than one per
  * feature -- the AVAIL bits are a nine-deep resource shared with every
- * other plugin, and `valid` already discriminates between fields.  The cost
- * of sharing is a false positive: a feature whose own field is absent, but
- * whose buffer was claimed by some other feature, pays one table load
- * before missing on `valid`.
+ * other plugin, and `flags` already discriminates between features.  The
+ * cost of sharing is a false positive: a feature whose own bits are clear,
+ * but whose buffer was claimed by some other feature, pays one table load
+ * before missing on `flags`.
  */
 #define SONIC_EXT_BUFFER_F_VNET_BUF VNET_BUFFER_F_AVAIL2
 
-/* One bit per field below, up to 8 before `valid` must widen. */
+/*
+ * Masks in `flags`, one per feature, disjoint, one bit or several.  Values
+ * are passed in place, already shifted under the mask.  Up to 16 bits
+ * before `flags` must widen.
+ */
 typedef enum
 {
-  SONIC_EXT_VNET_BUF_PBH_LAG_HASH = 1 << 0,
-} sonic_ext_vnet_buf_field_t;
+  SONIC_EXT_VNET_BUF_PBH_LAG_HASH = 1 << 0, /* pbh_lag_hash is written */
+} sonic_ext_vnet_buf_flag_t;
 
 typedef struct
 {
   u32 pbh_lag_hash; /* SONIC_EXT_VNET_BUF_PBH_LAG_HASH */
-  u8 valid;	    /* bitmap of sonic_ext_vnet_buf_field_t */
-  /* Add feature fields here, and a bit above for each.  The table costs one
-   * struct per buffer position, so widening it is linear in the buffer
-   * count. */
-} sonic_ext_vnet_buf_t; /* 8 bytes with padding; 3 bytes spare */
+  u16 flags;	    /* sonic_ext_vnet_buf_flag_t masks */
+  /* Add payload fields here, each with a bit above that marks it written.
+   * The table costs one struct per buffer position, so widening it is
+   * linear in the buffer count. */
+} sonic_ext_vnet_buf_t; /* 8 bytes with padding; 2 bytes spare */
 
 STATIC_ASSERT_SIZEOF (sonic_ext_vnet_buf_t, 8);
 
@@ -152,37 +163,75 @@ sonic_ext_vnet_buf_slot (vlib_main_t *vm, vlib_buffer_t *b)
 }
 
 /*
- * Claim field f of b's slot. A DPDK-recycled slot can retain old data,
- * so the first claim of an incarnation must reset the entire slot. Later
- * claims preserve other fields belonging to the same packet. Reclaiming a
- * released field does not reset its payload; producers must initialize it.
+ * b's slot, made writable for this incarnation.  A DPDK-recycled slot can
+ * retain old data, so the first write of an incarnation must reset the
+ * entire slot; later writes preserve whatever the same packet already holds.
  *
- * The field bit and the buffer flag are written together here and nowhere
- * else, so a feature cannot acquire the storage without also acquiring the
- * witness that makes it readable.
+ * The buffer flag is set here and nowhere else, so a feature cannot acquire
+ * the storage without also acquiring the witness that makes it readable.
+ * Features go through flags_set(), not this.
  */
 static_always_inline sonic_ext_vnet_buf_t *
-sonic_ext_vnet_buf_claim (vlib_main_t *vm, vlib_buffer_t *b,
-                          sonic_ext_vnet_buf_field_t f)
+sonic_ext_vnet_buf_acquire (vlib_main_t *vm, vlib_buffer_t *b)
 {
   sonic_ext_vnet_buf_t *sb = sonic_ext_vnet_buf_slot (vm, b);
 
   if ((b->flags & SONIC_EXT_BUFFER_F_VNET_BUF) == 0)
     clib_memset (sb, 0, sizeof (*sb));
-  sb->valid |= (u8) f;
   b->flags |= SONIC_EXT_BUFFER_F_VNET_BUF;
   return sb;
 }
 
 /*
- * b's slot iff field f was written during b's current incarnation, else 0.
- * The flag is tested before the slot address is formed, so a buffer that
+ * Write value into the `flags` bits under mask, leaving every other
+ * feature's bits alone, and return b's slot.  A producer with a payload
+ * sets its bit first and writes the payload through the returned slot:
+ * writing the payload before the first set of an incarnation would be
+ * wiped by the reset.  Setting a bit again does not reset the payload;
+ * producers must initialize it.
+ *
+ * Writing zero to a buffer that has claimed nothing is a no-op that never
+ * touches the table, since flags_get() already reads zero; it returns 0.
+ */
+static_always_inline sonic_ext_vnet_buf_t *
+sonic_ext_vnet_buf_flags_set (vlib_main_t *vm, vlib_buffer_t *b, u16 mask,
+                              u16 value)
+{
+  sonic_ext_vnet_buf_t *sb;
+
+  ASSERT ((value & ~mask) == 0);
+  if (value == 0 && (b->flags & SONIC_EXT_BUFFER_F_VNET_BUF) == 0)
+    return 0;
+
+  sb = sonic_ext_vnet_buf_acquire (vm, b);
+  sb->flags = (sb->flags & ~mask) | value;
+  return sb;
+}
+
+/*
+ * The `flags` bits under mask, or 0 if b has claimed nothing.  The buffer
+ * flag is tested before the slot address is formed, so a buffer that
  * claimed nothing costs one bit test against a cache line the caller has
  * necessarily already touched, and never pulls in the table.
  */
+static_always_inline u16
+sonic_ext_vnet_buf_flags_get (vlib_main_t *vm, vlib_buffer_t *b, u16 mask)
+{
+  if ((b->flags & SONIC_EXT_BUFFER_F_VNET_BUF) == 0)
+    return 0;
+
+  return sonic_ext_vnet_buf_slot (vm, b)->flags & mask;
+}
+
+/*
+ * b's slot iff any bit under mask was set during b's current incarnation,
+ * else 0.  For payload consumers, which need the slot as well as the bit.
+ * A consumer done with its payload clears its own bit through the returned
+ * slot, never SONIC_EXT_BUFFER_F_VNET_BUF, which is shared by all features
+ * and is cleared by the buffer template.
+ */
 static_always_inline sonic_ext_vnet_buf_t *
-sonic_ext_vnet_buf_find (vlib_main_t *vm, vlib_buffer_t *b,
-                         sonic_ext_vnet_buf_field_t f)
+sonic_ext_vnet_buf_slot_if_set (vlib_main_t *vm, vlib_buffer_t *b, u16 mask)
 {
   sonic_ext_vnet_buf_t *sb;
 
@@ -190,22 +239,7 @@ sonic_ext_vnet_buf_find (vlib_main_t *vm, vlib_buffer_t *b,
     return 0;
 
   sb = sonic_ext_vnet_buf_slot (vm, b);
-  return (sb->valid & (u8) f) ? sb : 0;
-}
-
-/*
- * Give a field up early, without waiting for the buffer to be freed.  Taking
- * the field as an argument is what lets several features share one slot: a
- * per-slot "somebody wrote something" release would let one feature's
- * consume silently invalidate every other feature's field in the same slot.
- * For the same reason this does not touch SONIC_EXT_BUFFER_F_VNET_BUF, which
- * is shared by all fields and is cleared by the buffer template, not here.
- */
-static_always_inline void
-sonic_ext_vnet_buf_release (sonic_ext_vnet_buf_t *sb,
-                            sonic_ext_vnet_buf_field_t f)
-{
-  sb->valid &= (u8) ~f;
+  return (sb->flags & mask) ? sb : 0;
 }
 
 /*
