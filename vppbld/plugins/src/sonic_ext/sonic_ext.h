@@ -400,10 +400,6 @@ typedef struct
    * worker threads. Gated by the iface_loopback feature toggle above. */
   u8 *loopback_action_by_sw_if_index;
 
-  /* Interfaces on which sonic-sairedis owns one IPv6 link reference.  The
-   * bit makes the binary API idempotent across client timeouts/retries. */
-  uword *rif_ip6_owned;
-
   /* Set once capture/host-xc have been enabled on all existing
    * interfaces, so that toggling on/off is idempotent. */
   u8 capture_enabled;
@@ -793,8 +789,5 @@ int sonic_ext_copp_ttl_punt_bind (int is_bind);
  * Returns 0 on success, a VNET_API_ERROR_* on failure. Honours the
  * iface_loopback feature toggle. */
 int sonic_ext_iface_loopback_set_action (u32 sw_if_index, u8 action);
-
-/* Idempotent provider ownership around VPP's reference-counted IPv6 link. */
-int sonic_ext_rif_ip6_enable_disable (u32 sw_if_index, int enable);
 
 #endif /* __included_sonic_ext_h__ */

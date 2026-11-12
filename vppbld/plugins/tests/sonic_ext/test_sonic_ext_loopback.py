@@ -122,25 +122,6 @@ class TestSonicExtLoopback(SonicExtLoopbackBase):
         """iface-loopback is a SAIVPP-owned feature, on by default"""
         self.assertTrue(self.feature_enabled())
 
-    def test_rif_ipv6_owner_is_idempotent(self):
-        """A timeout retry cannot acquire or release a second IPv6 lock."""
-        self.pg0.config_ip6()
-        try:
-            for _ in range(2):
-                self.vapi.sonic_ext_rif_ip6_enable_disable(
-                    sw_if_index=self.pg0.sw_if_index, enable=True
-                )
-            for _ in range(2):
-                self.vapi.sonic_ext_rif_ip6_enable_disable(
-                    sw_if_index=self.pg0.sw_if_index, enable=False
-                )
-
-            # config_ip6() still owns its independent link reference.  A
-            # non-idempotent second disable would consume it and turn IPv6 off.
-            self.assertIn("IPv6 is enabled", self.vapi.cli("show ip6 interface pg0"))
-        finally:
-            self.pg0.unconfig_ip6()
-
     def test_forward_default(self):
         """default action FORWARD: the hairpin egresses its ingress RIF"""
         before = self.drops()
