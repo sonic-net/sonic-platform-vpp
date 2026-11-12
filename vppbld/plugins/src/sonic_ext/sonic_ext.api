@@ -34,25 +34,6 @@ autoreply define sonic_ext_ip2me_enable_disable
   bool enable;
 };
 
-/** \brief Idempotently acquire or release sonic-sairedis' IPv6 link owner.
-    VPP's stock sw_interface_ip6_enable_disable API is reference-counted, so
-    retrying an applied request after its reply was lost changes the count a
-    second time.  This API keeps one provider-owned bit per sw_if_index and
-    only calls ip6_link_enable()/ip6_link_disable() on an actual transition.
-    Repeating either request is therefore safe after a timeout.
-    @param client_index - opaque cookie to identify the sender
-    @param context - sender context, to match reply w/ request
-    @param sw_if_index - interface whose provider ownership is updated
-    @param enable - 1 to acquire the owner, 0 to release it
-*/
-autoreply define sonic_ext_rif_ip6_enable_disable
-{
-  u32 client_index;
-  u32 context;
-  vl_api_interface_index_t sw_if_index;
-  bool enable;
-};
-
 /** \brief Set the router-interface loopback (hairpin) packet action.
     When action is DROP, a routed packet whose ingress interface equals its
     egress interface (a hairpin) is dropped on the ip4-output / ip6-output

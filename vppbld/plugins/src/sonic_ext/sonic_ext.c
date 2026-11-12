@@ -19,7 +19,6 @@
 #include <vnet/feature/feature.h>
 #include <vnet/interface.h>
 #include <vnet/ip/icmp6.h>
-#include <vnet/ip/ip6_link.h>
 #include <vnet/l2/l2_input.h>
 #include <vnet/l2/l2_bvi.h>
 #include <vnet/l2/l2_in_out_feat_arc.h>
@@ -321,54 +320,6 @@ sonic_ext_iface_loopback_sw_if_add_del (vnet_main_t *vnm, u32 sw_if_index,
 }
 
 VNET_SW_INTERFACE_ADD_DEL_FUNCTION (sonic_ext_iface_loopback_sw_if_add_del);
-
-int
-sonic_ext_rif_ip6_enable_disable (u32 sw_if_index, int enable)
-{
-  sonic_ext_main_t *sem = &sonic_ext_main;
-  int owned = clib_bitmap_get (sem->rif_ip6_owned, sw_if_index);
-  int rv;
-
-  if (owned == !!enable)
-    return 0;
-
-  if (enable)
-    {
-      rv = ip6_link_enable (sw_if_index, 0);
-      if (rv != 0 && rv != VNET_API_ERROR_VALUE_EXIST)
-	return rv;
-      sem->rif_ip6_owned =
-	clib_bitmap_set (sem->rif_ip6_owned, sw_if_index, 1);
-    }
-  else
-    {
-      rv = ip6_link_disable (sw_if_index);
-      if (rv != 0 && rv != VNET_API_ERROR_IP6_NOT_ENABLED)
-	return rv;
-      sem->rif_ip6_owned =
-	clib_bitmap_set (sem->rif_ip6_owned, sw_if_index, 0);
-    }
-
-  return 0;
-}
-
-static clib_error_t *
-sonic_ext_rif_ip6_sw_if_add_del (vnet_main_t *vnm, u32 sw_if_index,
-				 u32 is_add)
-{
-  sonic_ext_main_t *sem = &sonic_ext_main;
-  (void) vnm;
-
-  /* Interface deletion drops all of its link locks.  Forget the provider bit
-   * so a recycled sw_if_index cannot inherit ownership. */
-  if (!is_add && clib_bitmap_get (sem->rif_ip6_owned, sw_if_index))
-    sem->rif_ip6_owned =
-      clib_bitmap_set (sem->rif_ip6_owned, sw_if_index, 0);
-
-  return 0;
-}
-
-VNET_SW_INTERFACE_ADD_DEL_FUNCTION (sonic_ext_rif_ip6_sw_if_add_del);
 
 
 /*
