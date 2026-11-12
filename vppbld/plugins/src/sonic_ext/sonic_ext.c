@@ -921,8 +921,8 @@ sonic_ext_apply_config (vlib_main_t *vm)
 
   if (sem->punt_via_member)
     sonic_ext_set_punt_via_member (1);
-  else if (sem->drop_member_stats)
-    /* Last remaining cookie consumer, so capture still has to run. */
+  else if (sem->drop_member_stats || sem->drop_reason_stats)
+    /* Remaining cookie consumers, so capture still has to run. */
     sonic_ext_capture_enable_all ();
 
   if (sem->host_xc)

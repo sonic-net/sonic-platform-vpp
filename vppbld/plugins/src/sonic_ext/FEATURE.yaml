@@ -9,6 +9,7 @@ features:
   - copp-udld: CoPP identifier for UDLD via real LLC/SNAP dispatch
   - l2-trap-learn: learn the source MAC of a bridged frame trapped to the CPU by an l2-input-classify session, as an ASIC does
   - iface-loopback: drop and count routed hairpin packets (RIF loopback packet action) whose egress interface equals their ingress interface
+  - drop-reason-stats: count drops per SAI drop reason and wire ingress port in /sonic-ext/drop-reason/<REASON>, backing SAI configurable (debug) drop counters
 description: "VPP extensions for SONiC features"
 state: experimental
 properties: [API, CLI]

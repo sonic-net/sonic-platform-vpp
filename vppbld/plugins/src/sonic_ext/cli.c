@@ -374,7 +374,7 @@ show_sonic_ext_command_fn (vlib_main_t *vm, unformat_input_t *input,
     vlib_cli_output (vm, "  %-17s : %s", name, sem->field ? "on" : "off");
   foreach_sonic_ext_feature
 #undef _
-  /* Derived from the two cookie consumers above, so report the latch. */
+  /* Derived from the cookie consumers above, so report the latch. */
   vlib_cli_output (vm, "  capture (derived) : %s",
 		   sem->capture_enabled ? "on" : "off");
   /* Stored for saivpp, which wires these; arc membership does not reflect them. */
