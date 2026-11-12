@@ -45,16 +45,16 @@ autoreply define sonic_ext_copp_neighbor_miss_bind
 
 /** \brief Bind or unbind the DHCP or DHCPv6 trap-group policer.
 
-    Sairedis owns DHCPv4 classifier-based delivery. The plugin applies the
-    DHCPv6 TRAP/COPY action after VLAN admission because DHCPv6 member
-    classifiers are not installed. Punted packets from routed interfaces and
-    VLAN members converge on copp-ifout, where this binding is policed.
+    Sairedis owns the existing classifier-based TRAP/COPY action and the
+    DHCPv6 multicast receive routes used by VLAN COPY and routed ingress. Punted packets from
+    both routed interfaces and VLAN members converge on copp-ifout, where the
+    plugin recognizes the fixed DHCP UDP predicates and enforces this binding.
 
     @param client_index - opaque cookie to identify the sender
     @param context - sender context, to match reply w/ request
     @param policer_name - name of an existing VPP policer object
     @param is_ipv6 - 0 for DHCPv4, 1 for DHCPv6
-    @param is_copy - DHCPv6 COPY preserves L2 forwarding; TRAP consumes it
+    @param is_copy - retained for API compatibility; sairedis owns the action
     @param is_bind - 1 to add/replace the family binding, 0 to remove it
 */
 autoreply define sonic_ext_copp_dhcp_bind
