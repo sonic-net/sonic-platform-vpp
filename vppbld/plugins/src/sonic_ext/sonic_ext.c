@@ -467,39 +467,6 @@ sonic_ext_capture_enable_all (void)
   sem->capture_enabled = 1;
 }
 
-/* A DHCPv6 COPY flood can later reach either a member or aggregate host tap.
- * Attach the duplicate suppressor to every existing pair; the pair callback
- * handles interfaces created after the first bind. */
-static walk_rc_t
-sonic_ext_dhcp6_suppress_walk_enable_cb (index_t lipi, void *ctx)
-{
-  const lcp_itf_pair_t *lip = lcp_itf_pair_get (lipi);
-  if (lip)
-    sonic_ext_dhcp6_copy_suppress_enable_disable (
-      lip->lip_host_sw_if_index, 1);
-  return WALK_CONTINUE;
-}
-
-void
-sonic_ext_copp_dhcp6_enable_all (void)
-{
-  sonic_ext_main_t *sem = &sonic_ext_main;
-  vnet_main_t *vnm = vnet_get_main ();
-  vnet_sw_interface_t *sw_if;
-
-  sonic_ext_capture_enable_all ();
-  if (sem->dhcp6_l2_enabled)
-    return;
-
-  sem->dhcp6_l2_enabled = 1;
-  lcp_itf_pair_walk (sonic_ext_dhcp6_suppress_walk_enable_cb, NULL);
-  pool_foreach (sw_if, vnm->interface_main.sw_interfaces)
-    {
-      if (sw_if->sw_if_index != 0)
-	sonic_ext_dhcp6_enable_disable (sw_if->sw_if_index, 1);
-    }
-}
-
 void
 sonic_ext_set_punt_via_member (u8 is_enable)
 {
@@ -639,8 +606,9 @@ sonic_ext_set_nd_punt (u8 is_enable)
  *   - sonic-ext-aggr-tap-redirect on the host  -- only if phy is an
  *     aggregate (BVI today, bond tomorrow) and punt-via-member is on.
  *
- * DHCPv4 remains classifier-owned. DHCPv6 is intercepted on l2-input-ip6
- * after VLAN admission because sairedis no longer installs its classifiers.
+ * DHCP client traffic is trapped or copied by the classifier sessions
+ * installed by sairedis; the resulting host-bound packet is policed by
+ * sonic-ext-copp-ifout on the selected LCP TAP.
  *
  * This is the only place we know both (a) the host tap sw_if_index
  * and (b) which phy it shadows.
@@ -654,12 +622,6 @@ sonic_ext_lcp_pair_add_cb (lcp_itf_pair_t *lip)
   if (sem->capture_enabled
       && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_capture_enable_disable (lip->lip_phy_sw_if_index, 1);
-  if (sem->dhcp6_l2_enabled
-      && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
-    sonic_ext_dhcp6_enable_disable (lip->lip_phy_sw_if_index, 1);
-  if (sem->dhcp6_l2_enabled)
-    sonic_ext_dhcp6_copy_suppress_enable_disable (
-      lip->lip_host_sw_if_index, 1);
   if (sem->host_xc_enabled)
     sonic_ext_host_xc_enable_disable (lip->lip_host_sw_if_index, 1);
   if (sem->aggr_tap_redirect_enabled
@@ -678,12 +640,6 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
   if (sem->capture_enabled
       && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_capture_enable_disable (lip->lip_phy_sw_if_index, 0);
-  if (sem->dhcp6_l2_enabled
-      && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
-    sonic_ext_dhcp6_enable_disable (lip->lip_phy_sw_if_index, 0);
-  if (sem->dhcp6_l2_enabled)
-    sonic_ext_dhcp6_copy_suppress_enable_disable (
-      lip->lip_host_sw_if_index, 0);
   if (sem->host_xc_enabled)
     sonic_ext_host_xc_enable_disable (lip->lip_host_sw_if_index, 0);
   if (sem->aggr_tap_redirect_enabled
