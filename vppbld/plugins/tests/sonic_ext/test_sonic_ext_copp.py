@@ -472,7 +472,7 @@ class SonicExtCoppDataplaneBase(VppTestCase):
             l4 = IPv6ExtHdrHopByHop(options=[]) / l4
         return (
             Ether(src=self.phy.remote_mac, dst="33:33:00:01:00:02")
-            / IPv6(src="::1", dst="ff02::1:2", hlim=64)
+            / IPv6(src=self.phy.remote_ip6, dst="ff02::1:2", hlim=64)
             / l4
             / Raw(b"\xa5" * 400)
         ) * (n or self.N_PKTS)
