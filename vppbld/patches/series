@@ -86,6 +86,8 @@
 #     "sonic-clear fdb all"). Includes a test in test_l2_fib.py.
 #     Upstream: https://gerrit.fd.io/r/c/vpp/+/47191
 0024-l2-report-flushed-MAC-refreshed-by-traffic.patch
+# 25. acl: enforce OUTER_VLAN_ID including PVID and post-VTR QinQ metadata.
+0025-acl-match-outer-vlan-id.patch
 # 26. nat: with nat44 forwarding enabled and no address pool configured, pass
 #     a new in2out-output flow that matches no static mapping untranslated
 #     instead of dropping it as "out of ports". With static NAT only
