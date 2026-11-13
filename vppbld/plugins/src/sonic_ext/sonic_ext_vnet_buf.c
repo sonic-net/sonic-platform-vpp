@@ -43,7 +43,7 @@ sonic_ext_vnet_buf_main_t sonic_ext_vnet_buf_main;
  * over each buffer's flags, and on the DPDK path this callback never runs.
  * Indices are all we need, and all we use.
  *
- * Clearing the whole slot rather than just `valid` costs nothing -- both are
+ * Clearing the whole slot rather than just `flags` costs nothing -- both are
  * in the same cache line -- and leaves the table readable in a debugger.
  */
 static u32
