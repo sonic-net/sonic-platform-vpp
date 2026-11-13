@@ -144,8 +144,8 @@ VLIB_NODE_FN (sonic_ext_aggr_tap_redirect_node)
 	  goto trace0;
 	}
 
-      seb = sonic_ext_buffer (b[0]);
-      if (PREDICT_FALSE (seb->magic != SONIC_EXT_BUFFER_MAGIC))
+      seb = sonic_ext_buffer_captured (b[0]);
+      if (PREDICT_FALSE (!seb))
 	{
 	  n_no_cookie++;
 	  goto trace0;
@@ -158,7 +158,7 @@ VLIB_NODE_FN (sonic_ext_aggr_tap_redirect_node)
 	{
 	  /* This path continues to output, so consume the cookie even when
 	   * no useful redirect target exists. */
-	  seb->magic = 0;
+	  sonic_ext_buffer_consume (b[0]);
 	  n_no_lcp++;
 	  goto trace0;
 	}
