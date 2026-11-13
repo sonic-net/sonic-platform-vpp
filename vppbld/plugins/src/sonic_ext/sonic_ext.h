@@ -27,6 +27,60 @@
 
 #define SONIC_EXT_PLUGIN_BUILD_VER "1.0"
 
+/* Locate a transport header from an IPv6 base header without depending on
+ * b->current_data. Punt/reinject paths can restore the wire L2 header while
+ * retaining a later current_data position, which makes ip6_locate_header()
+ * reject an otherwise valid chain. The explicit byte span is authoritative. */
+static_always_inline int
+sonic_ext_ip6_locate_transport (const ip6_header_t *ip6, u32 available,
+				u8 wanted, u32 *offset)
+{
+  u8 next;
+  u32 off;
+
+  if (available < sizeof (*ip6))
+    return 0;
+
+  next = ip6->protocol;
+  off = sizeof (*ip6);
+  for (u32 depth = 0; depth < IP6_EXT_HDR_MAX; depth++)
+    {
+      const u8 *hdr;
+      u32 len;
+
+      if (next == wanted)
+	{
+	  *offset = off;
+	  return 1;
+	}
+
+      if (off + sizeof (ip6_ext_header_t) > available)
+	return 0;
+      hdr = (const u8 *) ip6 + off;
+
+      if (ip6_ext_hdr (next))
+	len = (((const ip6_ext_header_t *) hdr)->n_data_u64s + 1) << 3;
+      else if (next == IP_PROTOCOL_IPV6_FRAGMENTATION)
+	{
+	  const ip6_frag_hdr_t *frag = (const ip6_frag_hdr_t *) hdr;
+	  if (off + sizeof (*frag) > available || ip6_frag_hdr_offset (frag) != 0)
+	    return 0;
+	  len = sizeof (*frag);
+	}
+      else if (next == IP_PROTOCOL_IPSEC_AH)
+	len = (((const ip6_ext_header_t *) hdr)->n_data_u64s + 2) << 2;
+      else
+	return 0;
+
+      if (len < sizeof (ip6_ext_header_t) || off + len > available)
+	return 0;
+      next = hdr[0];
+      off += len;
+    }
+
+  return 0;
+}
+
 /*
  * Per-buffer metadata stash, overlaid on vnet_buffer2(b)->unused[].
  *
@@ -256,7 +310,7 @@ typedef enum
 
 /*
  * sonic-ext-copp-ifout: interface-output CoPP policer for
- * ARP/LACP/LLDP/UDLD/TTL_ERROR.
+ * ARP/LACP/LLDP/UDLD/TTL_ERROR/NEIGHBOR_MISS.
  */
 #define SONIC_EXT_COPP_IFOUT_MAX_ENTRIES 16
 #define SONIC_EXT_COPP_IFOUT_NAME_LEN 64
@@ -279,6 +333,9 @@ typedef struct
   u32 policer_index;
   u8 in_use;
   u8 match_ip4_ttl_expiring; /* TTL_ERROR trap */
+  u8 match_neighbor_miss; /* per-buffer semantic reason, not an ethertype */
+  u8 match_dhcp4; /* IPv4 UDP ports 67/68 */
+  u8 match_dhcp6; /* IPv6 UDP ports 546/547 */
   u8 rate_is_pps;
 } sonic_ext_copp_ifout_entry_t;
 
@@ -385,6 +442,7 @@ typedef struct
   u64 ip2me_hits;
 
   /* ---- packet trimming ---- */
+  u16 copp_msg_id_base;   /* sonic_ext_copp binary API base id */
   u16 trim_msg_id_base;   /* binary API base id (setup_message_id_table) */
   u8 trim_configured;     /* any global trim policy pushed yet */
 
@@ -419,6 +477,7 @@ typedef struct
   /* sonic-ext-copp-ifout: ethertype -> policer binding table. */
   sonic_ext_copp_ifout_entry_t copp_ifout_entries[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
   u32 copp_ifout_n_entries;
+  u32 copp_neighbor_miss_entry_index;
   u64 copp_ifout_conform_packets[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
   u64 copp_ifout_exceed_packets[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
   u64 copp_ifout_violate_packets[SONIC_EXT_COPP_IFOUT_MAX_ENTRIES];
@@ -485,6 +544,7 @@ void sonic_ext_ip2me_enable_disable (u32 sw_if_index, int enable);
 
 /* Toggle accessors used by CLI and node fast paths. */
 void sonic_ext_set_punt_via_member (u8 is_enable);
+void sonic_ext_neighbor_miss_enable_redirect (void);
 void sonic_ext_set_host_xc (u8 is_enable);
 void sonic_ext_set_nd_punt (u8 is_enable);
 
@@ -542,6 +602,10 @@ int sonic_ext_trim_bucket_admit (vlib_main_t *vm, sonic_ext_trim_queue_t *q,
 /* Register the trim binary API message table.  Called from
  * sonic_ext_init(); sets sonic_ext_main.trim_msg_id_base. */
 clib_error_t *sonic_ext_trim_api_hookup (vlib_main_t *vm);
+
+/* Register the compatibility-isolated CoPP binary API message table. Called
+ * from sonic_ext_init(); sets sonic_ext_main.copp_msg_id_base. */
+clib_error_t *sonic_ext_copp_api_hookup (vlib_main_t *vm);
 
 /* Policy is programmed on physical ports, while VLAN egress keeps the
  * sub-interface in VLIB_TX. Do not change VLIB_TX: the rewrite/TX path needs it. */
@@ -705,6 +769,14 @@ int sonic_ext_copp_ifout_find_entry (sonic_ext_main_t *sem, u16 ethertype);
  */
 int sonic_ext_copp_ifout_bind (u16 ethertype, const char *policer_name,
 			       int is_bind, int match_ip4_ttl_expiring);
+
+/* Bind the semantic NEIGHBOR_MISS reason to a copp-ifout policer row. */
+int sonic_ext_copp_neighbor_miss_bind (const char *policer_name, int is_bind);
+int sonic_ext_copp_neighbor_miss_is_bound (sonic_ext_main_t *sem);
+/* Bind one family of the semantic DHCP trap to copp-ifout. */
+int sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6,
+			      int is_copy, int is_bind);
+int sonic_ext_copp_dhcp_is_bound (sonic_ext_main_t *sem, int is_ipv6);
 int sonic_ext_copp_ip2me_addr_add_del (u32 addr, int is_add);
 int sonic_ext_copp_ip2me_bind (const char *policer_name, int is_bind);
 int sonic_ext_copp_ip2me_bind_condition (

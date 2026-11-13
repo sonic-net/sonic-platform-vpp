@@ -13,6 +13,7 @@
  * limitations under the License.
  */
 #include <sonic_ext/sonic_ext.h>
+#include <sonic_ext/sonic_ext_vnet_buf.h>
 
 #include <vlib/vlib.h>
 #include <vnet/vnet.h>
@@ -73,6 +74,7 @@ typedef struct
   u32 host_tap_sw_if_index;
   u16 pushed_vlan_id;
   u8 redirected;
+  u8 neighbor_miss;
 } sonic_ext_glean_redirect_trace_t;
 
 static u8 *
@@ -84,9 +86,10 @@ format_sonic_ext_glean_redirect_trace (u8 *s, va_list *args)
     va_arg (*args, sonic_ext_glean_redirect_trace_t *);
 
   s = format (s,
-	      "SONIC-EXT-GLEAN-REDIRECT: orig-rx %u host-tap %u vlan %u %s",
+	      "SONIC-EXT-GLEAN-REDIRECT: orig-rx %u host-tap %u vlan %u %s%s",
 	      t->orig_rx_sw_if_index, t->host_tap_sw_if_index,
-	      t->pushed_vlan_id, t->redirected ? "REDIRECTED" : "passthru");
+	      t->pushed_vlan_id, t->redirected ? "REDIRECTED" : "passthru",
+	      t->neighbor_miss ? " NEIGHBOR_MISS" : "");
   return s;
 }
 
@@ -149,24 +152,12 @@ static throttle_t sonic_ext_glean_throttle;
  * b->error from their own node before enqueuing to the drop arc, and
  * vlib_error_get_node() maps that back to the node index.
  *
- * ip6-discover-neighbor is DELIBERATELY EXCLUDED.  Unlike its v4
- * counterpart it rewrites the packet in place before dropping it:
- *
- *   if (!is_glean) {
- *       ip0->dst_address.as_u64[0] = adj0->sub_type.nbr.next_hop.ip6.as_u64[0];
- *       ip0->dst_address.as_u64[1] = adj0->sub_type.nbr.next_hop.ip6.as_u64[1];
- *   }
- *
- * (ip6_neighbor.c, ip6_discover_neighbor_inline).  ip4_arp_inline only
- * *reads* ip0->dst_address.  Redirecting a v6 incomplete-adjacency drop
- * would therefore hand the kernel a packet whose destination has been
- * replaced by the next hop, with a stale L4 checksum -- silently
- * mis-delivered transit traffic, and if the next hop is local to the
- * DUT the kernel would consume it.  The original destination is
- * unrecoverable, so v6 is glean-only.  v6 glean does not touch the
- * packet and is safe.
+ * The companion VPP patch makes ip6-discover-neighbor use its adjacency's
+ * next-hop address for ND without rewriting the packet destination. It is
+ * therefore safe to redirect both IPv6 glean and incomplete-adjacency drops
+ * here while preserving the original packet byte-for-byte.
  */
-static u32 sonic_ext_glean_src_nodes[3];
+static u32 sonic_ext_glean_src_nodes[4];
 
 static_always_inline int
 sonic_ext_glean_from_nbr_node (vlib_main_t *vm, vlib_buffer_t *b)
@@ -215,7 +206,7 @@ sonic_ext_glean_from_nbr_node (vlib_main_t *vm, vlib_buffer_t *b)
  * packet reaches the kernel Vlan<id> netdev which ARPs and bridges out.
  */
 static_always_inline int
-sonic_ext_glean_should_redirect (u32 adj_index)
+sonic_ext_glean_should_redirect (u32 adj_index, u32 *egress_sw_if_index)
 {
   vnet_main_t *vnm = vnet_get_main ();
   ip_adjacency_t *adj;
@@ -235,6 +226,8 @@ sonic_ext_glean_should_redirect (u32 adj_index)
   if (!swo)
     return 0;
 
+  *egress_sw_if_index = egress_sw;
+
   return 1;
 }
 
@@ -246,7 +239,8 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
   u32 n_left_from, *from;
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b;
   u16 nexts[VLIB_FRAME_SIZE], *next;
-  u32 n_redirected = 0, n_not_glean = 0, n_no_cookie = 0, n_no_lcp = 0;
+  u32 n_redirected = 0, n_not_glean = 0;
+  u32 n_no_cookie = 0, n_no_lcp = 0;
   u32 n_throttled = 0, n_disabled = 0, n_not_nbr_node = 0;
   u64 seed;
 
@@ -266,16 +260,22 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
       u32 adj_index0 = vnet_buffer (b[0])->ip.adj_index[VLIB_TX];
       u32 orig_rx = ~0;
       u32 host_tap = ~0;
+      u32 egress_sw = ~0;
       u16 pushed_tpid = 0;
       u16 pushed_vlan_id = 0;
       int did_redirect = 0;
+      int is_neighbor_miss = 0;
       u64 key;
 
       /* Default: continue down the drop arc (real drop). */
       vnet_feature_next (&next0, b[0]);
       next[0] = (u16) next0;
 
-      if (PREDICT_FALSE (!sem->punt_via_member))
+      /* An active SAI NEIGHBOR_MISS trap owns this redirect even when the
+       * broader punt-via-member feature is disabled. The bind path ensures
+       * capture and this drop-arc node are attached before publishing it. */
+      if (PREDICT_FALSE (!sem->punt_via_member &&
+			 !sonic_ext_copp_neighbor_miss_is_bound (sem)))
 	{
 	  n_disabled++;
 	  goto trace0;
@@ -296,7 +296,7 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	  goto trace0;
 	}
 
-      if (!sonic_ext_glean_should_redirect (adj_index0))
+      if (!sonic_ext_glean_should_redirect (adj_index0, &egress_sw))
 	{
 	  n_not_glean++;
 	  goto trace0;
@@ -310,11 +310,18 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	}
       orig_rx = seb->orig_rx_sw_if_index;
 
-      /* Rate-limit per resolving adjacency: one punt per window is
-       * enough to (re)arm the kernel's own ARP; the rest keep
-       * dropping until the neighbour is programmed via SAI. */
+      /* A configured SAI NEIGHBOR_MISS trap applies to every unresolved
+       * connected adjacency, including routed ports, bonds, subinterfaces,
+       * and BVIs. Let its configured policer own admission; the legacy fixed
+       * glean throttle would otherwise drop packets before CoPP sees them. */
+      is_neighbor_miss = sem->copp &&
+	sonic_ext_copp_neighbor_miss_is_bound (sem);
+
+      /* Without a SAI binding, retain the legacy one-punt-per-window guard
+       * that is sufficient to re-arm the kernel's own ARP. */
       key = ((u64) adj_index0 << 32) | orig_rx;
-      if (throttle_check (&sonic_ext_glean_throttle, thread_index, key, seed))
+      if (!is_neighbor_miss &&
+	  throttle_check (&sonic_ext_glean_throttle, thread_index, key, seed))
 	{
 	  n_throttled++;
 	  goto trace0;
@@ -325,6 +332,15 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	{
 	  n_no_lcp++;
 	  goto trace0;
+	}
+
+      /* Preserve the semantic reason across redirect to the ingress TAP so
+       * the common copp-ifout node selects the NEIGHBOR_MISS policer. */
+      if (PREDICT_FALSE (is_neighbor_miss))
+	{
+	  sonic_ext_vnet_buf_flags_set (
+	    vm, b[0], SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS,
+	    SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS);
 	}
 
       next[0] = SONIC_EXT_GLEAN_REDIRECT_NEXT_INTERFACE_OUTPUT;
@@ -341,6 +357,7 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	  t->host_tap_sw_if_index = host_tap;
 	  t->pushed_vlan_id = pushed_vlan_id;
 	  t->redirected = did_redirect;
+	  t->neighbor_miss = is_neighbor_miss;
 	}
 
       b += 1;
@@ -399,11 +416,9 @@ static clib_error_t *
 sonic_ext_glean_redirect_main_loop_enter (vlib_main_t *vm)
 {
   vlib_thread_main_t *tm = &vlib_thread_main;
-  /* v6 is glean-only on purpose -- ip6-discover-neighbor mangles the
-   * packet's destination address before dropping it.  See the comment
-   * on sonic_ext_glean_src_nodes. */
   static const char *const nbr_node_names[] = { "ip4-arp", "ip4-glean",
-						"ip6-glean" };
+						"ip6-glean",
+						"ip6-discover-neighbor" };
   int i;
 
   STATIC_ASSERT (ARRAY_LEN (nbr_node_names) ==

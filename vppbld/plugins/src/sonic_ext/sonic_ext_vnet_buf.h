@@ -105,6 +105,7 @@
 typedef enum
 {
   SONIC_EXT_VNET_BUF_PBH_LAG_HASH = 1 << 0, /* pbh_lag_hash is written */
+  SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS = 1 << 1,
 } sonic_ext_vnet_buf_flag_t;
 
 typedef struct
