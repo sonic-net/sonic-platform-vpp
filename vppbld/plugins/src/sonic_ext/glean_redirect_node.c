@@ -338,8 +338,9 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
        * the common copp-ifout node selects the NEIGHBOR_MISS policer. */
       if (PREDICT_FALSE (is_neighbor_miss))
 	{
-	  sonic_ext_vnet_buf_claim (
-	    vm, b[0], SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS);
+	  sonic_ext_vnet_buf_flags_set (
+	    vm, b[0], SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS,
+	    SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS);
 	}
 
       next[0] = SONIC_EXT_GLEAN_REDIRECT_NEXT_INTERFACE_OUTPUT;

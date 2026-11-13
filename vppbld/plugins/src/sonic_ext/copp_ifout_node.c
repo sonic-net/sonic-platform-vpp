@@ -233,7 +233,6 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
   u16 ethertype;
   u32 feat_next;
   sonic_ext_copp_ifout_entry_t *entry = 0;
-  sonic_ext_vnet_buf_t *sb;
   int idx = -1;
 
   vnet_feature_next (&feat_next, b);
@@ -250,12 +249,11 @@ sonic_ext_copp_ifout_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
    * most once, then use the existing bind table, metering, actions and
    * counters unchanged.
    */
-  sb = sonic_ext_vnet_buf_find (
-    vm, b, SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS);
-  if (PREDICT_FALSE (sb != 0))
+  if (PREDICT_FALSE (sonic_ext_vnet_buf_flags_get (
+	vm, b, SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS)))
     {
-      sonic_ext_vnet_buf_release (
-	sb, SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS);
+      sonic_ext_vnet_buf_flags_set (
+	vm, b, SONIC_EXT_VNET_BUF_COPP_NEIGHBOR_MISS, 0);
 
       /* The reason is authoritative.  If an unbind races an in-flight
 	 * marked packet, pass it unpoliced rather than falling back to an
