@@ -302,8 +302,8 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	  goto trace0;
 	}
 
-      seb = sonic_ext_buffer (b[0]);
-      if (PREDICT_FALSE (seb->magic != SONIC_EXT_BUFFER_MAGIC))
+      seb = sonic_ext_buffer_captured (b[0]);
+      if (PREDICT_FALSE (!seb))
 	{
 	  n_no_cookie++;
 	  goto trace0;

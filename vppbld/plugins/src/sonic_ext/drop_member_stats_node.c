@@ -93,13 +93,13 @@ VLIB_NODE_FN (sonic_ext_drop_member_stats_node)
 
   while (n_left_from > 0)
     {
-      sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b[0]);
+      sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer_captured (b[0]);
       u32 rx = vnet_buffer (b[0])->sw_if_index[VLIB_RX];
-      u32 orig = seb->orig_rx_sw_if_index;
+      u32 orig = seb ? seb->orig_rx_sw_if_index : ~0;
       u8 counted = 0;
 
       /* Count the drop on the original RX if it was rewritten to a bond/BVI. */
-      if (seb->magic == SONIC_EXT_BUFFER_MAGIC && orig != rx &&
+      if (seb && orig != rx &&
 	  (sonic_ext_phy_is_bond (rx) || sonic_ext_phy_is_bvi (rx)))
 	{
 	  vlib_increment_simple_counter (dcm, thread_index, orig, 1);

@@ -135,12 +135,13 @@ sonic_ext_redirect_to_ingress_tap (vlib_buffer_t *b, u32 orig_rx,
 				   u16 *pushed_tpid, u16 *pushed_vlan_id)
 {
   vnet_main_t *vnm = vnet_get_main ();
-  sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b);
+  /* copp-ttl-punt calls this without a capture cookie too */
+  sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer_captured (b);
   vnet_sw_interface_t *swo;
   const lcp_itf_pair_t *lip;
   index_t lipi;
   u32 phy_sw;
-  u32 saved_vlan_tag = seb->orig_vlan_tag;
+  u32 saved_vlan_tag = seb ? seb->orig_vlan_tag : 0;
   i32 adv;
 
   *host_tap = ~0;
@@ -165,7 +166,7 @@ sonic_ext_redirect_to_ingress_tap (vlib_buffer_t *b, u32 orig_rx,
   if (*host_tap == excluded_tap)
     return 0;
 
-  seb->magic = 0;
+  sonic_ext_buffer_consume (b);
 
   /* Restore the original wire L2 position.  ethernet-input may have
    * advanced past the Ethernet header before either redirect node runs. */
