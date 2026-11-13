@@ -321,6 +321,98 @@ sonic_ext_iface_loopback_sw_if_add_del (vnet_main_t *vnm, u32 sw_if_index,
 
 VNET_SW_INTERFACE_ADD_DEL_FUNCTION (sonic_ext_iface_loopback_sw_if_add_del);
 
+/*
+ * Tunnel encap TTL (SAI pipe TTL model). The SAIVPP layer calls this for an
+ * IPIP tunnel whose SAI tunnel has SAI_TUNNEL_ATTR_ENCAP_TTL_MODE = PIPE, with
+ * SAI_TUNNEL_ATTR_ENCAP_TTL_VAL. The TTL is stored in
+ * tunnel_encap_ttl_by_sw_if_index and the sonic-ext-ip4/ip6-tunnel-encap-ttl
+ * output-arc nodes are enabled while it is non-zero, so a tunnel without one
+ * pays no per-packet cost. TTL 0 removes it. Gated by the tunnel_encap_ttl
+ * feature toggle, consistent with the other SAIVPP-owned sonic-ext features.
+ */
+int
+sonic_ext_tunnel_encap_ttl_set (u32 sw_if_index, u8 ttl)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  int enable = (ttl != 0);
+  u8 prev;
+  int rv;
+
+  if (!sem->tunnel_encap_ttl)
+    {
+      if (enable)
+	clib_warning ("sonic-ext: tunnel-encap-ttl off, ignoring TTL %u on "
+		      "sw_if_index %u",
+		      ttl, sw_if_index);
+      return 0;
+    }
+
+  if (!enable && sw_if_index >= vec_len (sem->tunnel_encap_ttl_by_sw_if_index))
+    return 0;
+
+  /* The binary API calls this under the worker barrier, so the nodes on
+   * worker threads never read the vector while it moves. */
+  vec_validate_init_empty (sem->tunnel_encap_ttl_by_sw_if_index, sw_if_index,
+			   0);
+  prev = sem->tunnel_encap_ttl_by_sw_if_index[sw_if_index];
+
+  /* VPP feature enable/disable is ref-counted: toggle the arcs only when the
+   * tunnel gets or loses its TTL, and otherwise just change the value. */
+  if ((prev != 0) == enable)
+    {
+      sem->tunnel_encap_ttl_by_sw_if_index[sw_if_index] = ttl;
+      return 0;
+    }
+
+  /* Set the TTL before enabling so the nodes stamp it the moment the arcs
+   * are live; on removal they pass packets through until disabled. */
+  sem->tunnel_encap_ttl_by_sw_if_index[sw_if_index] = ttl;
+
+  rv = vnet_feature_enable_disable ("ip4-output",
+				    "sonic-ext-ip4-tunnel-encap-ttl",
+				    sw_if_index, enable, 0, 0);
+  if (rv)
+    {
+      sem->tunnel_encap_ttl_by_sw_if_index[sw_if_index] = prev;
+      return rv;
+    }
+
+  rv = vnet_feature_enable_disable ("ip6-output",
+				    "sonic-ext-ip6-tunnel-encap-ttl",
+				    sw_if_index, enable, 0, 0);
+  if (rv)
+    {
+      /* Roll back the ip4 arc and the stored TTL to avoid a half-enabled
+       * state. */
+      vnet_feature_enable_disable ("ip4-output",
+				   "sonic-ext-ip4-tunnel-encap-ttl",
+				   sw_if_index, !enable, 0, 0);
+      sem->tunnel_encap_ttl_by_sw_if_index[sw_if_index] = prev;
+    }
+
+  return rv;
+}
+
+/*
+ * On interface delete, clear the encap TTL so a recycled sw_if_index cannot
+ * inherit it. VPP tears down the output-arc features with the interface.
+ */
+static clib_error_t *
+sonic_ext_tunnel_encap_ttl_sw_if_add_del (vnet_main_t *vnm, u32 sw_if_index,
+					  u32 is_add)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+  (void) vnm;
+
+  if (!is_add &&
+      sw_if_index < vec_len (sem->tunnel_encap_ttl_by_sw_if_index))
+    sem->tunnel_encap_ttl_by_sw_if_index[sw_if_index] = 0;
+
+  return 0;
+}
+
+VNET_SW_INTERFACE_ADD_DEL_FUNCTION (sonic_ext_tunnel_encap_ttl_sw_if_add_del);
+
 
 /*
  * Is `phy_sw_if_index` a BVI (bridge-virtual interface)?  Used by

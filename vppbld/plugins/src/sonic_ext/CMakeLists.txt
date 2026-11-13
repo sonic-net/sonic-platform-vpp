@@ -41,6 +41,7 @@ add_vpp_plugin(sonic_ext
   pbh_node.c
   ip4_loopback_node.c
   ip6_loopback_node.c
+  tunnel_encap_ttl_node.c
   trim_admission_node.c
   trim_api.c
   trim_cli.c

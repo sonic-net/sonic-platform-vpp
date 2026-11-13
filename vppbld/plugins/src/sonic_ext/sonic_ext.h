@@ -238,7 +238,8 @@ typedef enum
   _ (L2_TRAP_LEARN, l2_trap_learn, "l2-trap-learn", 1, SAIVPP)                \
   _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)             \
   _ (PBH, pbh, "pbh", 1, SAIVPP)                                              \
-  _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)
+  _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)             \
+  _ (TUNNEL_ENCAP_TTL, tunnel_encap_ttl, "tunnel-encap-ttl", 1, SAIVPP)
 
 /* Router-interface loopback (hairpin) packet action values, carried in the
  * sonic_ext_iface_loopback_set_action API and stored per sw_if_index. */
@@ -342,6 +343,13 @@ typedef struct
    * main/API thread; read by the ip4/ip6-loopback output-arc nodes on
    * worker threads. Gated by the iface_loopback feature toggle above. */
   u8 *loopback_action_by_sw_if_index;
+
+  /* Per-sw_if_index fixed outer TTL / hop limit of an L3 tunnel's encap
+   * (SAI pipe TTL model), 0 = none: the tunnel keeps its stock outer TTL.
+   * Written only from the main/API thread; read by the ip4/ip6
+   * tunnel-encap-ttl output-arc nodes on worker threads. Gated by the
+   * tunnel_encap_ttl feature toggle above. */
+  u8 *tunnel_encap_ttl_by_sw_if_index;
 
   /* Set once capture/host-xc have been enabled on all existing
    * interfaces, so that toggling on/off is idempotent. */
@@ -448,6 +456,8 @@ extern vlib_node_registration_t sonic_ext_copp_udld_node;
 extern vlib_node_registration_t sonic_ext_copp_ttl_punt_node;
 extern vlib_node_registration_t sonic_ext_ip4_loopback_node;
 extern vlib_node_registration_t sonic_ext_ip6_loopback_node;
+extern vlib_node_registration_t sonic_ext_ip4_tunnel_encap_ttl_node;
+extern vlib_node_registration_t sonic_ext_ip6_tunnel_encap_ttl_node;
 
 /* Enable / disable sonic-ext-capture on a given interface.  No-op if
  * the capture sidecar is not yet initialized. */
@@ -717,5 +727,11 @@ int sonic_ext_copp_ttl_punt_bind (int is_bind);
  * Returns 0 on success, a VNET_API_ERROR_* on failure. Honours the
  * iface_loopback feature toggle. */
 int sonic_ext_iface_loopback_set_action (u32 sw_if_index, u8 action);
+
+/* Set the fixed outer TTL / hop limit of an L3 tunnel's encap (SAI pipe TTL
+ * model) and enable the sonic-ext-ip4/ip6-tunnel-encap-ttl output-arc nodes
+ * on the tunnel while it is non-zero; 0 removes it. Returns 0 on success, a
+ * VNET_API_ERROR_* on failure. Honours the tunnel_encap_ttl feature toggle. */
+int sonic_ext_tunnel_encap_ttl_set (u32 sw_if_index, u8 ttl);
 
 #endif /* __included_sonic_ext_h__ */
