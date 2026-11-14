@@ -14,8 +14,27 @@ This repo contains  scripts, Makefiles, configuration file, Docker files etc to 
 ```
 sudo apt-get install -y make automake autoconf
 sudo apt install -y python3-pip
-sudo pip3 install j2cli
 ```
+
+ * Confirm whether `j2cli` is already installed:
+
+```
+j2 --version
+```
+
+If `j2` is not found, install `j2cli` using one of the following methods:
+
+```
+sudo apt install -y j2cli
+```
+
+or:
+
+```
+pip3 install --user j2cli
+```
+
+If you install `j2cli` with `pip3 --user`, make sure your user's local binary directory (for example, `$HOME/.local/bin`) is in your `PATH`.
 
  * Install [Docker](https://docs.docker.com/engine/install/) and configure your system to allow running the 'docker' command without 'sudo':
     * Add current user to the docker group: `sudo gpasswd -a ${USER} docker`
