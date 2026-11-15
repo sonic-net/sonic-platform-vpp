@@ -271,6 +271,15 @@ typedef struct
   u8 enabled;
 } sonic_ext_mirror_encap_cfg_t;
 
+/* An L2 isolation group (SAI isolation group): frames received on an
+ * interface bound to the group are not bridged out of its members. */
+typedef struct
+{
+  u32 id;	  /* the API's id for it */
+  uword *members; /* bitmap of member sw_if_indexes */
+  u32 n_bound;	  /* ingress interfaces bound to it */
+} sonic_ext_isolation_group_t;
+
 /* Who wires a feature: VPP-owned ones are wired by this plugin, SAIVPP-owned
  * ones are only stored here and answered via sonic_ext_feature_get(). */
 typedef enum
@@ -294,7 +303,8 @@ typedef enum
   _ (PBH, pbh, "pbh", 1, SAIVPP)                                              \
   _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)             \
   _ (DROP_REASON_STATS, drop_reason_stats, "drop-reason-stats", 1, VPP)       \
-  _ (TUNNEL_ENCAP_TTL, tunnel_encap_ttl, "tunnel-encap-ttl", 1, SAIVPP)
+  _ (TUNNEL_ENCAP_TTL, tunnel_encap_ttl, "tunnel-encap-ttl", 1, SAIVPP)       \
+  _ (ISOLATION_GROUP, isolation_group, "isolation-group", 1, SAIVPP)
 
 /* Router-interface loopback (hairpin) packet action values, carried in the
  * sonic_ext_iface_loopback_set_action API and stored per sw_if_index. */
@@ -415,6 +425,13 @@ typedef struct
   u8 host_xc_enabled;
   u8 glean_redirect_enabled;
   u8 aggr_tap_redirect_enabled;
+
+  /* L2 isolation groups (l2_isolation.c). Written only from the main
+   * thread under the worker barrier; read by the l2-isolation nodes. */
+  sonic_ext_isolation_group_t *isolation_groups; /* pool */
+  uword *isolation_group_index_by_id;	 /* API id -> pool index */
+  u32 *isolation_group_by_rx;		 /* by sw_if_index: pool index or ~0 */
+  u32 *isolation_member_count;		 /* by sw_if_index: groups it is in */
 
   /* Continue the L2 feature bitmap after validating a native VLAN tag. */
   u32 l2_vlan_filter_feat_next[32];
@@ -750,6 +767,13 @@ sonic_ext_trim_rewrite_dscp (vlib_buffer_t *b, u8 new_dscp)
  * (disabling on the 1->0 transition).  Driven from the SAI-VPP layer per
  * Everflow egress mirror session. */
 int sonic_ext_egress_mirror_enable_disable (u8 enable);
+
+/* L2 isolation groups, the SAI isolation group model. bind with id ~0
+ * unbinds. */
+int sonic_ext_isolation_group_add_del (u32 id, int is_add);
+int sonic_ext_isolation_group_member_add_del (u32 id, u32 sw_if_index,
+					      int is_add);
+int sonic_ext_isolation_group_bind (u32 sw_if_index, u32 id);
 
 /* Enable / disable the Everflow mirror encap fixup on a mirror GRE tunnel
  * sw_if_index.  enable=1 records {gre_protocol, ttl} and turns on the

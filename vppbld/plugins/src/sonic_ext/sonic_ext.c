@@ -994,6 +994,7 @@ sonic_ext_init (vlib_main_t *vm)
   };
   clib_memset (sem, 0, sizeof (*sem));
   sem->copp_neighbor_miss_entry_index = ~0;
+  sem->isolation_group_index_by_id = hash_create (0, sizeof (uword));
   lcp_itf_pair_register_vft (&sonic_ext_lcp_vft);
 
   /* Defaults only -- no arcs are touched here, so a "sonic-ext { }" stanza
