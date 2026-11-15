@@ -414,6 +414,60 @@ exit:
   REPLY_MACRO (VL_API_SONIC_EXT_PBH_INTERFACE_ATTACH_DETACH_REPLY);
 }
 
+static void
+vl_api_sonic_ext_isolation_group_add_del_t_handler (
+  vl_api_sonic_ext_isolation_group_add_del_t *mp)
+{
+  vl_api_sonic_ext_isolation_group_add_del_reply_t *rmp;
+  int rv = sonic_ext_isolation_group_add_del (ntohl (mp->group_id),
+					       mp->is_add ? 1 : 0);
+
+  REPLY_MACRO (VL_API_SONIC_EXT_ISOLATION_GROUP_ADD_DEL_REPLY);
+}
+
+static void
+vl_api_sonic_ext_isolation_group_member_add_del_t_handler (
+  vl_api_sonic_ext_isolation_group_member_add_del_t *mp)
+{
+  vnet_interface_main_t *im = &vnet_get_main ()->interface_main;
+  vl_api_sonic_ext_isolation_group_member_add_del_reply_t *rmp;
+  u32 sw_if_index = ntohl (mp->sw_if_index);
+  int rv = 0;
+
+  if (pool_is_free_index (im->sw_interfaces, sw_if_index))
+    {
+      rv = VNET_API_ERROR_INVALID_SW_IF_INDEX;
+      goto exit;
+    }
+
+  rv = sonic_ext_isolation_group_member_add_del (
+    ntohl (mp->group_id), sw_if_index, mp->is_add ? 1 : 0);
+
+exit:
+  REPLY_MACRO (VL_API_SONIC_EXT_ISOLATION_GROUP_MEMBER_ADD_DEL_REPLY);
+}
+
+static void
+vl_api_sonic_ext_isolation_group_bind_t_handler (
+  vl_api_sonic_ext_isolation_group_bind_t *mp)
+{
+  vnet_interface_main_t *im = &vnet_get_main ()->interface_main;
+  vl_api_sonic_ext_isolation_group_bind_reply_t *rmp;
+  u32 sw_if_index = ntohl (mp->sw_if_index);
+  int rv = 0;
+
+  if (pool_is_free_index (im->sw_interfaces, sw_if_index))
+    {
+      rv = VNET_API_ERROR_INVALID_SW_IF_INDEX;
+      goto exit;
+    }
+
+  rv = sonic_ext_isolation_group_bind (sw_if_index, ntohl (mp->group_id));
+
+exit:
+  REPLY_MACRO (VL_API_SONIC_EXT_ISOLATION_GROUP_BIND_REPLY);
+}
+
 /* API definitions */
 #include <sonic_ext/sonic_ext.api.c>
 
