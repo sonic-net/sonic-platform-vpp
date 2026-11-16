@@ -775,7 +775,7 @@ int sonic_ext_copp_neighbor_miss_bind (const char *policer_name, int is_bind);
 int sonic_ext_copp_neighbor_miss_is_bound (sonic_ext_main_t *sem);
 /* Bind one family of the semantic DHCP trap to copp-ifout. */
 int sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6,
-			      int is_copy, int is_bind);
+			      int is_bind);
 int sonic_ext_copp_dhcp_is_bound (sonic_ext_main_t *sem, int is_ipv6);
 int sonic_ext_copp_ip2me_addr_add_del (u32 addr, int is_add);
 int sonic_ext_copp_ip2me_bind (const char *policer_name, int is_bind);

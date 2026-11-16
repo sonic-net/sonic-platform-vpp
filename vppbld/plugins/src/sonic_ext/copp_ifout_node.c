@@ -747,27 +747,14 @@ sonic_ext_copp_dhcp_is_bound (sonic_ext_main_t *sem, int is_ipv6)
 }
 
 int
-sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_copy,
-			  int is_bind)
+sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_bind)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
-  vlib_main_t *vm = vlib_get_main ();
   int idx = sonic_ext_copp_dhcp_find_entry (sem, is_ipv6);
   int rv = 0;
 
-  /* Packet action is retained in the compatibility API, but the existing
-   * sairedis classifier/MFIB programming owns TRAP versus COPY. The provider
-   * only selects and polices the resulting host-bound DHCP packet. */
-  (void) is_copy;
-
   if (is_bind && !sem->copp)
     return VNET_API_ERROR_FEATURE_DISABLED;
-
-  /* ip2me and interface-output read the same semantic row on workers. Make
-   * replacement atomic across both nodes so a packet can never skip IP2ME
-   * under one generation and miss (or inherit a fallback) at ifout under
-   * another. */
-  vlib_worker_thread_barrier_sync (vm);
 
   if (!is_bind)
     {
@@ -813,7 +800,6 @@ sonic_ext_copp_dhcp_bind (const char *policer_name, int is_ipv6, int is_copy,
   sem->copp_ifout_violate_packets[idx] = 0;
 
 done:
-  vlib_worker_thread_barrier_release (vm);
   return rv;
 }
 
@@ -845,11 +831,6 @@ sonic_ext_copp_neighbor_miss_bind (const char *policer_name, int is_bind)
 
   if (is_bind)
     sonic_ext_neighbor_miss_enable_redirect ();
-
-  /* The side-band table is global while its readers run on every worker.
-   * Quiesce them around first allocation/final release as well as row
-   * replacement so no in-flight marked buffer can outlive the table. */
-  vlib_worker_thread_barrier_sync (vm);
 
   if (!is_bind)
     {
@@ -911,6 +892,5 @@ sonic_ext_copp_neighbor_miss_bind (const char *policer_name, int is_bind)
   sem->copp_neighbor_miss_entry_index = idx;
 
 done:
-  vlib_worker_thread_barrier_release (vm);
   return rv;
 }

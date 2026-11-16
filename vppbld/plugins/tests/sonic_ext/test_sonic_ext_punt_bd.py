@@ -641,7 +641,6 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
         self.vapi.sonic_ext_copp_dhcp_bind(
             policer_name=pol.name,
             is_ipv6=False,
-            is_copy=False,
             is_bind=True,
         )
         try:
@@ -659,7 +658,6 @@ class TestSonicExtL2Punt(SonicExtL2PuntBase):
             self.vapi.sonic_ext_copp_dhcp_bind(
                 policer_name=pol.name,
                 is_ipv6=False,
-                is_copy=False,
                 is_bind=False,
             )
             pol.remove_vpp_config()

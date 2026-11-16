@@ -271,18 +271,16 @@ class SonicExtCoppDataplaneBase(VppTestCase):
             is_bind=False,
         )
 
-    def bind_dhcp(self, pol, is_ipv6=False, is_copy=False):
+    def bind_dhcp(self, pol, is_ipv6=False):
         self.vapi.sonic_ext_copp_dhcp_bind(
             policer_name=pol.name,
             is_ipv6=is_ipv6,
-            is_copy=is_copy,
             is_bind=True,
         )
         self.addCleanup(
             self.vapi.sonic_ext_copp_dhcp_bind,
             policer_name=pol.name,
             is_ipv6=is_ipv6,
-            is_copy=is_copy,
             is_bind=False,
         )
 
@@ -697,13 +695,12 @@ class TestSonicExtCoppDhcp(SonicExtCoppDataplaneBase):
         self.add_ip2me_addr(self.phy.local_ip4)
         self.bind_ip2me(ip2me)
         self.vapi.sonic_ext_copp_dhcp_bind(
-            policer_name="", is_ipv6=False, is_copy=False, is_bind=True
+            policer_name="", is_ipv6=False, is_bind=True
         )
         self.addCleanup(
             self.vapi.sonic_ext_copp_dhcp_bind,
             policer_name="",
             is_ipv6=False,
-            is_copy=False,
             is_bind=False,
         )
 
@@ -838,20 +835,19 @@ class TestSonicExtCoppDhcp(SonicExtCoppDataplaneBase):
         first = self.policer(conform=DROP, cb=10**6, name="dhcp-first")
         second = self.policer(conform=DROP, cb=10**6, name="dhcp-second")
         self.vapi.sonic_ext_copp_dhcp_bind(
-            policer_name=first.name, is_ipv6=False, is_copy=False, is_bind=True
+            policer_name=first.name, is_ipv6=False, is_bind=True
         )
         self.addCleanup(
             self.vapi.sonic_ext_copp_dhcp_bind,
             policer_name=second.name,
             is_ipv6=False,
-            is_copy=False,
             is_bind=False,
         )
         self.vapi.sonic_ext_copp_dhcp_bind(
-            policer_name=second.name, is_ipv6=False, is_copy=False, is_bind=True
+            policer_name=second.name, is_ipv6=False, is_bind=True
         )
         self.vapi.sonic_ext_copp_dhcp_bind(
-            policer_name=first.name, is_ipv6=False, is_copy=False, is_bind=False
+            policer_name=first.name, is_ipv6=False, is_bind=False
         )
 
         before = self.native(second)

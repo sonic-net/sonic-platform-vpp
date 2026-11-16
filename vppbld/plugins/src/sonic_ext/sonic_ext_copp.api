@@ -54,7 +54,6 @@ autoreply define sonic_ext_copp_neighbor_miss_bind
     @param context - sender context, to match reply w/ request
     @param policer_name - name of an existing VPP policer object
     @param is_ipv6 - 0 for DHCPv4, 1 for DHCPv6
-    @param is_copy - retained for API compatibility; sairedis owns the action
     @param is_bind - 1 to add/replace the family binding, 0 to remove it
 */
 autoreply define sonic_ext_copp_dhcp_bind
@@ -63,7 +62,6 @@ autoreply define sonic_ext_copp_dhcp_bind
   u32 context;
   string policer_name[64];
   bool is_ipv6;
-  bool is_copy;
   bool is_bind;
 };
 

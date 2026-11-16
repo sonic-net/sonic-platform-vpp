@@ -206,7 +206,7 @@ sonic_ext_glean_from_nbr_node (vlib_main_t *vm, vlib_buffer_t *b)
  * packet reaches the kernel Vlan<id> netdev which ARPs and bridges out.
  */
 static_always_inline int
-sonic_ext_glean_should_redirect (u32 adj_index, u32 *egress_sw_if_index)
+sonic_ext_glean_should_redirect (u32 adj_index)
 {
   vnet_main_t *vnm = vnet_get_main ();
   ip_adjacency_t *adj;
@@ -225,8 +225,6 @@ sonic_ext_glean_should_redirect (u32 adj_index, u32 *egress_sw_if_index)
   swo = vnet_get_sw_interface_or_null (vnm, egress_sw);
   if (!swo)
     return 0;
-
-  *egress_sw_if_index = egress_sw;
 
   return 1;
 }
@@ -260,7 +258,6 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
       u32 adj_index0 = vnet_buffer (b[0])->ip.adj_index[VLIB_TX];
       u32 orig_rx = ~0;
       u32 host_tap = ~0;
-      u32 egress_sw = ~0;
       u16 pushed_tpid = 0;
       u16 pushed_vlan_id = 0;
       int did_redirect = 0;
@@ -296,7 +293,7 @@ VLIB_NODE_FN (sonic_ext_glean_redirect_node)
 	  goto trace0;
 	}
 
-      if (!sonic_ext_glean_should_redirect (adj_index0, &egress_sw))
+      if (!sonic_ext_glean_should_redirect (adj_index0))
 	{
 	  n_not_glean++;
 	  goto trace0;
