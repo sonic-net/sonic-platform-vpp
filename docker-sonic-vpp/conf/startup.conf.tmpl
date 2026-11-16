@@ -74,6 +74,10 @@ ip {
 	no-local-src-check
 }
 
+ipip {
+	punt-no-tunnel
+}
+
 ip6 {
 	heap-size 128M
 }
@@ -288,10 +292,10 @@ plugins {
 ## is, so VPP neither answers ND nor learns neighbors from it; off leaves ND to
 ## VPP.
 ##
-## saivpp-wired: ip2me, l2-trap-fixup, l2-vlan-filter.  VPP only stores these
-## and answers sonic_ext_feature_get(); saivpp asks before installing the ACL
-## hook or the classify sessions.  "show interface features" does NOT reflect
-## them the way it does for the VPP-wired features above.
+## saivpp-wired: ip2me, l2-trap-fixup, l2-trap-learn, l2-vlan-filter.  VPP only
+## stores these and answers sonic_ext_feature_get(); saivpp asks before
+## installing the ACL hook or the classify sessions.  "show interface features"
+## does NOT reflect them the way it does for the VPP-wired features above.
 ##
 ## Generated at runtime by vpp_init.sh from $SONIC_EXT_CONFIG, which is given as
 ## comma-separated key=value pairs -- SONIC_EXT_CONFIG=host-xc=off -- and which
@@ -304,7 +308,19 @@ plugins {
     # copp off
     # ip2me off
     # l2-trap-fixup off
+    # l2-trap-learn off
     # l2-vlan-filter off
+# }
+
+## ip_validate plugin feature selection.
+## link-local-drop: drop IPv4 packets whose source or destination is in
+## 169.254.0.0/16.
+##
+## Generated at runtime by vpp_init.sh from $IP_VALIDATE_CONFIG, which is given
+## as comma-separated key=value pairs -- IP_VALIDATE_CONFIG=link-local-drop=off
+## -- and which a platform sets in /etc/sonic/vpp/syncd_vpp_env.
+# ip-validate {
+    # link-local-drop off
 # }
 
 ## Statistics Segment

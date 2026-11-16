@@ -139,8 +139,10 @@ ip4_validate_x1 (vlib_buffer_t *b, u16 *next)
       *next = IP4_VALIDATE_NEXT_DROP;
       return IP4_VALIDATE_ERROR_SRC_UNSPECIFIED;
     }
-  /* Drop packets with source in 169.254.0.0/16 (link-local range) */
-  if (PREDICT_FALSE ((src >> 16) == 0xA9FE))
+  /* Drop packets with source in 169.254.0.0/16 (link-local range).
+   * Suppressed by "ip-validate { link-local-drop off }". */
+  if (PREDICT_FALSE ((src >> 16) == 0xA9FE) &&
+      ip_validate_main.link_local_drop)
     {
       *next = IP4_VALIDATE_NEXT_DROP;
       return IP4_VALIDATE_ERROR_SRC_LINK_LOCAL;
@@ -154,8 +156,10 @@ ip4_validate_x1 (vlib_buffer_t *b, u16 *next)
       *next = IP4_VALIDATE_NEXT_DROP;
       return IP4_VALIDATE_ERROR_DST_LOOPBACK;
     }
-  /* Drop packets with destination in 169.254.0.0/16 (link-local range) */
-  if (PREDICT_FALSE ((dst >> 16) == 0xA9FE))
+  /* Drop packets with destination in 169.254.0.0/16 (link-local range).
+   * Suppressed by "ip-validate { link-local-drop off }". */
+  if (PREDICT_FALSE ((dst >> 16) == 0xA9FE) &&
+      ip_validate_main.link_local_drop)
     {
       *next = IP4_VALIDATE_NEXT_DROP;
       return IP4_VALIDATE_ERROR_DST_LINK_LOCAL;

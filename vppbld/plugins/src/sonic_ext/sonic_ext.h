@@ -45,9 +45,12 @@
  *   2. No memory allocation, no per-thread or atomic ops in the hot
  *      path -- the slot is buffer-local.
  *
- *   3. Self-cleaning -- when the buffer is freed and recycled, opaque2
- *      is reset by vlib_buffer_pool_init, so a stale value cannot be
- *      mis-attributed to an unrelated future packet.
+ *   3. Not self-cleaning -- freeing a buffer resets only its first
+ *      cache line from the pool template, so opaque2, magic included,
+ *      survives into whatever packet the buffer carries next.  Capture
+ *      therefore also sets SONIC_EXT_BUFFER_F_CAPTURED in b->flags,
+ *      which that reset does clear: orig_rx_sw_if_index belongs to
+ *      this packet only if the flag is set.
  *
  *   4. No conflict with stock VPP plugins.  We use only the trailing
  *      `unused[]` array of vnet_buffer_opaque2_t, never the union with
@@ -60,8 +63,9 @@
 
 /* --- Deferred egress mirror (Everflow MIRROR_EGRESS) extension ----------- *
  * mirror_sw_if_index carries the ERSPAN/GRE tunnel the deferred clone is
- * sent to; the ACL dataplane node stamps it into the cookie alongside the
- * magic when a matched rule has ACL_MIRROR_F_DEFERRED set. */
+ * sent to; the ACL dataplane node stamps it into the cookie, flagged by
+ * SONIC_EXT_BUFFER_F_MIRROR_PENDING rather than the magic, when a matched
+ * rule has ACL_MIRROR_F_DEFERRED set. */
 #define SONIC_EXT_INVALID_SW_IF_INDEX ~0U
 #define SONIC_EXT_INVALID_VLAN_TAG ~0U
 /* Buffer flag: a deferred egress-mirror clone is pending on this packet. */
@@ -72,6 +76,9 @@
  * beside the facility it guards.  Noted here so the plugin's claims on the
  * nine shared AVAIL bits stay visible in one place.
  */
+/* Buffer flag: sonic-ext-capture stamped orig_rx_sw_if_index for this
+ * packet (see "Not self-cleaning" above). */
+#define SONIC_EXT_BUFFER_F_CAPTURED VNET_BUFFER_F_AVAIL3
 
 /*
  * orig_vlan_tag: outermost 802.1Q (or 802.1ad) tag observed on the
@@ -102,29 +109,6 @@ typedef struct
   u32 magic;
   u32 orig_rx_sw_if_index;
   u32 orig_vlan_tag;
-  /*
-   * Packet-trim per-buffer state, sharing the same opaque2->unused
-   * overlay as the capture cookie above.
-   *
-   *   orig_queue -- the SONiC egress queue the packet resolved to on
-   *     the admission-failure path.  The admission node writes it
-   *     immediately before diverting the buffer to sonic-ext-trim, and
-   *     the trim node reads it in the same graph dispatch, so it is
-   *     always freshly written before it is read -- it never depends on
-   *     opaque2 surviving (or being cleared on) a buffer recycle.
-   *
-   * NOTE: there is deliberately NO persistent "already trimmed" flag
-   * here.  opaque2 is NOT zeroed on buffer recycle, so a stale flag on
-   * a reused buffer would make a genuinely new packet read as
-   * "already trimmed" and wrongly bypass trimming.  Instead the trim
-   * node re-injects the truncated copy straight to
-   * "interface-output-arc-end" (past the admission feature), so a
-   * trimmed copy never re-enters admission and no one-shot guard is
-   * needed.  See trim_node.c / trim_admission_node.c.
-   */
-  u8 orig_queue;  /* 0 .. SONIC_EXT_TRIM_MAX_QUEUES-1 */
-  u8 trim_pad0;
-  u16 trim_pad1;
   u32 mirror_sw_if_index; /* deferred egress mirror dst; ~0 = none */
 } sonic_ext_buffer_opaque_t;
 
@@ -138,10 +122,33 @@ sonic_ext_buffer (vlib_buffer_t *b)
   return (sonic_ext_buffer_opaque_t *) vnet_buffer2 (b)->unused;
 }
 
+/* The capture cookie (magic, orig_rx_sw_if_index, orig_vlan_tag) if
+ * sonic-ext-capture stamped it for this very packet, else NULL.  Readers of
+ * those fields must come through here rather than test the magic: opaque2
+ * survives buffer recycling, SONIC_EXT_BUFFER_F_CAPTURED does not. */
+static_always_inline sonic_ext_buffer_opaque_t *
+sonic_ext_buffer_captured (vlib_buffer_t *b)
+{
+  sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b);
+
+  if (!(b->flags & SONIC_EXT_BUFFER_F_CAPTURED) ||
+      seb->magic != SONIC_EXT_BUFFER_MAGIC)
+    return 0;
+  return seb;
+}
+
+/* Consume the capture cookie so no later node acts on it again. */
+static_always_inline void
+sonic_ext_buffer_consume (vlib_buffer_t *b)
+{
+  sonic_ext_buffer (b)->magic = 0;
+  b->flags &= ~SONIC_EXT_BUFFER_F_CAPTURED;
+}
+
 /*
  * ------------------------------------------------------------------
  * Packet trimming (SAI DROP_AND_TRIM) -- software egress admission +
- * trim action.  See trim_admission_node.c, trim_node.c, trim_api.c.
+ * trim action.  See trim_admission_node.c and trim_api.c.
  *
  * VPP has no native egress QoS / per-queue admission substrate, so the
  * SONiC scheduler's PIR is a dataplane no-op today.  The trim feature
@@ -228,6 +235,7 @@ typedef enum
   _ (TRIM, trim, "trim", 1, VPP)                                               \
   _ (IP2ME, ip2me, "ip2me", 1, SAIVPP)                                        \
   _ (L2_TRAP_FIXUP, l2_trap_fixup, "l2-trap-fixup", 1, SAIVPP)                \
+  _ (L2_TRAP_LEARN, l2_trap_learn, "l2-trap-learn", 1, SAIVPP)                \
   _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)             \
   _ (PBH, pbh, "pbh", 1, SAIVPP)                                              \
   _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)
@@ -342,6 +350,9 @@ typedef struct
   u8 glean_redirect_enabled;
   u8 aggr_tap_redirect_enabled;
 
+  /* Continue the L2 feature bitmap after validating a native VLAN tag. */
+  u32 l2_vlan_filter_feat_next[32];
+
   /* Deferred egress mirror: set once the sonic-ext-egress-mirror feature
    * has been enabled on all interface-output arcs; gated by a refcount of
    * installed MIRROR_EGRESS actions so the arc cost is only paid while the
@@ -370,6 +381,7 @@ typedef struct
   u64 glean_redirects;
   u64 host_xc_direct;
   u64 l2_trap_fixups;
+  u64 l2_trap_learns;
   u64 ip2me_hits;
 
   /* ---- packet trimming ---- */
@@ -424,6 +436,7 @@ extern vlib_node_registration_t sonic_ext_aggr_tap_redirect_node;
 extern vlib_node_registration_t sonic_ext_glean_redirect_node;
 extern vlib_node_registration_t sonic_ext_host_xc_node;
 extern vlib_node_registration_t sonic_ext_l2_trap_fixup_node;
+extern vlib_node_registration_t sonic_ext_l2_trap_learn_node;
 extern vlib_node_registration_t sonic_ext_l2_vlan_filter_node;
 extern vlib_node_registration_t sonic_ext_ip2me_ip4_node;
 extern vlib_node_registration_t sonic_ext_ip2me_ip6_node;
@@ -497,10 +510,9 @@ int sonic_ext_phy_is_bvi (u32 phy_sw_if_index);
  * port-channel aggregates and to funnel tap-less bonded sub-interface
  * punts to the bond master host tap. */
 int sonic_ext_phy_is_bond (u32 phy_sw_if_index);
-/* ---- packet trimming (trim_admission_node.c / trim_node.c / trim_api.c) ---- */
+/* ---- packet trimming (trim_admission_node.c / trim_api.c) ---- */
 
 extern vlib_node_registration_t sonic_ext_trim_admission_node;
-extern vlib_node_registration_t sonic_ext_trim_node;
 
 /* Enable/disable the sonic-ext-trim-admission feature on an egress
  * interface-output arc.  Driven from the binary API when a port gains or
@@ -549,11 +561,10 @@ sonic_ext_trim_egress_port_sw_if_index (vlib_buffer_t *b)
 
 /*
  * ------------------------------------------------------------------
- * Shared L3 classification / DSCP rewrite inlines used by both the
- * admission node (classify the packet to its egress queue) and the
- * trim action node (rewrite the trimmed copy's DSCP).
+ * L3 classification / DSCP rewrite inlines used by the admission node
+ * and its trim helper.
  *
- * Both nodes run on the interface-output arc, where the buffer's
+ * The node runs on the interface-output arc, where the buffer's
  * current data is positioned at the start of the (rewritten) L2
  * ethernet header for normal transit/routed traffic.  We parse the
  * ethertype, skip up to two VLAN tags, and locate the IPv4/IPv6

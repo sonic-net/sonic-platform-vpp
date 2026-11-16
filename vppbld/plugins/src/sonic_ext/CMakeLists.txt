@@ -25,6 +25,7 @@ add_vpp_plugin(sonic_ext
   glean_redirect_node.c
   host_xc_node.c
   l2_trap_fixup_node.c
+  l2_trap_learn_node.c
   l2_vlan_filter_node.c
   ip2me_node.c
   drop_member_stats_node.c
@@ -41,7 +42,6 @@ add_vpp_plugin(sonic_ext
   ip4_loopback_node.c
   ip6_loopback_node.c
   trim_admission_node.c
-  trim_node.c
   trim_api.c
   trim_cli.c
 
