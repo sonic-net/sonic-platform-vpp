@@ -27,6 +27,7 @@ add_vpp_plugin(sonic_ext
   l2_trap_fixup_node.c
   l2_trap_learn_node.c
   l2_vlan_filter_node.c
+  l2_isolation.c
   ip2me_node.c
   drop_member_stats_node.c
   copp_ifout_node.c
