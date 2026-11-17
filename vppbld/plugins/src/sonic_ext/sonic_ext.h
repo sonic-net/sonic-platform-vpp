@@ -783,6 +783,7 @@ int sonic_ext_copp_ip2me_bind (const char *policer_name, int is_bind);
 int sonic_ext_copp_ip2me_bind_condition (
   const char *policer_name, const sonic_ext_copp_ip2me_condition_t *condition,
   int is_bind);
+int sonic_ext_ospf_punt_pair_enable_disable (u32 phy_sw_if_index, int enable);
 int sonic_ext_copp_ttl_punt_bind (int is_bind);
 
 /* Set the per-interface RIF loopback (hairpin) packet action and enable or
