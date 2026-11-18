@@ -29,7 +29,11 @@
 #include <vnet/ip/ip6_packet.h>
 #include <vnet/ip/format.h>
 #include <vnet/tcp/tcp_packet.h>
+#include <vnet/udp/udp_packet.h>
 #include <policer/policer.h>
+
+#define SONIC_EXT_DHCP4_CLIENT_PORT 68
+#define SONIC_EXT_DHCP4_SERVER_PORT 67
 
 typedef struct
 {
@@ -246,6 +250,7 @@ sonic_ext_copp_ip2me_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
   u16 src_port = 0;
   u16 dst_port = 0;
   int has_tcp_port = 0;
+  int is_dhcp4 = 0;
 
   vnet_feature_next (&feat_next, b);
   *next = (u16) feat_next;
@@ -278,8 +283,32 @@ sonic_ext_copp_ip2me_x1 (vlib_main_t *vm, sonic_ext_main_t *sem,
 	dst_port = clib_net_to_host_u16 (tcp->dst_port);
 	has_tcp_port = 1;
       }
+    else if (ip4->protocol == IP_PROTOCOL_UDP &&
+	     b->current_length >= ihl_bytes + sizeof (udp_header_t) &&
+	     ip4_get_fragment_offset (ip4) == 0)
+      {
+	udp_header_t *udp = (udp_header_t *) ((u8 *) ip4 + ihl_bytes);
+	src_port = clib_net_to_host_u16 (udp->src_port);
+	dst_port = clib_net_to_host_u16 (udp->dst_port);
+	is_dhcp4 =
+	  ((src_port == SONIC_EXT_DHCP4_CLIENT_PORT &&
+	    dst_port == SONIC_EXT_DHCP4_SERVER_PORT) ||
+	   (src_port == SONIC_EXT_DHCP4_SERVER_PORT &&
+	    dst_port == SONIC_EXT_DHCP4_CLIENT_PORT));
+      }
   }
   *out_dst_port = dst_port;
+
+  /* A bound DHCP trap is more specific than the generic IP2ME address
+   * policy. Leave it unmetered here so copp-ifout applies the DHCP trap
+   * group's policer exactly once on the selected host TAP. Without a DHCP
+   * binding, retain the legacy IP2ME fallback. */
+  if (is_dhcp4 && sonic_ext_copp_dhcp_is_bound (sem, 0))
+    {
+      *out_policer_index = ~0;
+      *out_verdict = POLICE_CONFORM;
+      return SONIC_EXT_COPP_IP2ME_ERROR_PASS;
+    }
 
   sonic_ext_copp_ip2me_policer_t *pol = sonic_ext_copp_ip2me_find_policer (
     sem, dst_addr, has_tcp_port, src_port, dst_port);
@@ -759,14 +788,19 @@ sonic_ext_copp_ip2me_addr_add_del (u32 addr, int is_add)
  * (used to bind a new one). Returns -1 if not found / table full.
  */
 static int
-sonic_ext_copp_ip2me_find_policer_slot_by_name (sonic_ext_main_t *sem,
-						 const char *name)
+sonic_ext_copp_ip2me_find_policer_slot (sonic_ext_main_t *sem,
+					 const char *name, u8 match_kind,
+					 u16 match_tcp_port, int require_name)
 {
   for (u32 i = 0; i < sem->copp_ip2me_n_policers; i++)
     {
-      if (sem->copp_ip2me_policers[i].in_use &&
-	  strncmp ((char *) sem->copp_ip2me_policers[i].name, name,
-		   SONIC_EXT_COPP_IFOUT_NAME_LEN) == 0)
+      sonic_ext_copp_ip2me_policer_t *pol = &sem->copp_ip2me_policers[i];
+
+      if (pol->in_use && pol->match_kind == match_kind &&
+	  pol->match_tcp_port == match_tcp_port &&
+	  (!require_name ||
+	   strncmp ((char *) pol->name, name,
+		     SONIC_EXT_COPP_IFOUT_NAME_LEN) == 0))
 	return (int) i;
     }
   return -1;
@@ -788,23 +822,23 @@ sonic_ext_copp_ip2me_alloc_policer_slot (sonic_ext_main_t *sem)
 }
 
 /*
- * Bind (or unbind) one independent policer slot. match_kind/
- * match_tcp_port select what this slot matches; every caller must
- * pass its OWN unique policer_name (SwitchVppHostifTrap.cpp always
- * uses the SAI trap group's own "copp-policer-0x<oid>" string) so
- * that unbinding one SAI trap's slot can never remove another trap's
- * slot even if, by historical accident, two traps briefly shared a
- * name -- each slot is looked up and cleared strictly by its own name.
+ * Bind (or unbind) one semantic policer slot. The match kind (and port for
+ * conditioned slots) is the physical key: rebinding replaces that key's
+ * owner, while unbinding additionally requires the supplied owner name to
+ * match. Thus BGP and IP2ME can safely share one policer name, and a stale
+ * owner cannot remove a newer binding.
  */
 static int
 sonic_ext_copp_ip2me_bind_slot (const char *policer_name, int is_bind,
 				 u8 match_kind, u16 match_tcp_port)
 {
   sonic_ext_main_t *sem = &sonic_ext_main;
-  int idx = sonic_ext_copp_ip2me_find_policer_slot_by_name (sem, policer_name);
+  int idx;
 
   if (!is_bind)
     {
+      idx = sonic_ext_copp_ip2me_find_policer_slot (
+	sem, policer_name, match_kind, match_tcp_port, 1);
       if (idx < 0)
 	return 0; /* already unbound / never bound -- no-op */
       clib_memset (&sem->copp_ip2me_policers[idx], 0,
@@ -812,6 +846,8 @@ sonic_ext_copp_ip2me_bind_slot (const char *policer_name, int is_bind,
       return 0;
     }
 
+  idx = sonic_ext_copp_ip2me_find_policer_slot (
+    sem, policer_name, match_kind, match_tcp_port, 0);
   if (idx < 0)
     {
       idx = sonic_ext_copp_ip2me_alloc_policer_slot (sem);
