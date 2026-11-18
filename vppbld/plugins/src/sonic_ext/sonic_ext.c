@@ -135,12 +135,13 @@ sonic_ext_redirect_to_ingress_tap (vlib_buffer_t *b, u32 orig_rx,
 				   u16 *pushed_tpid, u16 *pushed_vlan_id)
 {
   vnet_main_t *vnm = vnet_get_main ();
-  sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b);
+  /* copp-ttl-punt calls this without a capture cookie too */
+  sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer_captured (b);
   vnet_sw_interface_t *swo;
   const lcp_itf_pair_t *lip;
   index_t lipi;
   u32 phy_sw;
-  u32 saved_vlan_tag = seb->orig_vlan_tag;
+  u32 saved_vlan_tag = seb ? seb->orig_vlan_tag : 0;
   i32 adv;
 
   *host_tap = ~0;
@@ -165,7 +166,7 @@ sonic_ext_redirect_to_ingress_tap (vlib_buffer_t *b, u32 orig_rx,
   if (*host_tap == excluded_tap)
     return 0;
 
-  seb->magic = 0;
+  sonic_ext_buffer_consume (b);
 
   /* Restore the original wire L2 position.  ethernet-input may have
    * advanced past the Ethernet header before either redirect node runs. */
@@ -496,6 +497,23 @@ sonic_ext_set_punt_via_member (u8 is_enable)
     }
 }
 
+/* NEIGHBOR_MISS owns the unresolved-neighbour redirect independently of the
+ * broader punt-via-member feature. Keep the public feature latch unchanged:
+ * when it is off, only packets carrying an active NEIGHBOR_MISS reason may
+ * pass glean-redirect's run-time gate. */
+void
+sonic_ext_neighbor_miss_enable_redirect (void)
+{
+  sonic_ext_main_t *sem = &sonic_ext_main;
+
+  sonic_ext_capture_enable_all ();
+  if (!sem->glean_redirect_enabled)
+    {
+      sonic_ext_glean_redirect_enable_disable (1);
+      sem->glean_redirect_enabled = 1;
+    }
+}
+
 void
 sonic_ext_set_host_xc (u8 is_enable)
 {
@@ -588,10 +606,9 @@ sonic_ext_set_nd_punt (u8 is_enable)
  *   - sonic-ext-aggr-tap-redirect on the host  -- only if phy is an
  *     aggregate (BVI today, bond tomorrow) and punt-via-member is on.
  *
- * DHCPv4 client broadcast is trapped at l2-input-classify by the
- * per-member classifier session installed in SwitchVppFdb.cpp; it
- * does not need any per-LCP-pair feature on the BVI.  See
- * l2_trap_fixup_node.c.
+ * DHCP client traffic is trapped or copied by the classifier sessions
+ * installed by sairedis; the resulting host-bound packet is policed by
+ * sonic-ext-copp-ifout on the selected LCP TAP.
  *
  * This is the only place we know both (a) the host tap sw_if_index
  * and (b) which phy it shadows.
@@ -884,6 +901,7 @@ sonic_ext_init (vlib_main_t *vm)
     .pair_del_fn = sonic_ext_lcp_pair_del_cb,
   };
   clib_memset (sem, 0, sizeof (*sem));
+  sem->copp_neighbor_miss_entry_index = ~0;
   lcp_itf_pair_register_vft (&sonic_ext_lcp_vft);
 
   /* Defaults only -- no arcs are touched here, so a "sonic-ext { }" stanza
@@ -894,6 +912,14 @@ sonic_ext_init (vlib_main_t *vm)
 #undef _
 
   sonic_ext_register_acl_deferred_mirror ();
+
+  /* Keep new CoPP RPCs in their own API namespace so adding one does not
+   * change the legacy sonic_ext API CRC used by an older sairedis image. */
+  {
+    clib_error_t *error = sonic_ext_copp_api_hookup (vm);
+    if (error)
+      return error;
+  }
 
   /* Register the packet-trim binary API (sets trim_msg_id_base). */
   {
