@@ -452,6 +452,7 @@ typedef struct
 
   /* ---- packet trimming ---- */
   u16 copp_msg_id_base;   /* sonic_ext_copp binary API base id */
+  u16 tunnel_msg_id_base; /* sonic_ext_tunnel binary API base id */
   u16 trim_msg_id_base;   /* binary API base id (setup_message_id_table) */
   u8 trim_configured;     /* any global trim policy pushed yet */
 
@@ -617,6 +618,10 @@ clib_error_t *sonic_ext_trim_api_hookup (vlib_main_t *vm);
 /* Register the compatibility-isolated CoPP binary API message table. Called
  * from sonic_ext_init(); sets sonic_ext_main.copp_msg_id_base. */
 clib_error_t *sonic_ext_copp_api_hookup (vlib_main_t *vm);
+
+/* Register the compatibility-isolated tunnel binary API message table. Called
+ * from sonic_ext_init(); sets sonic_ext_main.tunnel_msg_id_base. */
+clib_error_t *sonic_ext_tunnel_api_hookup (vlib_main_t *vm);
 
 /* Policy is programmed on physical ports, while VLAN egress keeps the
  * sub-interface in VLIB_TX. Do not change VLIB_TX: the rewrite/TX path needs it. */

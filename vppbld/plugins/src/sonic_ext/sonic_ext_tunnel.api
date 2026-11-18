@@ -1,0 +1,45 @@
+/*
+ * Copyright (c) 2026 SONiC-VPP contributors
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at:
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/** \file
+    \brief Compatibility-isolated SONiC-VPP tunnel API.
+
+    New tunnel operations live here rather than in sonic_ext.api so a new VPP
+    plugin remains compatible with a sairedis image compiled against the
+    legacy sonic_ext API CRC during provider-first rollouts.
+*/
+
+option version = "1.0.0";
+import "vnet/interface_types.api";
+
+/** \brief Set the fixed outer TTL / hop limit of an L3 tunnel's encap.
+    SAI's pipe TTL model: the outer IPv4 TTL or IPv6 hop limit of every packet
+    the tunnel encapsulates is set to ttl, and the underlay does not decrement
+    it. The sonic-ext-ip4/ip6-tunnel-encap-ttl output-arc nodes are enabled on
+    the tunnel only while ttl is non-zero; 0 restores the stock outer TTL.
+    Gated by the tunnel-encap-ttl feature toggle. Driven by the SAIVPP layer
+    from SAI_TUNNEL_ATTR_ENCAP_TTL_MODE / SAI_TUNNEL_ATTR_ENCAP_TTL_VAL.
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param sw_if_index - the tunnel interface (e.g. an IPIP tunnel)
+    @param ttl - outer TTL / hop limit to set, 0 = none
+*/
+autoreply define sonic_ext_tunnel_encap_ttl_set
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u8 ttl;
+};

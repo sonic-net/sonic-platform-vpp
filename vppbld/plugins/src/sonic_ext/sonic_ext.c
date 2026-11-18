@@ -1013,6 +1013,13 @@ sonic_ext_init (vlib_main_t *vm)
       return error;
   }
 
+  /* Likewise for the tunnel RPCs (sets tunnel_msg_id_base). */
+  {
+    clib_error_t *error = sonic_ext_tunnel_api_hookup (vm);
+    if (error)
+      return error;
+  }
+
   /* Register the packet-trim binary API (sets trim_msg_id_base). */
   {
     clib_error_t *error = sonic_ext_trim_api_hookup (vm);
