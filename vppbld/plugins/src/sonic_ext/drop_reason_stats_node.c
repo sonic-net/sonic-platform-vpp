@@ -136,11 +136,11 @@ sonic_ext_drop_reason_of (sonic_ext_drop_reason_main_t *drm, vlib_error_t e)
 static_always_inline u32
 sonic_ext_drop_reason_port (vnet_main_t *vnm, vlib_buffer_t *b)
 {
-  sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer (b);
+  sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer_captured (b);
   u32 port = vnet_buffer (b)->sw_if_index[VLIB_RX];
   vnet_sw_interface_t *si;
 
-  if (seb->magic == SONIC_EXT_BUFFER_MAGIC)
+  if (seb)
     port = seb->orig_rx_sw_if_index;
 
   si = vnet_get_sw_interface_or_null (vnm, port);
