@@ -96,9 +96,15 @@ sonic_ext_tunnel_encap_ttl_stamp (vlib_buffer_t *b, u8 ttl)
     {
     case 4:
       {
+	/* Update the checksum the tunnel fixup computed instead of
+	 * recomputing it, as ip4_header_set_ecn_w_chksum does. A fixup that
+	 * leaves it to OUTER_IP_CKSUM offload has it recomputed later. */
 	ip4_header_t *ip4 = (ip4_header_t *) outer;
+	ip_csum_t sum = ip4->checksum;
+
+	sum = ip_csum_update (sum, ip4->ttl, ttl, ip4_header_t, ttl);
+	ip4->checksum = ip_csum_fold (sum);
 	ip4->ttl = ttl;
-	ip4->checksum = ip4_header_checksum (ip4);
 	break;
       }
     case 6:
@@ -112,11 +118,44 @@ sonic_ext_tunnel_encap_ttl_stamp (vlib_buffer_t *b, u8 ttl)
   return 1;
 }
 
+static_always_inline void
+sonic_ext_tunnel_encap_ttl_one (vlib_main_t *vm, vlib_node_runtime_t *node,
+				const u8 *ttls, u32 n_ttls, vlib_buffer_t *b,
+				u16 *next, u32 *n_stamped, u32 *n_not_encap)
+{
+  u32 sw_if_index = vnet_buffer (b)->sw_if_index[VLIB_TX];
+  u8 ttl = sw_if_index < n_ttls ? ttls[sw_if_index] : 0;
+  u8 stamped = 0;
+
+  vnet_feature_next_u16 (next, b);
+
+  /* 0: the TTL was just removed and the arc is about to be disabled */
+  if (PREDICT_TRUE (ttl != 0))
+    {
+      stamped = sonic_ext_tunnel_encap_ttl_stamp (b, ttl);
+      *n_stamped += stamped;
+      *n_not_encap += !stamped;
+    }
+
+  if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
+		     (b->flags & VLIB_BUFFER_IS_TRACED)))
+    {
+      sonic_ext_tunnel_encap_ttl_trace_t *t =
+	vlib_add_trace (vm, node, b, sizeof (*t));
+      t->sw_if_index = sw_if_index;
+      t->ttl = ttl;
+      t->stamped = stamped;
+    }
+}
+
 static_always_inline uword
 sonic_ext_tunnel_encap_ttl_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 				   vlib_frame_t *frame)
 {
-  sonic_ext_main_t *sem = &sonic_ext_main;
+  /* Only the main thread changes the TTLs, under the worker barrier, so they
+   * cannot change while a frame is processed. */
+  const u8 *ttls = sonic_ext_main.tunnel_encap_ttl_by_sw_if_index;
+  u32 n_ttls = vec_len (ttls);
   u32 n_left_from, *from;
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b;
   u16 nexts[VLIB_FRAME_SIZE], *next;
@@ -128,37 +167,43 @@ sonic_ext_tunnel_encap_ttl_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
   b = bufs;
   next = nexts;
 
+  while (n_left_from >= 4)
+    {
+      /* Prefetch the buffer headers two iterations ahead, and the outer IP
+       * headers, which are written, one iteration ahead. */
+      if (n_left_from >= 12)
+	{
+	  vlib_prefetch_buffer_header (b[8], STORE);
+	  vlib_prefetch_buffer_header (b[9], STORE);
+	  vlib_prefetch_buffer_header (b[10], STORE);
+	  vlib_prefetch_buffer_header (b[11], STORE);
+	}
+      if (n_left_from >= 8)
+	{
+	  vlib_prefetch_buffer_data (b[4], STORE);
+	  vlib_prefetch_buffer_data (b[5], STORE);
+	  vlib_prefetch_buffer_data (b[6], STORE);
+	  vlib_prefetch_buffer_data (b[7], STORE);
+	}
+
+      sonic_ext_tunnel_encap_ttl_one (vm, node, ttls, n_ttls, b[0], next + 0,
+				      &n_stamped, &n_not_encap);
+      sonic_ext_tunnel_encap_ttl_one (vm, node, ttls, n_ttls, b[1], next + 1,
+				      &n_stamped, &n_not_encap);
+      sonic_ext_tunnel_encap_ttl_one (vm, node, ttls, n_ttls, b[2], next + 2,
+				      &n_stamped, &n_not_encap);
+      sonic_ext_tunnel_encap_ttl_one (vm, node, ttls, n_ttls, b[3], next + 3,
+				      &n_stamped, &n_not_encap);
+
+      b += 4;
+      next += 4;
+      n_left_from -= 4;
+    }
+
   while (n_left_from > 0)
     {
-      u32 sw_if_index = vnet_buffer (b[0])->sw_if_index[VLIB_TX];
-      u8 ttl = (sw_if_index < vec_len (sem->tunnel_encap_ttl_by_sw_if_index))
-		 ? sem->tunnel_encap_ttl_by_sw_if_index[sw_if_index]
-		 : 0;
-      u8 stamped = 0;
-      u32 next0;
-
-      vnet_feature_next (&next0, b[0]);
-      next[0] = (u16) next0;
-
-      /* 0: the TTL was just removed and the arc is about to be disabled */
-      if (PREDICT_TRUE (ttl != 0))
-	{
-	  stamped = sonic_ext_tunnel_encap_ttl_stamp (b[0], ttl);
-	  if (stamped)
-	    n_stamped++;
-	  else
-	    n_not_encap++;
-	}
-
-      if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
-			 (b[0]->flags & VLIB_BUFFER_IS_TRACED)))
-	{
-	  sonic_ext_tunnel_encap_ttl_trace_t *t =
-	    vlib_add_trace (vm, node, b[0], sizeof (*t));
-	  t->sw_if_index = sw_if_index;
-	  t->ttl = ttl;
-	  t->stamped = stamped;
-	}
+      sonic_ext_tunnel_encap_ttl_one (vm, node, ttls, n_ttls, b[0], next,
+				      &n_stamped, &n_not_encap);
 
       b += 1;
       next += 1;

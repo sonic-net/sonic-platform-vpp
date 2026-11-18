@@ -22,7 +22,9 @@ from scapy.layers.l2 import Ether
 from scapy.layers.inet import IP, UDP
 from scapy.layers.inet6 import IPv6
 
-N_PKTS = 3
+# A burst reaches the tunnel-encap-ttl node in one frame. 67 = 4 * 16 + 3 runs
+# its 4-packet loop with and without prefetch, then its single-packet loop.
+N_PKTS = 67
 INNER_TTL = 34
 
 # Destinations routed via the IPv4 transport tunnel (4o4, 6o4) and via the
@@ -207,6 +209,30 @@ class TestSonicExtTunnelEncapTtl(SonicExtTunnelEncapTtlBase):
         self.set_ttl(self.tun6.sw_if_index, 200)
         self.assertEqual(self.send_4o6(), {200})
         self.assertEqual(self.send_4o4(), {63})
+
+    def test_tunnels_in_one_frame(self):
+        """packets of two tunnels in one frame each get their tunnel's TTL"""
+        self.set_ttl(self.tun4.sw_if_index, 255)
+        self.set_ttl(self.tun6.sw_if_index, 200)
+        before = self.stamped("ip4")
+
+        # Inner IPv4 packets of both tunnels share the ip4-output arc's node,
+        # so one burst mixes them across the lanes of its 4-packet loop.
+        dsts = [DST4_VIA_TUN6 if i % 3 else DST4_VIA_TUN4 for i in range(N_PKTS)]
+        rx = self.send_and_expect(self.pg1, [self.pkt4(d) for d in dsts], self.pg0)
+
+        outer4 = [p[Ether].payload for p in rx if IPv6 not in p]
+        outer6 = [p[IPv6] for p in rx if IPv6 in p]
+        self.assertEqual(len(outer4), dsts.count(DST4_VIA_TUN4))
+        self.assertEqual(len(outer6), dsts.count(DST4_VIA_TUN6))
+        self.assertEqual({o.ttl for o in outer4}, {255})
+        self.assertEqual({o.hlim for o in outer6}, {200})
+        self.assertEqual({o.dst for o in outer4}, {self.pg0.remote_ip4})
+        self.assertEqual({o.dst for o in outer6}, {self.pg0.remote_ip6})
+        for p in rx:
+            self.assert_packet_checksums_valid(p)
+            self.assertEqual(p[Ether].payload.payload[IP].ttl, INNER_TTL - 1)
+        self.assertEqual(self.stamped("ip4"), before + N_PKTS)
 
     def test_update_and_remove(self):
         """a new TTL replaces the old one, and TTL 0 restores the stock one"""
