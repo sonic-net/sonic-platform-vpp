@@ -111,6 +111,7 @@ jobs:
       copy_one_deb 'vpp_*_${{ parameters.arch }}.deb'
       copy_one_deb 'vpp-plugin-core_*_${{ parameters.arch }}.deb'
       copy_one_deb 'vpp-plugin-dpdk_*_${{ parameters.arch }}.deb'
+      copy_one_deb 'vpp-crypto-engines_*_${{ parameters.arch }}.deb'
       cp -v .azure-pipelines/Dockerfile.sai-vpp-overlay "$context_dir/Dockerfile"
 
       docker load -i "$sairedis_dir/docker-sai-test-vpp.gz"
@@ -138,7 +139,8 @@ jobs:
               if (package != "libvppinfra" &&
                   package != "vpp" &&
                   package != "vpp-plugin-core" &&
-                  package != "vpp-plugin-dpdk") {
+                  package != "vpp-plugin-dpdk" &&
+                  package != "vpp-crypto-engines") {
                   print
                   unexpected = 1
               }

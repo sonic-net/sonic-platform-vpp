@@ -60,6 +60,7 @@ class SonicExtAllFeaturesBase(VppTestCase):
         "l2-vlan-filter": "saivpp",
         "pbh": "saivpp",
         "iface-loopback": "saivpp",
+        "macsec": "saivpp",
     }
 
     def show_features(self):

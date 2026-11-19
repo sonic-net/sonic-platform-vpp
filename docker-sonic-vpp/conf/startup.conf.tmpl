@@ -276,6 +276,11 @@ plugins {
 	# plugin acl_plugin.so { disable }
 }
 
+## AES-GCM lives in vpp-crypto-engines (native_crypto_engine.so /
+## openssl_crypto_engine.so under .../vpp_crypto_engines/), not in
+## vpp_plugins. VPP auto-loads every .so in that directory. There is no
+## crypto_native_plugin.so in this VPP; do not put one under plugins {}.
+
 ## sonic-ext plugin feature selection.  Every feature defaults to on, so a
 ## keyword is only needed to turn one off.  Changing this requires a VPP
 ## restart.  Each keyword takes on|off.
@@ -288,10 +293,11 @@ plugins {
 ## is, so VPP neither answers ND nor learns neighbors from it; off leaves ND to
 ## VPP.
 ##
-## saivpp-wired: ip2me, l2-trap-fixup, l2-trap-learn, l2-vlan-filter.  VPP only
-## stores these and answers sonic_ext_feature_get(); saivpp asks before
-## installing the ACL hook or the classify sessions.  "show interface features"
+## saivpp-wired: ip2me, l2-trap-fixup, l2-trap-learn, l2-vlan-filter, macsec.
+## VPP only stores these and answers sonic_ext_feature_get(); saivpp asks before
+## installing the ACL hook, classify sessions, or SecY.  "show interface features"
 ## does NOT reflect them the way it does for the VPP-wired features above.
+## macsec=off refuses the sonic_ext_macsec_* binary APIs (FEATURE_DISABLED).
 ##
 ## Generated at runtime by vpp_init.sh from $SONIC_EXT_CONFIG, which is given as
 ## comma-separated key=value pairs -- SONIC_EXT_CONFIG=host-xc=off -- and which
@@ -306,6 +312,7 @@ plugins {
     # l2-trap-fixup off
     # l2-trap-learn off
     # l2-vlan-filter off
+    # macsec off
 # }
 
 ## Statistics Segment

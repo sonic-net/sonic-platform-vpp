@@ -208,7 +208,8 @@ typedef enum
   _ (L2_TRAP_LEARN, l2_trap_learn, "l2-trap-learn", 1, SAIVPP)                \
   _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)             \
   _ (PBH, pbh, "pbh", 1, SAIVPP)                                              \
-  _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)
+  _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)              \
+  _ (MACSEC, macsec, "macsec", 1, SAIVPP)
 
 /* Router-interface loopback (hairpin) packet action values, carried in the
  * sonic_ext_iface_loopback_set_action API and stored per sw_if_index. */
@@ -353,6 +354,7 @@ typedef struct
 
   /* ---- packet trimming ---- */
   u16 trim_msg_id_base;   /* binary API base id (setup_message_id_table) */
+  u16 macsec_msg_id_base; /* binary API base id (sonic_ext_macsec.api) */
   u8 trim_configured;     /* any global trim policy pushed yet */
 
   /* Global trim policy (SAI SWITCH_ATTR_PACKET_TRIM_*). */
@@ -509,6 +511,10 @@ int sonic_ext_trim_bucket_admit (vlib_main_t *vm, sonic_ext_trim_queue_t *q,
 /* Register the trim binary API message table.  Called from
  * sonic_ext_init(); sets sonic_ext_main.trim_msg_id_base. */
 clib_error_t *sonic_ext_trim_api_hookup (vlib_main_t *vm);
+
+/* Register the MACsec binary API message table.  Called from
+ * sonic_ext_init(); sets sonic_ext_main.macsec_msg_id_base. */
+clib_error_t *sonic_ext_macsec_api_hookup (vlib_main_t *vm);
 
 /* Policy is programmed on physical ports, while VLAN egress keeps the
  * sub-interface in VLIB_TX. Do not change VLIB_TX: the rewrite/TX path needs it. */
