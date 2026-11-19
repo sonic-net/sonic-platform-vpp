@@ -451,11 +451,11 @@ sonic_ext_aggr_tap_redirect_walk_enable_cb (index_t lipi, void *ctx)
   return WALK_CONTINUE;
 }
 
-/* OSPF is an independent control-plane protocol path, not a CoPP toggle.
- * Enable its IPv4 and IPv6 input features on every existing LCP phy; the
- * pair add/del callbacks keep later pairs synchronized. */
+/* OSPF and FRR BFD are independent control-plane protocol paths, not CoPP
+ * toggles. Enable their input features on every existing LCP phy; the pair
+ * add/del callbacks keep later pairs synchronized. */
 static walk_rc_t
-sonic_ext_ospf_punt_walk_enable_cb (index_t lipi, void *ctx)
+sonic_ext_routing_punt_walk_enable_cb (index_t lipi, void *ctx)
 {
   const lcp_itf_pair_t *lip = lcp_itf_pair_get (lipi);
   int rv;
@@ -466,6 +466,11 @@ sonic_ext_ospf_punt_walk_enable_cb (index_t lipi, void *ctx)
   rv = sonic_ext_ospf_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 1);
   if (rv)
     clib_warning ("sonic-ext: enable OSPF punt on sw_if_index %u failed: %d",
+                  lip->lip_phy_sw_if_index, rv);
+
+  rv = sonic_ext_bfd_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 1);
+  if (rv)
+    clib_warning ("sonic-ext: enable BFD punt on sw_if_index %u failed: %d",
                   lip->lip_phy_sw_if_index, rv);
   return WALK_CONTINUE;
 }
@@ -653,6 +658,9 @@ sonic_ext_lcp_pair_add_cb (lcp_itf_pair_t *lip)
   if (sonic_ext_ospf_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 1))
     clib_warning ("sonic-ext: enable OSPF punt on sw_if_index %u failed",
                   lip->lip_phy_sw_if_index);
+  if (sonic_ext_bfd_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 1))
+    clib_warning ("sonic-ext: enable BFD punt on sw_if_index %u failed",
+                  lip->lip_phy_sw_if_index);
 }
 
 static void
@@ -673,6 +681,9 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
     sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 0);
   if (sonic_ext_ospf_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 0))
     clib_warning ("sonic-ext: disable OSPF punt on sw_if_index %u failed",
+                  lip->lip_phy_sw_if_index);
+  if (sonic_ext_bfd_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 0))
+    clib_warning ("sonic-ext: disable BFD punt on sw_if_index %u failed",
                   lip->lip_phy_sw_if_index);
 }
 
@@ -981,9 +992,9 @@ sonic_ext_apply_config (vlib_main_t *vm)
   if (sem->host_xc)
     sonic_ext_set_host_xc (1);
 
-  /* OSPFv2/OSPFv3 punt is always available when sonic-ext is loaded and is
-   * independent of the optional CoPP dataplane features below. */
-  lcp_itf_pair_walk (sonic_ext_ospf_punt_walk_enable_cb, NULL);
+  /* OSPF and single-hop FRR BFD punt are always available when sonic-ext is
+   * loaded and are independent of the optional CoPP features below. */
+  lcp_itf_pair_walk (sonic_ext_routing_punt_walk_enable_cb, NULL);
 
   /* After ip6_nd_init / ip6_ra_init have registered VPP's own ND handlers. */
   if (sem->nd_punt)

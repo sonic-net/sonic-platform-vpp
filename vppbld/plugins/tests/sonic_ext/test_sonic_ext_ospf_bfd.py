@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""OSPFv2/OSPFv3 punt-to-linux tests for sonic-ext."""
+"""OSPF and single-hop BFD punt-to-linux tests for sonic-ext."""
 
 import unittest
 
 from asfframework import VppTestRunner
 from config import config
 from framework import VppTestCase
-from scapy.layers.inet import IP
+from scapy.layers.inet import IP, UDP
 from scapy.layers.inet6 import IPv6
 from scapy.layers.l2 import Ether
 from scapy.packet import Raw
 
 OSPF_PROTOCOL = 89
+BFD_CONTROL_PORT = 3784
 
 
 @unittest.skipIf("linux-cp" in config.excluded_plugins, "Exclude linux-cp tests")
 @unittest.skipIf(
     "sonic_ext" in config.excluded_plugins, "Exclude sonic-ext plugin tests"
 )
-class TestSonicExtOspfPunt(VppTestCase):
-    """Protocol 89 reaches the normal LCP host path without CoPP."""
+class TestSonicExtOspfBfdPunt(VppTestCase):
+    """OSPF and single-hop BFD reach the normal LCP path without CoPP."""
 
     vpp_worker_count = 0
     extra_vpp_plugin_config = [
@@ -43,11 +44,11 @@ class TestSonicExtOspfPunt(VppTestCase):
 
     @classmethod
     def setUpClass(cls):
-        super(TestSonicExtOspfPunt, cls).setUpClass()
+        super(TestSonicExtOspfBfdPunt, cls).setUpClass()
         cls.create_pg_interfaces(range(2))
 
     def setUp(self):
-        super(TestSonicExtOspfPunt, self).setUp()
+        super(TestSonicExtOspfBfdPunt, self).setUp()
         self.phy, self.host = self.pg0, self.pg1
         self.phy.admin_up()
         self.host.admin_up()
@@ -63,7 +64,7 @@ class TestSonicExtOspfPunt(VppTestCase):
         self.phy.unconfig_ip4()
         self.host.admin_down()
         self.phy.admin_down()
-        super(TestSonicExtOspfPunt, self).tearDown()
+        super(TestSonicExtOspfBfdPunt, self).tearDown()
 
     def test_ospfv2_multicast_punts_to_host(self):
         """224.0.0.5 protocol 89 is redirected before MFIB lookup."""
@@ -90,6 +91,26 @@ class TestSonicExtOspfPunt(VppTestCase):
                 hlim=1,
             )
             / Raw(b"\xa5" * 64)
+        )
+        self.send_and_expect(self.phy, [packet], self.host)
+
+    def test_bfd_ipv4_punts_to_host(self):
+        """Single-hop IPv4 BFD bypasses ingress ACL and reaches FRR."""
+        packet = (
+            Ether(src=self.phy.remote_mac, dst=self.phy.local_mac)
+            / IP(src=self.phy.remote_ip4, dst=self.phy.local_ip4, ttl=255)
+            / UDP(sport=49152, dport=BFD_CONTROL_PORT)
+            / Raw(b"\x20\x40\x03\x18" + b"\x00" * 20)
+        )
+        self.send_and_expect(self.phy, [packet], self.host)
+
+    def test_bfd_ipv6_punts_to_host(self):
+        """Single-hop IPv6 BFD bypasses ingress ACL and reaches FRR."""
+        packet = (
+            Ether(src=self.phy.remote_mac, dst=self.phy.local_mac)
+            / IPv6(src=self.phy.remote_ip6, dst=self.phy.local_ip6, hlim=255)
+            / UDP(sport=49152, dport=BFD_CONTROL_PORT)
+            / Raw(b"\x20\x40\x03\x18" + b"\x00" * 20)
         )
         self.send_and_expect(self.phy, [packet], self.host)
 
