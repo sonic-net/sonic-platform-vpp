@@ -37,7 +37,13 @@
  * without the prefix) and are the leaf names of the stats segment entries. */
 #define foreach_sonic_ext_drop_reason                                         \
   _ (SIP_LINK_LOCAL, "SIP_LINK_LOCAL")                                        \
-  _ (DIP_LINK_LOCAL, "DIP_LINK_LOCAL")
+  _ (DIP_LINK_LOCAL, "DIP_LINK_LOCAL")                                        \
+  _ (SIP_LOOPBACK, "SIP_LOOPBACK")                                            \
+  _ (SIP_MC, "SIP_MC")                                                        \
+  _ (SIP_CLASS_E, "SIP_CLASS_E")                                              \
+  _ (SIP_UNSPECIFIED, "SIP_UNSPECIFIED")                                      \
+  _ (DIP_LOOPBACK, "DIP_LOOPBACK")                                            \
+  _ (UC_DIP_MC_DMAC, "UC_DIP_MC_DMAC")
 
 typedef enum
 {
@@ -71,6 +77,28 @@ static const sonic_ext_drop_reason_map_t sonic_ext_drop_reason_map[] = {
     SONIC_EXT_DROP_REASON_SIP_LINK_LOCAL },
   { "ip4-validate", "destination address is link-local",
     SONIC_EXT_DROP_REASON_DIP_LINK_LOCAL },
+  { "ip4-validate", "source address is loopback",
+    SONIC_EXT_DROP_REASON_SIP_LOOPBACK },
+  { "ip4-validate", "source address is multicast",
+    SONIC_EXT_DROP_REASON_SIP_MC },
+  { "ip4-validate", "source address is class E",
+    SONIC_EXT_DROP_REASON_SIP_CLASS_E },
+  { "ip4-validate", "source address is unspecified",
+    SONIC_EXT_DROP_REASON_SIP_UNSPECIFIED },
+  { "ip4-validate", "destination address is loopback",
+    SONIC_EXT_DROP_REASON_DIP_LOOPBACK },
+  { "ip4-validate", "unicast IP with multicast~broadcast L2 destination",
+    SONIC_EXT_DROP_REASON_UC_DIP_MC_DMAC },
+  { "ip6-validate", "source address is loopback",
+    SONIC_EXT_DROP_REASON_SIP_LOOPBACK },
+  { "ip6-validate", "source address is multicast",
+    SONIC_EXT_DROP_REASON_SIP_MC },
+  { "ip6-validate", "source address is unspecified",
+    SONIC_EXT_DROP_REASON_SIP_UNSPECIFIED },
+  { "ip6-validate", "destination address is loopback",
+    SONIC_EXT_DROP_REASON_DIP_LOOPBACK },
+  { "ip6-validate", "unicast IP with multicast~broadcast L2 destination",
+    SONIC_EXT_DROP_REASON_UC_DIP_MC_DMAC },
 };
 
 typedef struct

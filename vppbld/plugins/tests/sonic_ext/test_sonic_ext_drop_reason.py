@@ -6,8 +6,8 @@ buffer's b->error to a SAI drop reason and counts it against the wire ingress
 port in /sonic-ext/drop-reason/<REASON>, indexed by sw_if_index.  SAI-VPP
 reads those counters to back SAI debug (configurable drop) counters.
 
-The drops under test come from ip4-validate, which stamps b->error on every
-packet it drops.
+The drops under test come from ip4-validate and ip6-validate, which stamp
+b->error on every packet they drop.
 """
 
 import unittest
@@ -20,17 +20,32 @@ from vpp_papi import MACAddress, VppEnum
 from vpp_qemu_utils import create_namespace, delete_all_namespaces, set_interface_up
 
 from scapy.layers.inet import IP, UDP
+from scapy.layers.inet6 import IPv6
 from scapy.layers.l2 import Ether
 from scapy.packet import Raw
 
 NODE = "sonic-ext-drop-reason-stats"
 COUNTED = "/err/%s/drop counted against a SAI drop reason" % NODE
-DIP_LL_ERR = "/err/ip4-validate/destination address is link-local"
-SIP_LL_ERR = "/err/ip4-validate/source address is link-local"
-SIP_LOOPBACK_ERR = "/err/ip4-validate/source address is loopback"
+IP4_ERR = "/err/ip4-validate/%s"
+IP6_ERR = "/err/ip6-validate/%s"
+DIP_LL_ERR = IP4_ERR % "destination address is link-local"
+SIP_LL_ERR = IP4_ERR % "source address is link-local"
+DIP_UNSPECIFIED6_ERR = IP6_ERR % "destination address is unspecified"
+L2_MCAST_BCAST = "unicast IP with multicast~broadcast L2 destination"
 
-REASONS = ("SIP_LINK_LOCAL", "DIP_LINK_LOCAL")
+REASONS = (
+    "SIP_LINK_LOCAL",
+    "DIP_LINK_LOCAL",
+    "SIP_LOOPBACK",
+    "SIP_MC",
+    "SIP_CLASS_E",
+    "SIP_UNSPECIFIED",
+    "DIP_LOOPBACK",
+    "UC_DIP_MC_DMAC",
+)
 LINK_LOCAL_IP4 = "169.254.0.1"
+BCAST_MAC = "ff:ff:ff:ff:ff:ff"
+MCAST6_MAC = "33:33:00:00:00:01"
 N_PKTS = 7
 
 PLUGINS = [
@@ -85,6 +100,15 @@ class SonicExtDropReasonMixin:
             for i in range(N_PKTS)
         ]
 
+    def udp6(self, rx, dst_mac, src_ip, dst_ip):
+        return [
+            Ether(src=rx.remote_mac, dst=dst_mac)
+            / IPv6(src=src_ip, dst=dst_ip)
+            / UDP(sport=10000 + i, dport=20000)
+            / Raw(b"\xa5" * 64)
+            for i in range(N_PKTS)
+        ]
+
     def send_dropped(self, rx, pkts, others):
         rx.add_stream(pkts)
         self.pg_enable_capture(self.pg_interfaces)
@@ -119,6 +143,7 @@ class TestSonicExtDropReason(SonicExtDropReasonMixin, VppTestCase):
                 i.admin_up()
                 i.config_ip4()
                 i.resolve_arp()
+                i.config_ip6()
         except Exception:
             cls.tearDownClass()
             raise
@@ -127,12 +152,30 @@ class TestSonicExtDropReason(SonicExtDropReasonMixin, VppTestCase):
     def tearDownClass(cls):
         for i in cls.pg_interfaces:
             i.unconfig_ip4()
+            i.unconfig_ip6()
             i.admin_down()
         super(TestSonicExtDropReason, cls).tearDownClass()
 
     def show_commands_at_teardown(self):
         self.logger.info(self.vapi.cli("show sonic-ext drop-reasons"))
         self.logger.info(self.vapi.cli("show errors"))
+
+    def check_counted(self, reason, err, pkts):
+        """`pkts` sent on pg0 drop as `err` and count as `reason` on pg0 only"""
+        idx = [self.pg0.sw_if_index, self.pg1.sw_if_index]
+        before = self.reason_counts(idx)
+        err_before = self.err(err)
+        counted_before = self.err(COUNTED)
+
+        self.send_dropped(self.pg0, pkts, [self.pg1])
+
+        self.assert_only_changed(
+            before,
+            self.reason_counts(idx),
+            {(reason, self.pg0.sw_if_index): N_PKTS},
+        )
+        self.assertEqual(self.err(err), err_before + N_PKTS)
+        self.assertEqual(self.err(COUNTED), counted_before + N_PKTS)
 
     def test_dip_link_local(self):
         """DIP link-local drops count against the ingress port only"""
@@ -173,20 +216,106 @@ class TestSonicExtDropReason(SonicExtDropReasonMixin, VppTestCase):
         )
         self.assertEqual(self.err(SIP_LL_ERR), err_before + N_PKTS)
 
+    def test_sip_loopback(self):
+        """IPv4 SIP loopback drops count as SIP_LOOPBACK"""
+        self.check_counted(
+            "SIP_LOOPBACK",
+            IP4_ERR % "source address is loopback",
+            self.udp4(self.pg0, self.pg0.local_mac, "127.0.0.1", self.pg1.remote_ip4),
+        )
+
+    def test_sip_mc(self):
+        """IPv4 SIP multicast drops count as SIP_MC"""
+        self.check_counted(
+            "SIP_MC",
+            IP4_ERR % "source address is multicast",
+            self.udp4(self.pg0, self.pg0.local_mac, "224.0.0.1", self.pg1.remote_ip4),
+        )
+
+    def test_sip_class_e(self):
+        """IPv4 SIP class E drops count as SIP_CLASS_E"""
+        self.check_counted(
+            "SIP_CLASS_E",
+            IP4_ERR % "source address is class E",
+            self.udp4(self.pg0, self.pg0.local_mac, "240.0.0.1", self.pg1.remote_ip4),
+        )
+
+    def test_sip_unspecified(self):
+        """IPv4 SIP 0.0.0.0 drops count as SIP_UNSPECIFIED"""
+        self.check_counted(
+            "SIP_UNSPECIFIED",
+            IP4_ERR % "source address is unspecified",
+            self.udp4(self.pg0, self.pg0.local_mac, "0.0.0.0", self.pg1.remote_ip4),
+        )
+
+    def test_dip_loopback(self):
+        """IPv4 DIP loopback drops count as DIP_LOOPBACK"""
+        self.check_counted(
+            "DIP_LOOPBACK",
+            IP4_ERR % "destination address is loopback",
+            self.udp4(self.pg0, self.pg0.local_mac, self.pg0.remote_ip4, "127.0.0.1"),
+        )
+
+    def test_uc_dip_mc_dmac(self):
+        """IPv4 unicast DIP with broadcast DMAC drops count as UC_DIP_MC_DMAC"""
+        self.check_counted(
+            "UC_DIP_MC_DMAC",
+            IP4_ERR % L2_MCAST_BCAST,
+            self.udp4(self.pg0, BCAST_MAC, self.pg0.remote_ip4, self.pg1.remote_ip4),
+        )
+
+    def test_sip_loopback_ip6(self):
+        """IPv6 SIP ::1 drops count as SIP_LOOPBACK"""
+        self.check_counted(
+            "SIP_LOOPBACK",
+            IP6_ERR % "source address is loopback",
+            self.udp6(self.pg0, self.pg0.local_mac, "::1", self.pg1.remote_ip6),
+        )
+
+    def test_sip_mc_ip6(self):
+        """IPv6 SIP multicast drops count as SIP_MC"""
+        self.check_counted(
+            "SIP_MC",
+            IP6_ERR % "source address is multicast",
+            self.udp6(self.pg0, self.pg0.local_mac, "ff02::1", self.pg1.remote_ip6),
+        )
+
+    def test_sip_unspecified_ip6(self):
+        """IPv6 SIP :: drops count as SIP_UNSPECIFIED"""
+        self.check_counted(
+            "SIP_UNSPECIFIED",
+            IP6_ERR % "source address is unspecified",
+            self.udp6(self.pg0, self.pg0.local_mac, "::", self.pg1.remote_ip6),
+        )
+
+    def test_dip_loopback_ip6(self):
+        """IPv6 DIP ::1 drops count as DIP_LOOPBACK"""
+        self.check_counted(
+            "DIP_LOOPBACK",
+            IP6_ERR % "destination address is loopback",
+            self.udp6(self.pg0, self.pg0.local_mac, self.pg0.remote_ip6, "::1"),
+        )
+
+    def test_uc_dip_mc_dmac_ip6(self):
+        """IPv6 unicast DIP with multicast DMAC drops count as UC_DIP_MC_DMAC"""
+        self.check_counted(
+            "UC_DIP_MC_DMAC",
+            IP6_ERR % L2_MCAST_BCAST,
+            self.udp6(self.pg0, MCAST6_MAC, self.pg0.remote_ip6, self.pg1.remote_ip6),
+        )
+
     def test_unmapped_drop_not_counted(self):
         """A drop with no SAI reason mapping changes no reason counter"""
         idx = [self.pg0.sw_if_index, self.pg1.sw_if_index]
         before = self.reason_counts(idx)
-        err_before = self.err(SIP_LOOPBACK_ERR)
+        err_before = self.err(DIP_UNSPECIFIED6_ERR)
         counted_before = self.err(COUNTED)
 
-        pkts = self.udp4(
-            self.pg0, self.pg0.local_mac, "127.0.0.1", self.pg1.remote_ip4
-        )
+        pkts = self.udp6(self.pg0, self.pg0.local_mac, self.pg0.remote_ip6, "::")
         self.send_dropped(self.pg0, pkts, [self.pg1])
 
         self.assert_only_changed(before, self.reason_counts(idx), {})
-        self.assertEqual(self.err(SIP_LOOPBACK_ERR), err_before + N_PKTS)
+        self.assertEqual(self.err(DIP_UNSPECIFIED6_ERR), err_before + N_PKTS)
         self.assertEqual(self.err(COUNTED), counted_before)
 
     def test_forwarded_not_counted(self):
