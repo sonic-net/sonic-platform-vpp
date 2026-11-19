@@ -16,6 +16,7 @@ export PLATFORM_RULES
 include $(PLATFORM_RULES)/syncd-vpp.mk
 include $(PLATFORM_RULES)/sonic-version.mk
 include $(PLATFORM_RULES)/platform-modules-vpp.mk
+include $(PLATFORM_RULES)/sonic-stel-ko.mk
 include $(PLATFORM_RULES)/docker-syncd-vpp.mk
 include $(PLATFORM_RULES)/docker-gbsyncd-vpp.mk
 include $(PLATFORM_RULES)/docker-ptf.mk
