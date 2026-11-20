@@ -451,30 +451,6 @@ sonic_ext_aggr_tap_redirect_walk_enable_cb (index_t lipi, void *ctx)
   return WALK_CONTINUE;
 }
 
-/* OSPF and FRR BFD are independent control-plane protocol paths, not CoPP
- * toggles. Enable their input features on every existing LCP phy; the pair
- * add/del callbacks keep later pairs synchronized. */
-static walk_rc_t
-sonic_ext_routing_punt_walk_enable_cb (index_t lipi, void *ctx)
-{
-  const lcp_itf_pair_t *lip = lcp_itf_pair_get (lipi);
-  int rv;
-
-  if (!lip)
-    return WALK_CONTINUE;
-
-  rv = sonic_ext_ospf_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 1);
-  if (rv)
-    clib_warning ("sonic-ext: enable OSPF punt on sw_if_index %u failed: %d",
-                  lip->lip_phy_sw_if_index, rv);
-
-  rv = sonic_ext_bfd_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 1);
-  if (rv)
-    clib_warning ("sonic-ext: enable BFD punt on sw_if_index %u failed: %d",
-                  lip->lip_phy_sw_if_index, rv);
-  return WALK_CONTINUE;
-}
-
 /*
  * Capture has no keyword of its own: it produces the cookie the other
  * features consume, so it is derived from whichever of them is enabled.
@@ -629,8 +605,6 @@ sonic_ext_set_nd_punt (u8 is_enable)
  *   - sonic-ext-host-xc on the host  -- only if host-xc is enabled.
  *   - sonic-ext-aggr-tap-redirect on the host  -- only if phy is an
  *     aggregate (BVI today, bond tomorrow) and punt-via-member is on.
- *   - sonic-ext-ospf4/6-punt on the phy -- always, so OSPF can reach FRR
- *     through the normal linux-cp path independently of CoPP configuration.
  *
  * DHCP client traffic is trapped or copied by the classifier sessions
  * installed by sairedis; the resulting host-bound packet is policed by
@@ -655,12 +629,6 @@ sonic_ext_lcp_pair_add_cb (lcp_itf_pair_t *lip)
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 1);
   if (sem->copp && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 1);
-  if (sonic_ext_ospf_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 1))
-    clib_warning ("sonic-ext: enable OSPF punt on sw_if_index %u failed",
-                  lip->lip_phy_sw_if_index);
-  if (sonic_ext_bfd_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 1))
-    clib_warning ("sonic-ext: enable BFD punt on sw_if_index %u failed",
-                  lip->lip_phy_sw_if_index);
 }
 
 static void
@@ -679,12 +647,6 @@ sonic_ext_lcp_pair_del_cb (lcp_itf_pair_t *lip)
     sonic_ext_aggr_tap_redirect_enable_disable (lip->lip_host_sw_if_index, 0);
   if (sem->copp && !sonic_ext_phy_is_aggregate (lip->lip_phy_sw_if_index))
     sonic_ext_copp_ifout_enable_disable (lip->lip_host_sw_if_index, 0);
-  if (sonic_ext_ospf_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 0))
-    clib_warning ("sonic-ext: disable OSPF punt on sw_if_index %u failed",
-                  lip->lip_phy_sw_if_index);
-  if (sonic_ext_bfd_punt_pair_enable_disable (lip->lip_phy_sw_if_index, 0))
-    clib_warning ("sonic-ext: disable BFD punt on sw_if_index %u failed",
-                  lip->lip_phy_sw_if_index);
 }
 
 static walk_rc_t
@@ -991,10 +953,6 @@ sonic_ext_apply_config (vlib_main_t *vm)
 
   if (sem->host_xc)
     sonic_ext_set_host_xc (1);
-
-  /* OSPF and single-hop FRR BFD punt are always available when sonic-ext is
-   * loaded and are independent of the optional CoPP features below. */
-  lcp_itf_pair_walk (sonic_ext_routing_punt_walk_enable_cb, NULL);
 
   /* After ip6_nd_init / ip6_ra_init have registered VPP's own ND handlers. */
   if (sem->nd_punt)
