@@ -28,5 +28,8 @@ features:
     - Drops packets with destination "::1" (loopback)
   - IPv6 L2 filtering:
     - Drops unicast IP packets with multicast/broadcast Ethernet destination
+  - Dropped packets carry their drop reason in b->error, so the drop node
+    counts them under ip4-validate/ip6-validate in show errors, and
+    sonic-ext drop-reason-stats can attribute them to a SAI drop reason.
 description: "IP packet validation plugin"
 state: experimental

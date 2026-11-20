@@ -104,6 +104,10 @@ class TestSonicExtTrimSideband(SonicExtTrimBase):
         """Unclaimed buffers and fresh clone slots expose no source fields."""
         subprocess.check_call([self.binary, "unclaimed-clone"])
 
+    def test_flags_share_word_and_hide_stale_bits(self):
+        """Feature masks in flags are independent and start clear."""
+        subprocess.check_call([self.binary, "flags"])
+
 
 class TestSonicExtTrimStartupOff(SonicExtTrimBase):
     """sonic-ext trim off in startup.conf"""

@@ -86,9 +86,43 @@
 #     "sonic-clear fdb all"). Includes a test in test_l2_fib.py.
 #     Upstream: https://gerrit.fd.io/r/c/vpp/+/47191
 0024-l2-report-flushed-MAC-refreshed-by-traffic.patch
+# 25. acl: enforce OUTER_VLAN_ID including PVID and post-VTR QinQ metadata.
+0025-acl-match-outer-vlan-id.patch
+# 25. ip6: do not rewrite an incomplete-adjacency packet's destination while
+#     generating neighbor discovery. The next-hop is needed only as the ND
+#     target; preserving the original packet lets the NEIGHBOR_MISS drop-arc
+#     consumer punt it byte-for-byte like IPv4.
+0025-ip6-preserve-packet-destination-during-neighbor-discovery.patch
 # 26. nat: with nat44 forwarding enabled and no address pool configured, pass
 #     a new in2out-output flow that matches no static mapping untranslated
 #     instead of dropping it as "out of ports". With static NAT only
 #     (saivpp's SAI NAT), hosts without a mapping are routed untranslated,
 #     as on an ASIC. No change with forwarding disabled or with a pool.
 0026-nat-forward-unmatched-output-feature-flows-without-a-pool.patch
+# 27. ipip: 'punt-no-tunnel' startup config option. ip[46]_register_protocol()
+#     is global, so once any ipip tunnel exists ipip[46]-input also steals
+#     locally destined IP_IN_IP/IPV6/MPLS_IN_IP packets that match no tunnel
+#     and drops them with "no tunnel". A HW dataplane traps those to the CPU
+#     as ordinary IP2ME. With the knob set, the packet is rewound over the
+#     outer header and sent to the ip4-punt/ip6-punt arc so linux-cp hands it
+#     to the host. Default off -> stock behaviour and upstream tests
+#     unchanged. The 6RD security_check "no tunnel" stays a drop.
+#     Includes both-halves tests in test_ipip.py.
+0027-ipip-add-punt-no-tunnel-startup-config-option.patch
+# 28. sflow: make drop monitoring usable by SONiC.
+#     - Emit NET_DM_ATTR_IN_PORT as the nested container the kernel
+#       drop_monitor uses, carrying the linux-cp tap ifIndex rather than the
+#       VPP hw_if_index, so NET_DM listeners such as hsflowd can parse the
+#       ingress port and resolve it to the right interface.
+#     - Report the port the packet arrived on (sonic_ext's capture
+#       orig_rx_sw_if_index, when available) rather than the bond / BVI /
+#       sub-interface its RX sw_if_index was since rewritten to.
+#     - Drop monitoring is switch-wide: sflow-drop goes on every interface's
+#       error-drop arc while it is on (and on interfaces created later)
+#       instead of only on ports with packet sampling enabled, so discards
+#       dispatched on a bond / sub-interface / BVI are seen, and drop
+#       monitoring alone starts the sample process.
+#     - Drop notifications are metered by a named VPP policer
+#       (sflow_drop_policer_set API / "sflow drop-monitoring policer"); vpplib
+#       binds the VPP policer of the SONiC drop_monitor_limit SAI policer.
+0028-sflow-switch-wide-drop-monitoring-for-sonic.patch

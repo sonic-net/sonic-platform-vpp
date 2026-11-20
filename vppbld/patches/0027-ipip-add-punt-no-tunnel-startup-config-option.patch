@@ -1,0 +1,371 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SONiC VPP <sonic-vpp@sonic-net.github.io>
+Date: Mon, 1 Jan 2024 00:00:00 +0000
+Subject: [PATCH] ipip: add 'punt-no-tunnel' startup config option
+
+ip[46]_register_protocol() hands every locally destined packet carrying
+IP_PROTOCOL_IP_IN_IP, IP_PROTOCOL_IPV6 or IP_PROTOCOL_MPLS_IN_IP to
+ipip[46]-input as soon as a single ipip tunnel exists. The registration
+is global, not per tunnel endpoint, so ipip[46]-input also intercepts
+packets that are addressed to one of our own addresses but that match no
+configured tunnel. Those are dropped with "no tunnel".
+
+A hardware forwarding plane behaves differently: an IPinIP packet
+addressed to the box that matches no tunnel is an ordinary IP2ME packet
+and is trapped to the CPU, where the host stack decides what to do with
+it (decapsulate it via a kernel tunnel device, or answer with an ICMP
+protocol-unreachable). Silently dropping it in the dataplane hides the
+packet from the control plane entirely.
+
+Add an 'ipip { punt-no-tunnel }' startup config option. When it is set,
+the unmatched packet is rewound over the outer IP header -- ipip_input()
+has already advanced past it by this point -- and sent to the ip4-punt /
+ip6-punt arc, so linux-cp's punt feature delivers the complete original
+packet to the host tap. vnet_buffer()->sw_if_index[VLIB_RX] is still the
+ingress interface at that point, which is exactly what linux-cp-punt-l3
+and ip[46]-punt-redirect key on, so no further fixup is needed.
+
+The punted packet never reaches error-drop, so b->error would not be
+accounted anywhere. Add a dedicated "no tunnel punted to host" counter
+and bump it explicitly instead.
+
+Two behaviours are deliberately left alone:
+
+ - the option defaults to off, so without the stanza the node drops the
+   packet exactly as before and existing tests are unaffected;
+ - the second IPIP_ERROR_NO_TUNNEL site, the 6RD security_check, stays a
+   drop. That one is an anti-spoofing check on a packet that did match a
+   tunnel, not a lookup miss.
+
+test_ipip.py gains two classes covering both halves of the knob. Each
+creates an ipip tunnel (so that the global protocol registration has
+happened) whose endpoints deliberately differ from the ones in the test
+packets, and redirects pg0's punt arc out of pg1 so the punted packet is
+observable. TestIPIPPuntNoTunnel runs with the stanza and checks that the
+packet leaves pg1 with its outer header intact -- which is what verifies
+the rewind -- and that only the punt counter moved. TestIPIPNoTunnel-
+DropDefault runs with the identical configuration but no stanza and
+checks that the packet is still dropped with "no tunnel".
+
+Type: feature
+
+Signed-off-by: Yue Gao <yuega2@cisco.com>
+---
+ src/plugins/ipip/ipip.c |  20 ++++++
+ src/plugins/ipip/ipip.h |  13 ++++
+ src/plugins/ipip/node.c |  31 ++++++++-
+ test/test_ipip.py       | 179 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 240 insertions(+), 3 deletions(-)
+
+diff --git a/src/plugins/ipip/ipip.c b/src/plugins/ipip/ipip.c
+index ed6abd40e..16737c366 100644
+--- a/src/plugins/ipip/ipip.c
++++ b/src/plugins/ipip/ipip.c
+@@ -18,6 +18,9 @@
+ 
+ ipip_main_t ipip_main;
+ 
++/* "ipip { punt-no-tunnel }" -- see the declaration in ipip.h */
++int ipip_punt_no_tunnel;
++
+ /* Packet trace structure */
+ typedef struct
+ {
+@@ -922,3 +925,20 @@ ipip_init (vlib_main_t * vm)
+ }
+ 
+ VLIB_INIT_FUNCTION (ipip_init);
++
++static clib_error_t *
++ipip_config (vlib_main_t * vm, unformat_input_t * input)
++{
++  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
++    {
++      if (unformat (input, "punt-no-tunnel"))
++	ipip_punt_no_tunnel = 1;
++      else
++	return clib_error_return (0, "unknown input '%U'",
++				  format_unformat_error, input);
++    }
++
++  return 0;
++}
++
++VLIB_CONFIG_FUNCTION (ipip_config, "ipip");
+diff --git a/src/plugins/ipip/ipip.h b/src/plugins/ipip/ipip.h
+index 86303b6e0..f5cd8e210 100644
+--- a/src/plugins/ipip/ipip.h
++++ b/src/plugins/ipip/ipip.h
+@@ -16,11 +16,24 @@
+ 
+ extern vnet_hw_interface_class_t ipip_hw_interface_class;
+ 
++/**
++ * When set, a packet that was delivered to ipip[46]-input because it is
++ * addressed to one of our local addresses, but that matches no configured
++ * tunnel, is handed to the ip[46]-punt arc instead of being dropped. That
++ * lets linux-cp deliver it to the host stack, which is what a hardware
++ * dataplane does with an unmatched IPinIP packet addressed to the box.
++ *
++ * Set by the "ipip { punt-no-tunnel }" startup config stanza. Default 0,
++ * i.e. the packet is dropped exactly as before.
++ */
++extern int ipip_punt_no_tunnel;
++
+ #define foreach_ipip_error				\
+   /* Must be first. */					\
+   _(DECAP_PKTS, "packets decapsulated")			\
+   _(BAD_PROTOCOL, "bad protocol")			\
+   _(NO_TUNNEL, "no tunnel")				\
++  _(NO_TUNNEL_PUNT, "no tunnel punted to host")		\
+   _(FRAGMENTED_PACKET, "fragmented outer packet")
+ 
+ typedef enum
+diff --git a/src/plugins/ipip/node.c b/src/plugins/ipip/node.c
+index bbf3f2923..4bb76ec0d 100644
+--- a/src/plugins/ipip/node.c
++++ b/src/plugins/ipip/node.c
+@@ -16,7 +16,9 @@
+   _ (DROP, "error-drop")                                                      \
+   _ (IP4_INPUT, "ip4-input")                                                  \
+   _ (IP6_INPUT, "ip6-input")                                                  \
+-  _ (MPLS_INPUT, "mpls-input")
++  _ (MPLS_INPUT, "mpls-input")                                                \
++  _ (IP4_PUNT, "ip4-punt")                                                    \
++  _ (IP6_PUNT, "ip6-punt")
+ 
+ typedef enum
+ {
+@@ -140,8 +142,31 @@ ipip_input (vlib_main_t * vm, vlib_node_runtime_t * node,
+ 		}
+ 	      if (!t0)
+ 		{
+-		  next0 = IPIP_INPUT_NEXT_DROP;
+-		  b0->error = node->errors[IPIP_ERROR_NO_TUNNEL];
++		  if (PREDICT_FALSE (ipip_punt_no_tunnel))
++		    {
++		      /*
++		       * The packet reached us because it is addressed to
++		       * one of our local addresses, it just matches no
++		       * tunnel. Rewind over the outer header we advanced
++		       * past above and hand the original packet to the
++		       * punt arc, where linux-cp delivers it to the host
++		       * stack -- what a HW dataplane does with an
++		       * unmatched IPinIP packet addressed to the box.
++		       */
++		      vlib_buffer_advance (b0, -(word) (is_ipv6 ?
++							sizeof (*ip60) :
++							sizeof (*ip40)));
++		      next0 = (is_ipv6 ? IPIP_INPUT_NEXT_IP6_PUNT :
++			       IPIP_INPUT_NEXT_IP4_PUNT);
++		      vlib_node_increment_counter (vm, node->node_index,
++						   IPIP_ERROR_NO_TUNNEL_PUNT,
++						   1);
++		    }
++		  else
++		    {
++		      next0 = IPIP_INPUT_NEXT_DROP;
++		      b0->error = node->errors[IPIP_ERROR_NO_TUNNEL];
++		    }
+ 		  goto drop;
+ 		}
+ 	    }
+diff --git a/test/test_ipip.py b/test/test_ipip.py
+index 66444b9e1..e33a02496 100644
+--- a/test/test_ipip.py
++++ b/test/test_ipip.py
+@@ -18,6 +18,7 @@ from vpp_ip_route import (
+     VppMplsTable,
+ )
+ from vpp_ipip_tun_interface import VppIpIpTunInterface
++from vpp_ip import VppIpPuntRedirect
+ from vpp_teib import VppTeib
+ from vpp_papi import VppEnum
+ from util import reassemble4
+@@ -1661,5 +1662,183 @@ class TestIPIPMPLS(VppTestCase):
+         tun6.disable_mpls()
+ 
+ 
++ERR_NO_TUNNEL = "/err/ipip%d-input/no tunnel"
++ERR_NO_TUNNEL_PUNT = "/err/ipip%d-input/no tunnel punted to host"
++
++
++def ipip_punt_setup(test):
++    """Common setup for the 'no tunnel' tests.
++
++    A tunnel has to exist for ipip_add_tunnel() to have called
++    ip[46]_register_protocol(); that registration is global, which is
++    exactly why ipip[46]-input also sees packets matching no tunnel. The
++    endpoints are deliberately different from the ones used by the test
++    packets so that the decap lookup misses.
++
++    Punted traffic received on pg0 is redirected out of pg1 so the test can
++    observe it. Everything is registered, so tearDown() cleans it up.
++    """
++    VppIpIpTunInterface(
++        test, test.pg0, test.pg0.local_ip4, test.pg0.remote_ip4
++    ).add_vpp_config()
++    VppIpIpTunInterface(
++        test, test.pg0, test.pg0.local_ip6, test.pg0.remote_ip6
++    ).add_vpp_config()
++    VppIpPuntRedirect(
++        test, test.pg0.sw_if_index, test.pg1.sw_if_index, test.pg1.remote_ip4
++    ).add_vpp_config()
++    VppIpPuntRedirect(
++        test, test.pg0.sw_if_index, test.pg1.sw_if_index, test.pg1.remote_ip6
++    ).add_vpp_config()
++
++
++def ipip_no_tunnel_pkts(test, is_ipv6):
++    """An IPinIP packet addressed to one of our own addresses whose outer
++    source matches no tunnel: ipip[46]-input is reached and the tunnel
++    lookup misses. The outer source is routable so that the implicit
++    ip[46]-local source check is not what drops the packet."""
++    if is_ipv6:
++        outer = IPv6(src=test.pg1.remote_ip6, dst=test.pg0.local_ip6, nh=41)
++        inner = IPv6(src="2001:db8:aaaa::1", dst="2001:db8:aaaa::2")
++    else:
++        outer = IP(src=test.pg1.remote_ip4, dst=test.pg0.local_ip4, proto=4)
++        inner = IP(src="10.10.10.1", dst="10.10.10.2")
++
++    return [
++        (
++            Ether(src=test.pg0.remote_mac, dst=test.pg0.local_mac)
++            / outer
++            / inner
++            / UDP(sport=1234, dport=1234)
++            / Raw(b"\xa5" * 64)
++        )
++    ] * N_PACKETS
++
++
++class TestIPIPPuntNoTunnel(VppTestCase):
++    """Verify that 'ipip { punt-no-tunnel }' hands a locally destined IPinIP
++    packet that matches no tunnel to the punt arc instead of dropping it.
++
++    A hardware forwarding plane treats such a packet as ordinary IP2ME and
++    traps it to the CPU, where the host stack decides what to do with it."""
++
++    extra_vpp_config = ["ipip", "{", "punt-no-tunnel", "}"]
++
++    @classmethod
++    def setUpClass(cls):
++        super(TestIPIPPuntNoTunnel, cls).setUpClass()
++        cls.create_pg_interfaces(range(2))
++        for i in cls.pg_interfaces:
++            i.admin_up()
++            i.config_ip4()
++            i.config_ip6()
++            i.resolve_arp()
++            i.resolve_ndp()
++
++    @classmethod
++    def tearDownClass(cls):
++        for i in cls.pg_interfaces:
++            i.unconfig_ip4()
++            i.unconfig_ip6()
++            i.admin_down()
++        super(TestIPIPPuntNoTunnel, cls).tearDownClass()
++
++    def setUp(self):
++        super(TestIPIPPuntNoTunnel, self).setUp()
++        ipip_punt_setup(self)
++
++    def test_ipip4_punt_no_tunnel(self):
++        """ipip4-input punts a for-us IPv4 packet matching no tunnel"""
++        punted = self.statistics.get_err_counter(ERR_NO_TUNNEL_PUNT % 4)
++        dropped = self.statistics.get_err_counter(ERR_NO_TUNNEL % 4)
++
++        rxs = self.send_and_expect(self.pg0, ipip_no_tunnel_pkts(self, False), self.pg1)
++
++        for rx in rxs:
++            # the outer header must have been restored before the punt
++            self.assertEqual(rx[IP].src, self.pg1.remote_ip4)
++            self.assertEqual(rx[IP].dst, self.pg0.local_ip4)
++            self.assertEqual(rx[IP].proto, 4)
++            self.assertEqual(rx[IP].payload.src, "10.10.10.1")
++            self.assertEqual(rx[IP].payload.dst, "10.10.10.2")
++
++        self.assertEqual(
++            self.statistics.get_err_counter(ERR_NO_TUNNEL_PUNT % 4),
++            punted + N_PACKETS,
++        )
++        self.assertEqual(self.statistics.get_err_counter(ERR_NO_TUNNEL % 4), dropped)
++
++    def test_ipip6_punt_no_tunnel(self):
++        """ipip6-input punts a for-us IPv6 packet matching no tunnel"""
++        punted = self.statistics.get_err_counter(ERR_NO_TUNNEL_PUNT % 6)
++        dropped = self.statistics.get_err_counter(ERR_NO_TUNNEL % 6)
++
++        rxs = self.send_and_expect(self.pg0, ipip_no_tunnel_pkts(self, True), self.pg1)
++
++        for rx in rxs:
++            self.assertEqual(rx[IPv6].src, self.pg1.remote_ip6)
++            self.assertEqual(rx[IPv6].dst, self.pg0.local_ip6)
++            self.assertEqual(rx[IPv6].nh, 41)
++            self.assertEqual(rx[IPv6].payload.src, "2001:db8:aaaa::1")
++            self.assertEqual(rx[IPv6].payload.dst, "2001:db8:aaaa::2")
++
++        self.assertEqual(
++            self.statistics.get_err_counter(ERR_NO_TUNNEL_PUNT % 6),
++            punted + N_PACKETS,
++        )
++        self.assertEqual(self.statistics.get_err_counter(ERR_NO_TUNNEL % 6), dropped)
++
++
++class TestIPIPNoTunnelDropDefault(VppTestCase):
++    """Verify that without 'ipip { punt-no-tunnel }' a locally destined
++    IPinIP packet that matches no tunnel is still dropped, even though punt
++    redirect is configured."""
++
++    @classmethod
++    def setUpClass(cls):
++        super(TestIPIPNoTunnelDropDefault, cls).setUpClass()
++        cls.create_pg_interfaces(range(2))
++        for i in cls.pg_interfaces:
++            i.admin_up()
++            i.config_ip4()
++            i.config_ip6()
++            i.resolve_arp()
++            i.resolve_ndp()
++
++    @classmethod
++    def tearDownClass(cls):
++        for i in cls.pg_interfaces:
++            i.unconfig_ip4()
++            i.unconfig_ip6()
++            i.admin_down()
++        super(TestIPIPNoTunnelDropDefault, cls).tearDownClass()
++
++    def setUp(self):
++        super(TestIPIPNoTunnelDropDefault, self).setUp()
++        ipip_punt_setup(self)
++
++    def test_ipip4_no_tunnel_drop(self):
++        """ipip4-input drops a for-us IPv4 packet matching no tunnel"""
++        dropped = self.statistics.get_err_counter(ERR_NO_TUNNEL % 4)
++
++        self.send_and_assert_no_replies(self.pg0, ipip_no_tunnel_pkts(self, False))
++
++        self.assertEqual(
++            self.statistics.get_err_counter(ERR_NO_TUNNEL % 4), dropped + N_PACKETS
++        )
++        self.assertEqual(self.statistics.get_err_counter(ERR_NO_TUNNEL_PUNT % 4), 0)
++
++    def test_ipip6_no_tunnel_drop(self):
++        """ipip6-input drops a for-us IPv6 packet matching no tunnel"""
++        dropped = self.statistics.get_err_counter(ERR_NO_TUNNEL % 6)
++
++        self.send_and_assert_no_replies(self.pg0, ipip_no_tunnel_pkts(self, True))
++
++        self.assertEqual(
++            self.statistics.get_err_counter(ERR_NO_TUNNEL % 6), dropped + N_PACKETS
++        )
++        self.assertEqual(self.statistics.get_err_counter(ERR_NO_TUNNEL_PUNT % 6), 0)
++
++
+ if __name__ == "__main__":
+     unittest.main(testRunner=VppTestRunner)
+-- 
+2.43.0
+

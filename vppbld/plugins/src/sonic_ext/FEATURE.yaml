@@ -4,12 +4,13 @@ features:
   - punt-via-member: redirect punted unicast/ARP over aggregated interface (BVI, Bond) to the original member tap
   - host-xc: bypass ethernet-input for packets injected from the linux-cp host tap
   - nd-punt: send IPv6 Neighbor Discovery (RS/RA/NS/NA) to the linux-cp host tap instead of VPP's ND handlers, as ARP is
-  - copp-ifout: per-ethertype CoPP rate policing of punted traffic (ARP/LACP/LLDP/UDLD/TTL_ERROR) at linux-cp TAP egress
+  - copp-ifout: CoPP rate policing of punted traffic (ARP/LACP/LLDP/UDLD/TTL_ERROR/NEIGHBOR_MISS) at linux-cp TAP egress
   - copp-ip2me: CoPP identifier IP2ME/SNMP/SSH traffic on the ip4-punt arc
   - copp-udld: CoPP identifier for UDLD via real LLC/SNAP dispatch
   - l2-trap-learn: learn the source MAC of a bridged frame trapped to the CPU by an l2-input-classify session, as an ASIC does
   - iface-loopback: drop and count routed hairpin packets (RIF loopback packet action) whose egress interface equals their ingress interface
   - macsec: IEEE 802.1AE SecY (GCM-AES-128 encrypt/decrypt) programmable by SAIVPP
+  - drop-reason-stats: count drops per SAI drop reason and wire ingress port in /sonic-ext/drop-reason/<REASON>, backing SAI configurable (debug) drop counters
 description: "VPP extensions for SONiC features"
 state: experimental
 properties: [API, CLI]

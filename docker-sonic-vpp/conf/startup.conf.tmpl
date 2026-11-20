@@ -74,6 +74,10 @@ ip {
 	no-local-src-check
 }
 
+ipip {
+	punt-no-tunnel
+}
+
 ip6 {
 	heap-size 128M
 }
@@ -286,12 +290,15 @@ plugins {
 ## restart.  Each keyword takes on|off.
 ##
 ## VPP-wired: punt-via-member, host-xc, drop-member-stats, nd-punt,
-## copp.  A disabled feature's node is never attached to its feature arc.
-## sonic-ext-capture has no keyword -- it produces the per-buffer cookie that
-## punt-via-member and drop-member-stats consume, so it follows them.  nd-punt
-## has no node: it hands IPv6 ND (RS/RA/NS/NA) to the kernel, as ARP already
-## is, so VPP neither answers ND nor learns neighbors from it; off leaves ND to
-## VPP.
+## copp, drop-reason-stats.  A disabled feature's node is never attached to
+## its feature arc.  sonic-ext-capture has no keyword -- it produces the
+## per-buffer cookie that punt-via-member, drop-member-stats and
+## drop-reason-stats consume, so it follows them.  nd-punt has no node: it
+## hands IPv6 ND (RS/RA/NS/NA) to the kernel, as ARP already is, so VPP neither
+## answers ND nor learns neighbors from it; off leaves ND to VPP.
+## drop-reason-stats counts drops per SAI drop reason for configurable drop
+## counters; saivpp also asks for it, and advertises no drop reasons when it
+## is off.
 ##
 ## saivpp-wired: ip2me, l2-trap-fixup, l2-trap-learn, l2-vlan-filter, macsec.
 ## VPP only stores these and answers sonic_ext_feature_get(); saivpp asks before
@@ -308,11 +315,23 @@ plugins {
     # drop-member-stats off
     # nd-punt off
     # copp off
+    # drop-reason-stats off
     # ip2me off
     # l2-trap-fixup off
     # l2-trap-learn off
     # l2-vlan-filter off
     # macsec off
+# }
+
+## ip_validate plugin feature selection.
+## link-local-drop: drop IPv4 packets whose source or destination is in
+## 169.254.0.0/16.
+##
+## Generated at runtime by vpp_init.sh from $IP_VALIDATE_CONFIG, which is given
+## as comma-separated key=value pairs -- IP_VALIDATE_CONFIG=link-local-drop=off
+## -- and which a platform sets in /etc/sonic/vpp/syncd_vpp_env.
+# ip-validate {
+    # link-local-drop off
 # }
 
 ## Statistics Segment

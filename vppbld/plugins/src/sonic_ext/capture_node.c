@@ -112,6 +112,7 @@ VLIB_NODE_FN (sonic_ext_capture_node)
       }
 
       seb->magic = SONIC_EXT_BUFFER_MAGIC;
+      b[0]->flags |= SONIC_EXT_BUFFER_F_CAPTURED;
       n_captured++;
 
       if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
@@ -135,6 +136,24 @@ VLIB_NODE_FN (sonic_ext_capture_node)
   sem->captures += n_captured;
 
   return frame->n_vectors;
+}
+
+/*
+ * Binary-direct API for other plugins, resolved via
+ * vlib_get_plugin_symbol ("sonic_ext_plugin.so",
+ * "sonic_ext_buffer_orig_rx_sw_if_index") -- sflow's drop monitor uses it
+ * to report a discard against the port the packet arrived on, whatever
+ * bond-input, ethernet-input or l2-input has since rewritten the RX
+ * sw_if_index to.  Returns ~0 unless sonic-ext-capture ran on this very
+ * packet.  Must stay __clib_export: this plugin is built with hidden
+ * visibility.
+ */
+__clib_export u32
+sonic_ext_buffer_orig_rx_sw_if_index (vlib_buffer_t *b)
+{
+  sonic_ext_buffer_opaque_t *seb = sonic_ext_buffer_captured (b);
+
+  return seb ? seb->orig_rx_sw_if_index : ~0;
 }
 
 VLIB_REGISTER_NODE (sonic_ext_capture_node) = {
