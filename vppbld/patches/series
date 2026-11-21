@@ -126,3 +126,5 @@
 #       (sflow_drop_policer_set API / "sflow drop-monitoring policer"); vpplib
 #       binds the VPP policer of the SONiC drop_monitor_limit SAI policer.
 0028-sflow-switch-wide-drop-monitoring-for-sonic.patch
+# Publish the front-panel TAP after its cold-start MTU and admin state are set.
+0029-linux-cp-publish-initially-down-taps-after-setup.patch
