@@ -62,6 +62,7 @@ class SonicExtAllFeaturesBase(VppTestCase):
         "pbh": "saivpp",
         "iface-loopback": "saivpp",
         "macsec": "saivpp",
+        "tunnel-encap-ttl": "saivpp",
     }
 
     def show_features(self):
