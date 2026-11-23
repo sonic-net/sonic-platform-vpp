@@ -295,8 +295,6 @@ typedef enum
   _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)              \
   _ (MACSEC, macsec, "macsec", 1, SAIVPP)             \
   _ (DROP_REASON_STATS, drop_reason_stats, "drop-reason-stats", 1, VPP)       \
-  _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)             \
-  _ (DROP_REASON_STATS, drop_reason_stats, "drop-reason-stats", 1, VPP)       \
   _ (TUNNEL_ENCAP_TTL, tunnel_encap_ttl, "tunnel-encap-ttl", 1, SAIVPP)
 
 /* Router-interface loopback (hairpin) packet action values, carried in the
