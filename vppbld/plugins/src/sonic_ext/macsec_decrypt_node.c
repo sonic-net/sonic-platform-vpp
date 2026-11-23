@@ -153,7 +153,6 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	{
 	  next0 = SONIC_EXT_MACSEC_DECRYPT_NEXT_DROP;
 	  b[0]->error = node->errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_NOT_USING_SA];
-	  n_errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_NOT_USING_SA]++;
 	  clib_atomic_fetch_add (&port->in_pkts_not_using_sa, 1);
 	  dropped = 1;
 	  goto done0;
@@ -165,7 +164,6 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	{
 	  next0 = SONIC_EXT_MACSEC_DECRYPT_NEXT_DROP;
 	  b[0]->error = node->errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_SHORT];
-	  n_errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_SHORT]++;
 	  dropped = 1;
 	  goto done0;
 	}
@@ -180,7 +178,6 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	{
 	  next0 = SONIC_EXT_MACSEC_DECRYPT_NEXT_DROP;
 	  b[0]->error = node->errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_SHORT];
-	  n_errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_SHORT]++;
 	  dropped = 1;
 	  goto done0;
 	}
@@ -207,7 +204,6 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	{
 	  next0 = SONIC_EXT_MACSEC_DECRYPT_NEXT_DROP;
 	  b[0]->error = node->errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_NO_SCI];
-	  n_errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_NO_SCI]++;
 	  clib_atomic_fetch_add (&port->in_pkts_no_sci, 1);
 	  dropped = 1;
 	  goto done0;
@@ -219,7 +215,6 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	{
 	  next0 = SONIC_EXT_MACSEC_DECRYPT_NEXT_DROP;
 	  b[0]->error = node->errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_NO_SA];
-	  n_errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_NO_SA]++;
 	  dropped = 1;
 	  goto done0;
 	}
@@ -232,7 +227,6 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	{
 	  next0 = SONIC_EXT_MACSEC_DECRYPT_NEXT_DROP;
 	  b[0]->error = node->errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_LATE];
-	  n_errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_LATE]++;
 	  sonic_ext_macsec_sa_inc (thread_index, sa_index,
 				   SONIC_EXT_MACSEC_STAT_IN_PKTS_LATE, 1);
 	  dropped = 1;
@@ -280,7 +274,6 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	    {
 	      next0 = SONIC_EXT_MACSEC_DECRYPT_NEXT_DROP;
 	      b[0]->error = node->errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_CHAINED];
-	      n_errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_CHAINED]++;
 	      dropped = 1;
 	      goto done0;
 	    }
@@ -300,7 +293,6 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	    {
 	      next0 = SONIC_EXT_MACSEC_DECRYPT_NEXT_DROP;
 	      b[0]->error = node->errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_CHAINED];
-	      n_errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_CHAINED]++;
 	      dropped = 1;
 	      goto done0;
 	    }
@@ -364,7 +356,6 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	{
 	  nexts[slot] = SONIC_EXT_MACSEC_DECRYPT_NEXT_DROP;
 	  b0->error = node->errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_NOT_VALID];
-	  n_errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_NOT_VALID]++;
 	  sonic_ext_macsec_sa_inc (thread_index, sa_idx,
 				   SONIC_EXT_MACSEC_STAT_IN_PKTS_NOT_VALID, 1);
 	  continue;
@@ -377,7 +368,6 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	{
 	  nexts[slot] = SONIC_EXT_MACSEC_DECRYPT_NEXT_DROP;
 	  b0->error = node->errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_CHAINED];
-	  n_errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_CHAINED]++;
 	  continue;
 	}
 
@@ -406,6 +396,7 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 
   vlib_buffer_enqueue_to_next (vm, node, from, nexts, frame->n_vectors);
 
+  /* DROP paths set b->error; error-drop counts them. */
   for (i = 0; i < SONIC_EXT_MACSEC_DECRYPT_N_ERROR; i++)
     if (n_errors[i])
       vlib_node_increment_counter (vm, sonic_ext_macsec_decrypt_node.index, i,
