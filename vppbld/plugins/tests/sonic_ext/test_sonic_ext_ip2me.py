@@ -27,6 +27,7 @@ from scapy.layers.inet6 import (
     ICMPv6NDOptSrcLLAddr,
 )
 from scapy.layers.l2 import Ether
+from scapy.packet import Raw
 from scapy.utils6 import in6_getnsma, in6_getnsmac
 
 ND_BYPASSED = "/err/sonic-ext-ip2me-ip6/IPv6 ND frames bypassed the ACL"
@@ -195,6 +196,7 @@ class TestSonicExtIp2meNd(VppTestCase):
         self.enable_ip2me()
         bvi_mac, bvi_ll = self.bvi.local_mac, self.bvi.local_ip6_ll
         ns_mac, ns_ip = self.solicited_node(self.bvi.local_ip6)
+        ns = ICMPv6ND_NS(tgt=self.bvi.local_ip6, cksum=0)
         pkts = [
             # The switch answers this ping if it gets past the ACL.
             Ether(src=self.host_mac, dst=bvi_mac)
@@ -208,6 +210,14 @@ class TestSonicExtIp2meNd(VppTestCase):
             / IPv6(src=self.host_ip, dst=bvi_ll, hlim=255)
             / ICMPv6ND_NA(code=1, tgt=self.host_ip, R=0, S=1, O=1)
             / ICMPv6NDOptDstLLAddr(lladdr=self.host_mac),
+            # An NS cut off before its target address
+            Ether(src=self.host_mac, dst=ns_mac)
+            / IPv6(src=self.host_ip, dst=ns_ip, hlim=255, nh=58, plen=len(ns))
+            / Raw(bytes(ns)[:8]),
+            # An empty IPv6 payload, then padding that looks like an NS
+            Ether(src=self.host_mac, dst=ns_mac)
+            / IPv6(src=self.host_ip, dst=ns_ip, hlim=255, nh=58, plen=0)
+            / Raw(bytes(ns)),
             Ether(src=self.host_mac, dst="33:33:00:01:00:02")
             / IPv6(src=self.host_ll, dst="ff02::1:2")
             / UDP(sport=546, dport=547)

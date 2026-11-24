@@ -68,10 +68,11 @@
  * engine.  On a standby mux port the IPv6 deny would otherwise drop, for
  * example, the NA that answers the switch's link-local NS, and the switch
  * could not resolve the server behind that port.  Only messages that a
- * receiver accepts qualify: hop limit 255 and ICMP code 0 (RFC 4861
- * sections 6.1 and 7.1).  ICMPv6 must directly follow the IPv6 header, as
- * ND carries no extension headers in practice.  Any other packet stays
- * subject to the ACL.
+ * receiver accepts qualify (RFC 4861 sections 6.1 and 7.1): hop limit 255,
+ * ICMP code 0, and an ICMP length, taken from the IPv6 payload length,
+ * that covers the message's fixed header, which the frame must hold too.
+ * ICMPv6 must directly follow the IPv6 header, as ND carries no extension
+ * headers in practice.  Any other packet stays subject to the ACL.
  *
  * Consistency with the ACL: the L3 header offset (ethernet_buffer_header_size)
  * and the interface used for the FIB (sw_if_index[VLIB_RX]) are exactly what
@@ -190,19 +191,20 @@ sonic_ext_dst_is_local_ip6 (u32 fib_index, const ip6_address_t *dst)
 /*
  * Returns non-zero if the IPv6 packet at `ip6`, `l3_offset` bytes into the
  * buffer's current data, is an ND message that a receiver accepts (see
- * "IPv6 Neighbor Discovery" above).  A frame too short to hold the ICMPv6
- * type and code is not ND.
+ * "IPv6 Neighbor Discovery" above).  A truncated message, or Ethernet
+ * padding after a shorter IPv6 payload, is not ND.
  */
 static_always_inline int
 sonic_ext_ip6_is_nd (const vlib_buffer_t *b, const ip6_header_t *ip6,
 		     u32 l3_offset)
 {
   const icmp46_header_t *icmp = (const icmp46_header_t *) (ip6 + 1);
+  u32 l4_offset = l3_offset + sizeof (*ip6);
+  u32 fixed_len;
 
   if (ip6->protocol != IP_PROTOCOL_ICMP6 || ip6->hop_limit != 255)
     return 0;
-  if (PREDICT_FALSE (b->current_length <
-		     l3_offset + sizeof (*ip6) + sizeof (*icmp)))
+  if (PREDICT_FALSE (b->current_length < l4_offset + sizeof (*icmp)))
     return 0;
   if (icmp->code != 0)
     return 0;
@@ -210,13 +212,22 @@ sonic_ext_ip6_is_nd (const vlib_buffer_t *b, const ip6_header_t *ip6,
   switch (icmp->type)
     {
     case ICMP6_router_solicitation:
+      fixed_len = sizeof (icmp6_neighbor_discovery_header_t);
+      break;
     case ICMP6_router_advertisement:
+      fixed_len = sizeof (icmp6_router_advertisement_header_t);
+      break;
     case ICMP6_neighbor_solicitation:
     case ICMP6_neighbor_advertisement:
-      return 1;
+      fixed_len =
+	sizeof (icmp6_neighbor_solicitation_or_advertisement_header_t);
+      break;
     default:
       return 0;
     }
+
+  return clib_net_to_host_u16 (ip6->payload_length) >= fixed_len &&
+	 b->current_length >= l4_offset + fixed_len;
 }
 
 static_always_inline uword
