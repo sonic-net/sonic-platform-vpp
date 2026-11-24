@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SONiC VPP <sonic-vpp@sonic-net.github.io>
+Date: Mon, 1 Jan 2024 00:00:00 +0000
+Subject: [PATCH] snort: zero-init the hash array for gcc 14
+
+gcc 14 (Debian trixie) fails the snort plugin's x86_64_v4 march variant
+with -Werror=maybe-uninitialized: it cannot prove the AVX512 masked
+loads clib_array_mask_u32() issues over `hashes` stay within the lanes
+ip_hash_fn()/snort_enq_prepare_flow_ids() wrote (the mask guards the
+tail lanes at run time, so the read is harmless). Zero-initialize the
+array to satisfy the analysis.
+
+---
+ src/plugins/snort/enqueue.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/plugins/snort/enqueue.c b/src/plugins/snort/enqueue.c
+--- a/src/plugins/snort/enqueue.c
++++ b/src/plugins/snort/enqueue.c
+@@ -241,7 +241,9 @@ VLIB_NODE_FN (snort_enq_node)
+   u16 next_index = sa->dequeue_node_next_index;
+   daq_vpp_desc_t descs[VLIB_FRAME_SIZE];
+   void *ip_hdrs[VLIB_FRAME_SIZE];
+-  u32 hashes[VLIB_FRAME_SIZE];
++  /* Zero-init: gcc 14 -Werror=maybe-uninitialized cannot prove the AVX512
++   * masked loads in clib_array_mask_u32() stay within the written lanes. */
++  u32 hashes[VLIB_FRAME_SIZE] = {};
+   const vnet_hash_fn_t next_node_to_hash[SNORT_ENQ_N_NEXT_NODES] = {
+     [SNORT_ENQ_NEXT_IP4_INPUT] = si->ip4_hash_fn,
+     [SNORT_ENQ_NEXT_IP6_INPUT] = si->ip6_hash_fn,
