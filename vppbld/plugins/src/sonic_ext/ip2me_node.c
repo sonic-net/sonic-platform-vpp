@@ -19,6 +19,7 @@
 #include <vnet/ethernet/ethernet.h>
 #include <vnet/ip/ip4.h>
 #include <vnet/ip/ip6.h>
+#include <vnet/ip/icmp46_packet.h>
 #include <vnet/fib/ip4_fib.h>
 #include <vnet/fib/ip6_fib.h>
 #include <vnet/dpo/load_balance.h>
@@ -42,11 +43,11 @@
  *
  * Motivating case (dual-ToR mux).  MuxOrch installs an ingress drop ACL
  * scoped to the standby mux ports via SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS.
- * VPP's ACL plugin has no in-port packet-match field, so the rule
- * degrades to a port-wide "ipv4 deny 0/0 -> 0/0", which drops even the
- * ICMP mux heartbeat to the SoC loopback at l2-input.  This is the first
- * consumer, but the node is deliberately ACL-agnostic: it bypasses ANY
- * ingress drop ACL for ip2me traffic on the ports where it is enabled.
+ * The rule matches no IP field, so saivpp programs it as "ipv4 deny
+ * 0/0 -> 0/0" plus "ipv6 deny ::/0 -> ::/0" on those ports, which drops
+ * even the ICMP mux heartbeat to the SoC loopback at l2-input.  This is the
+ * first consumer, but the node is deliberately ACL-agnostic: it bypasses
+ * ANY ingress drop ACL for ip2me traffic on the ports where it is enabled.
  *
  * Fix.  Register this node on the l2-input-ip4 (and l2-input-ip6) feature
  * arc to run immediately BEFORE acl-plugin-in-ip4-l2.  For each frame we
@@ -59,16 +60,30 @@
  * Everything else falls through to the ACL via vnet_feature_next(), so
  * transit / data traffic is dropped exactly as the ACL intends.
  *
+ * IPv6 Neighbor Discovery.  The ip6 node also lets ND (RS/RA/NS/NA, the
+ * messages nd-punt hands to the host) skip the ACL, whatever the
+ * destination.  ND is mostly addressed to link-local and multicast
+ * destinations, which never resolve to a receive DPO, yet a switch must
+ * receive it: an ASIC traps it to the CPU by message type ahead of the ACL
+ * engine.  On a standby mux port the IPv6 deny would otherwise drop, for
+ * example, the NA that answers the switch's link-local NS, and the switch
+ * could not resolve the server behind that port.  Only messages that a
+ * receiver accepts qualify: hop limit 255 and ICMP code 0 (RFC 4861
+ * sections 6.1 and 7.1).  ICMPv6 must directly follow the IPv6 header, as
+ * ND carries no extension headers in practice.  Any other packet stays
+ * subject to the ACL.
+ *
  * Consistency with the ACL: the L3 header offset (ethernet_buffer_header_size)
  * and the interface used for the FIB (sw_if_index[VLIB_RX]) are exactly what
  * the sibling acl-plugin-in-ip*-l2 node uses on this same arc, so this node
  * decides ip2me on byte-for-byte the same header/interface the ACL would match.
  *
  * Scope / caveats:
- *  - Unicast only.  The lookup is a unicast-FIB lookup, so a multicast
- *    destination (e.g. IPv6 ND to a solicited-node multicast) is never
- *    treated as ip2me and still falls through to the ACL.  This matches the
- *    IPv4 control/heartbeat use case; broader IPv6 ND handling is separate.
+ *  - Unicast only, apart from ND.  The lookup is a unicast-FIB lookup, so
+ *    any other multicast destination (e.g. DHCPv6 to ff02::1:2) is never
+ *    treated as ip2me and still falls through to the ACL.
+ *  - The bypass skips only the ACL.  The frame is still L2-forwarded as
+ *    usual, so ND addressed to another host's MAC reaches that host.
  *  - Single-VRF assumption.  The FIB is selected by the ingress member
  *    port's table (fib_index_by_sw_if_index[RX]), which is the default
  *    table for a plain bridged port.  In a multi-VRF bridge-domain where the
@@ -82,6 +97,7 @@ typedef struct
   u32 fib_index;
   u8 is_ip6;
   u8 is_ip2me;
+  u8 is_nd;
 } sonic_ext_ip2me_trace_t;
 
 static u8 *
@@ -92,12 +108,15 @@ format_sonic_ext_ip2me_trace (u8 *s, va_list *args)
   sonic_ext_ip2me_trace_t *t = va_arg (*args, sonic_ext_ip2me_trace_t *);
   s = format (s, "SONIC-EXT-IP2ME: %s sw_if_index %u fib %u -> %s",
 	      t->is_ip6 ? "ip6" : "ip4", t->sw_if_index, t->fib_index,
-	      t->is_ip2me ? "IP2ME (bypass ACL)" : "passthru (to ACL)");
+	      t->is_ip2me ? "IP2ME (bypass ACL)" :
+	      t->is_nd	  ? "ND (bypass ACL)" :
+			    "passthru (to ACL)");
   return s;
 }
 
 #define foreach_sonic_ext_ip2me_error                                         \
   _ (HIT, "ip2me frames bypassed the ACL")                                    \
+  _ (ND, "IPv6 ND frames bypassed the ACL")                                   \
   _ (PASSTHRU, "frames passed through to the ACL")
 
 typedef enum
@@ -168,6 +187,38 @@ sonic_ext_dst_is_local_ip6 (u32 fib_index, const ip6_address_t *dst)
   return dpo->dpoi_type == DPO_RECEIVE;
 }
 
+/*
+ * Returns non-zero if the IPv6 packet at `ip6`, `l3_offset` bytes into the
+ * buffer's current data, is an ND message that a receiver accepts (see
+ * "IPv6 Neighbor Discovery" above).  A frame too short to hold the ICMPv6
+ * type and code is not ND.
+ */
+static_always_inline int
+sonic_ext_ip6_is_nd (const vlib_buffer_t *b, const ip6_header_t *ip6,
+		     u32 l3_offset)
+{
+  const icmp46_header_t *icmp = (const icmp46_header_t *) (ip6 + 1);
+
+  if (ip6->protocol != IP_PROTOCOL_ICMP6 || ip6->hop_limit != 255)
+    return 0;
+  if (PREDICT_FALSE (b->current_length <
+		     l3_offset + sizeof (*ip6) + sizeof (*icmp)))
+    return 0;
+  if (icmp->code != 0)
+    return 0;
+
+  switch (icmp->type)
+    {
+    case ICMP6_router_solicitation:
+    case ICMP6_router_advertisement:
+    case ICMP6_neighbor_solicitation:
+    case ICMP6_neighbor_advertisement:
+      return 1;
+    default:
+      return 0;
+    }
+}
+
 static_always_inline uword
 sonic_ext_ip2me_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 			vlib_frame_t *frame, int is_ip6)
@@ -175,7 +226,7 @@ sonic_ext_ip2me_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
   u32 n_left_from, *from;
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b;
   u16 nexts[VLIB_FRAME_SIZE], *next;
-  u32 n_ip2me = 0, n_pass = 0;
+  u32 n_ip2me = 0, n_nd = 0, n_pass = 0;
 
   from = vlib_frame_vector_args (frame);
   n_left_from = frame->n_vectors;
@@ -188,9 +239,9 @@ sonic_ext_ip2me_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
       u32 next0;
       u32 sw_if_index0 = vnet_buffer (b[0])->sw_if_index[VLIB_RX];
       u32 fib_index0;
-      u8 *l3 = vlib_buffer_get_current (b[0]) +
-	       ethernet_buffer_header_size (b[0]);
-      int is_ip2me;
+      u32 l3_offset0 = ethernet_buffer_header_size (b[0]);
+      u8 *l3 = vlib_buffer_get_current (b[0]) + l3_offset0;
+      int is_ip2me, is_nd = 0;
 
       if (is_ip6)
 	{
@@ -198,6 +249,8 @@ sonic_ext_ip2me_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	  fib_index0 =
 	    vec_elt (ip6_main.fib_index_by_sw_if_index, sw_if_index0);
 	  is_ip2me = sonic_ext_dst_is_local_ip6 (fib_index0, &ip6->dst_address);
+	  if (!is_ip2me)
+	    is_nd = sonic_ext_ip6_is_nd (b[0], ip6, l3_offset0);
 	}
       else
 	{
@@ -207,14 +260,17 @@ sonic_ext_ip2me_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	  is_ip2me = sonic_ext_dst_is_local_ip4 (fib_index0, &ip4->dst_address);
 	}
 
-      if (is_ip2me)
+      if (is_ip2me || is_nd)
 	{
-	  /* ip2me: skip the ACL (and any later l2-input-ip* feature) by
-	   * jumping to the arc-end node; the rest of the l2-input chain
+	  /* ip2me or ND: skip the ACL (and any later l2-input-ip* feature)
+	   * by jumping to the arc-end node; the rest of the l2-input chain
 	   * (vtr / learn / fwd) still runs, so the frame reaches the BVI
 	   * and ip*-local. */
 	  next0 = SONIC_EXT_IP2ME_NEXT_ARC_END;
-	  n_ip2me++;
+	  if (is_ip2me)
+	    n_ip2me++;
+	  else
+	    n_nd++;
 	}
       else
 	{
@@ -234,6 +290,7 @@ sonic_ext_ip2me_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
 	  t->fib_index = fib_index0;
 	  t->is_ip6 = (u8) is_ip6;
 	  t->is_ip2me = (u8) is_ip2me;
+	  t->is_nd = (u8) is_nd;
 	}
 
       b += 1;
@@ -246,6 +303,9 @@ sonic_ext_ip2me_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
   if (n_ip2me)
     vlib_node_increment_counter (vm, node->node_index,
 				 SONIC_EXT_IP2ME_ERROR_HIT, n_ip2me);
+  if (n_nd)
+    vlib_node_increment_counter (vm, node->node_index,
+				 SONIC_EXT_IP2ME_ERROR_ND, n_nd);
   if (n_pass)
     vlib_node_increment_counter (vm, node->node_index,
 				 SONIC_EXT_IP2ME_ERROR_PASSTHRU, n_pass);
