@@ -68,9 +68,15 @@
  * engine.  On a standby mux port the IPv6 deny would otherwise drop, for
  * example, the NA that answers the switch's link-local NS, and the switch
  * could not resolve the server behind that port.  Only messages that a
- * receiver accepts qualify (RFC 4861 sections 6.1 and 7.1): hop limit 255,
- * ICMP code 0, and an ICMP length, taken from the IPv6 payload length,
- * that covers the message's fixed header, which the frame must hold too.
+ * receiver accepts qualify, by every check of RFC 4861 sections 6.1 and
+ * 7.1 short of the ICMP checksum and the options:
+ *  - hop limit 255 and ICMP code 0;
+ *  - an ICMP length, taken from the IPv6 payload length, that covers the
+ *    message's fixed header, which the frame must hold too;
+ *  - an RA from a link-local source;
+ *  - an NS or NA target that is not multicast;
+ *  - an NS from the unspecified address only to a solicited-node group;
+ *  - an NA to a multicast group only with the Solicited flag clear.
  * ICMPv6 must directly follow the IPv6 header, as ND carries no extension
  * headers in practice.  Any other packet stays subject to the ACL.
  *
@@ -199,6 +205,8 @@ sonic_ext_ip6_is_nd (const vlib_buffer_t *b, const ip6_header_t *ip6,
 		     u32 l3_offset)
 {
   const icmp46_header_t *icmp = (const icmp46_header_t *) (ip6 + 1);
+  const icmp6_neighbor_solicitation_or_advertisement_header_t *nsna =
+    (const icmp6_neighbor_solicitation_or_advertisement_header_t *) icmp;
   u32 l4_offset = l3_offset + sizeof (*ip6);
   u32 fixed_len;
 
@@ -219,15 +227,34 @@ sonic_ext_ip6_is_nd (const vlib_buffer_t *b, const ip6_header_t *ip6,
       break;
     case ICMP6_neighbor_solicitation:
     case ICMP6_neighbor_advertisement:
-      fixed_len =
-	sizeof (icmp6_neighbor_solicitation_or_advertisement_header_t);
+      fixed_len = sizeof (*nsna);
       break;
     default:
       return 0;
     }
 
-  return clib_net_to_host_u16 (ip6->payload_length) >= fixed_len &&
-	 b->current_length >= l4_offset + fixed_len;
+  if (clib_net_to_host_u16 (ip6->payload_length) < fixed_len ||
+      b->current_length < l4_offset + fixed_len)
+    return 0;
+
+  switch (icmp->type)
+    {
+    case ICMP6_router_advertisement:
+      return ip6_address_is_link_local_unicast (&ip6->src_address);
+    case ICMP6_neighbor_solicitation:
+      if (ip6_address_is_zero (&ip6->src_address) &&
+	  !ip6_is_solicited_node_multicast_address (&ip6->dst_address))
+	return 0;
+      return !ip6_address_is_multicast (&nsna->target_address);
+    case ICMP6_neighbor_advertisement:
+      if (ip6_address_is_multicast (&ip6->dst_address) &&
+	  (nsna->advertisement_flags &
+	   clib_host_to_net_u32 (ICMP6_NEIGHBOR_ADVERTISEMENT_FLAG_SOLICITED)))
+	return 0;
+      return !ip6_address_is_multicast (&nsna->target_address);
+    default:
+      return 1;
+    }
 }
 
 static_always_inline uword

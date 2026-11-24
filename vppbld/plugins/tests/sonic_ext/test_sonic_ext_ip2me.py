@@ -164,6 +164,15 @@ class TestSonicExtIp2meNd(VppTestCase):
             / IPv6(src=self.host_ll, dst=bvi_ll, hlim=255)
             / ICMPv6ND_RA()
             / ICMPv6NDOptSrcLLAddr(lladdr=self.host_mac),
+            # An unsolicited NA to all nodes
+            Ether(src=self.host_mac, dst="33:33:00:00:00:01")
+            / IPv6(src=self.host_ip, dst="ff02::1", hlim=255)
+            / ICMPv6ND_NA(tgt=self.host_ip, R=0, S=0, O=1)
+            / ICMPv6NDOptDstLLAddr(lladdr=self.host_mac),
+            # Duplicate address detection
+            Ether(src=self.host_mac, dst=ns_mac)
+            / IPv6(src="::", dst=ns_ip, hlim=255)
+            / ICMPv6ND_NS(tgt=self.bvi.local_ip6),
         ]
 
     def test_nd_bypasses_acl(self):
@@ -218,6 +227,29 @@ class TestSonicExtIp2meNd(VppTestCase):
             Ether(src=self.host_mac, dst=ns_mac)
             / IPv6(src=self.host_ip, dst=ns_ip, hlim=255, nh=58, plen=0)
             / Raw(bytes(ns)),
+            # Multicast targets
+            Ether(src=self.host_mac, dst=ns_mac)
+            / IPv6(src=self.host_ip, dst=ns_ip, hlim=255)
+            / ICMPv6ND_NS(tgt="ff02::1")
+            / ICMPv6NDOptSrcLLAddr(lladdr=self.host_mac),
+            Ether(src=self.host_mac, dst=bvi_mac)
+            / IPv6(src=self.host_ip, dst=bvi_ll, hlim=255)
+            / ICMPv6ND_NA(tgt="ff02::1", R=0, S=1, O=1)
+            / ICMPv6NDOptDstLLAddr(lladdr=self.host_mac),
+            # An NS from the unspecified address, not to a solicited-node group
+            Ether(src=self.host_mac, dst=bvi_mac)
+            / IPv6(src="::", dst=bvi_ll, hlim=255)
+            / ICMPv6ND_NS(tgt=bvi_ll),
+            # A solicited NA to all nodes
+            Ether(src=self.host_mac, dst="33:33:00:00:00:01")
+            / IPv6(src=self.host_ip, dst="ff02::1", hlim=255)
+            / ICMPv6ND_NA(tgt=self.host_ip, R=0, S=1, O=1)
+            / ICMPv6NDOptDstLLAddr(lladdr=self.host_mac),
+            # An RA from a global address
+            Ether(src=self.host_mac, dst=bvi_mac)
+            / IPv6(src=self.host_ip, dst=bvi_ll, hlim=255)
+            / ICMPv6ND_RA()
+            / ICMPv6NDOptSrcLLAddr(lladdr=self.host_mac),
             Ether(src=self.host_mac, dst="33:33:00:01:00:02")
             / IPv6(src=self.host_ll, dst="ff02::1:2")
             / UDP(sport=546, dport=547)
