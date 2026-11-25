@@ -94,6 +94,10 @@ jobs:
     - script: |
         set -ex
         mkdir -p $(System.DefaultWorkingDirectory)/vppbld/test-logs
+        # VPP leaves live Unix-domain sockets in some failed test directories.
+        # PublishPipelineArtifact cannot archive sockets, so remove only those
+        # entries while preserving the regular diagnostic files.
+        find $(System.DefaultWorkingDirectory)/vppbld/test-logs -type s -print -delete
         ls -lR $(System.DefaultWorkingDirectory)/vppbld/test-logs || true
       displayName: "Collect failed VPP test logs"
       condition: failed()
