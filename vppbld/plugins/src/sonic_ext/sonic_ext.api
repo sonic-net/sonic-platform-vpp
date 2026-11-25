@@ -19,8 +19,8 @@ import "vnet/interface_types.api";
 /** \brief Enable / disable the "receive-DPO check before ACL" feature on
     an L2 port.  Registers sonic-ext-ip2me-ip4/ip6 on the l2-input-ip4 /
     l2-input-ip6 feature arcs, ahead of the ACL plugin, so ip2me
-    (destined-to-this-switch) traffic bypasses any ingress drop ACL that
-    would otherwise discard it.
+    (destined-to-this-switch) traffic and IPv6 Neighbor Discovery bypass
+    any ingress drop ACL that would otherwise discard them.
     @param client_index - opaque cookie to identify the sender
     @param context - sender context, to match reply w/ request
     @param sw_if_index - the L2 port to enable/disable the feature on
