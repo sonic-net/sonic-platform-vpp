@@ -1,0 +1,186 @@
+Subject: linux-cp: publish an initially down TAP after configuring it
+
+The first RTM_NEWLINK for a front-panel name lets SONiC configure the
+port and attach its team. Publishing that name in TUNSETIFF lets the
+remaining TAP setup overwrite the configured MTU/admin state, or fail
+to set the MTU once the port has a team master.
+
+For a new LCP TAP whose parent is initially down, configure the new
+netdev under a kernel-allocated name and leave it down. Rename it by
+ifindex in the target namespace after setting the MTU. It is already in
+the requested initial state; do not set it down again after publication.
+Leave TUNs, subinterfaces, initially up parents and ordinary TAP
+creation/attachment on their existing paths.
+
+diff --git a/src/plugins/tap/tap.h b/src/plugins/tap/tap.h
+--- a/src/plugins/tap/tap.h
++++ b/src/plugins/tap/tap.h
+@@ -57,6 +57,7 @@ typedef struct
+   ip6_address_t host_ip6_gw;
+   u8 host_ip6_gw_set;
+   u8 host_mtu_set;
++  u8 publish_host_if_down;
+   u32 host_mtu_size;
+ 
+   /* return */
+diff --git a/src/plugins/tap/tap.c b/src/plugins/tap/tap.c
+--- a/src/plugins/tap/tap.c
++++ b/src/plugins/tap/tap.c
+@@ -522,7 +522,13 @@ tap_create_if (vlib_main_t *vm, tap_create_if_args_t *args)
+-  if (args->host_if_name != NULL)
++  if (args->publish_host_if_down)
++    {
++      /* The kernel defaults to tap%d. Never stage under the requested name. */
++      if (!strncmp ((char *) args->host_if_name, "tap", 3))
++	clib_memcpy (ifr.ifr_name, "lcp%d", sizeof ("lcp%d"));
++    }
++  else if (args->host_if_name != NULL)
+     {
+       host_if_name = (char *) args->host_if_name;
+       clib_memcpy (ifr.ifr_name, host_if_name,
+ 		   clib_min (IFNAMSIZ, vec_len (host_if_name)));
+     }
+ 
+@@ -769,7 +775,10 @@ tap_create_if (vlib_main_t *vm, tap_create_if_args_t *args)
+-  args->error = vnet_netlink_set_link_state (tif->ifindex, 1 /* UP */);
+-  if (args->error)
++  if (!args->publish_host_if_down)
+     {
+-      args->rv = VNET_API_ERROR_NETLINK_ERROR;
+-      goto error;
++      args->error = vnet_netlink_set_link_state (tif->ifindex, 1 /* UP */);
++      if (args->error)
++	{
++	  args->rv = VNET_API_ERROR_NETLINK_ERROR;
++	  goto error;
++	}
+     }
+ 
+@@ -807,6 +816,16 @@ tap_create_if (vlib_main_t *vm, tap_create_if_args_t *args)
+ 	}
+     }
+ 
++  if (args->publish_host_if_down)
++    {
++      args->error = vnet_netlink_set_link_name (tif->ifindex, host_if_name);
++      if (args->error)
++	{
++	  args->rv = VNET_API_ERROR_NETLINK_ERROR;
++	  goto error;
++	}
++    }
++
+   /* switch back to old net namespace */
+   if (args->host_namespace)
+     {
+diff --git a/src/plugins/linux-cp/lcp_interface.c b/src/plugins/linux-cp/lcp_interface.c
+--- a/src/plugins/linux-cp/lcp_interface.c
++++ b/src/plugins/linux-cp/lcp_interface.c
+@@ -813,6 +813,7 @@ lcp_itf_pair_create (u32 phy_sw_if_index, u8 *host_if_name,
+   const vnet_sw_interface_t *sw;
+   const vnet_hw_interface_t *hw;
+   const lcp_itf_pair_t *lip;
++  u8 publish_host_if_down = 0;
+   index_t lipi;
+ 
+   lipi = lcp_itf_pair_find_by_phy (phy_sw_if_index);
+@@ -1063,6 +1064,10 @@ lcp_itf_pair_create (u32 phy_sw_if_index, u8 *host_if_name,
+       if (ns && ns[0] != 0)
+ 	args.host_namespace = ns;
+ 
++      publish_host_if_down = host_if_type == LCP_ITF_HOST_TAP &&
++			     !(sw->flags & VNET_SW_INTERFACE_FLAG_ADMIN_UP);
++      args.publish_host_if_down = publish_host_if_down;
++
+       vm = vlib_get_main ();
+       tap_create_if (vm, &args);
+       if (args.rv < 0)
+@@ -1119,6 +1124,7 @@ lcp_itf_pair_create (u32 phy_sw_if_index, u8 *host_if_name,
+ 		     format_lcp_itf_pair, lip, sw->flags, hw->flags);
+   vnet_sw_interface_admin_up (vnm, host_sw_if_index);
+-  lcp_itf_set_link_state (lip, sw->flags & VNET_SW_INTERFACE_FLAG_ADMIN_UP);
++  if (!publish_host_if_down)
++    lcp_itf_set_link_state (lip, sw->flags & VNET_SW_INTERFACE_FLAG_ADMIN_UP);
+ 
+   /*
+    * Reflect current link state and link speed of the hardware interface on the
+diff --git a/test/test_linux_cp.py b/test/test_linux_cp.py
+--- a/test/test_linux_cp.py
++++ b/test/test_linux_cp.py
+@@ -3,3 +3,6 @@
+ import unittest
+ import socket
++import subprocess
++import tempfile
++from contextlib import ExitStack, contextmanager
+ from ipaddress import ip_address, ip_interface
+@@ -1470,3 +1473,69 @@ class TestLinuxCPPairManagement(TestLinuxCPNetNSBase):
++    @contextmanager
++    def _tap_pair(self, name, mtu, *, parent_up=False):
++        with ExitStack() as cleanup:
++            (parent,) = self.create_loopback_interfaces(1)
++            cleanup.callback(parent.remove_vpp_config)
++            parent.set_l3_mtu(mtu)
++            if parent_up:
++                parent.admin_up()
++            self.vapi.cli(
++                f"lcp create {parent.name} host-if {name} netns {self.ns_name}"
++            )
++            cleanup.callback(self.vapi.cli, f"lcp delete {parent.name}")
++            yield get_interface_info(self.ns_name, name)
++
++    def _check_down_tap_publication(self, name):
++        mtu = 9000
++        with ExitStack() as cleanup:
++            trace = cleanup.enter_context(tempfile.NamedTemporaryFile(dir=self.tempdir))
++            netns = ["ip", "netns", "exec", self.ns_name]
++            monitor = cleanup.enter_context(
++                subprocess.Popen(netns + ["rtmon", "file", trace.name, "link"])
++            )
++            cleanup.callback(monitor.terminate)
++
++            def events():
++                self.assertIsNone(monitor.poll(), "rtmon exited during capture")
++                return subprocess.check_output(
++                    ["ip", "-o", "monitor", "link", "file", trace.name], text=True
++                )
++
++            # rtmon subscribes before dumping existing links. Seeing lo means
++            # even the very first notification from pair creation will be recorded.
++            self.poll_for("rtmon initial dump", lambda: ": lo: <" in events(), True)
++            with self._tap_pair(name, mtu) as link:
++                prefix = f"{link['ifindex']}: {name}: "
++                self.assertEqual(link["mtu"], mtu)
++                self.assertNotIn("UP", link["flags"])
++
++            # Deletion delimits the capture for this ifindex; a final-state
++            # query alone misses publication at the default MTU or a transient UP.
++            self.poll_for(
++                "rtmon saw TAP deletion", lambda: f"Deleted {prefix}" in events(), True
++            )
++            published = [
++                line for line in events().splitlines() if line.startswith(prefix)
++            ]
++            self.assertTrue(published, f"no link notification for {name}")
++            for event in published:
++                self.assertIn(f" mtu {mtu} ", event)
++                self.assertNotRegex(event, r"<[^>]*\bUP\b")
++
++    def test_tap_publication_down(self):
++        """The front-panel name is first visible down and at its configured MTU."""
++        self._check_down_tap_publication("Ethernet0")
++
++    def test_tap_publication_down_tap0(self):
++        """The requested name can itself be the kernel's first free TAP name."""
++        self._check_down_tap_publication("tap0")
++
++    def test_tap_publication_up(self):
++        """An initially up parent's host TAP is still brought up."""
++        mtu = 9000
++        with self._tap_pair("hup0", mtu, parent_up=True) as link:
++            self.assertIn("UP", link["flags"])
++            self.assertEqual(link["mtu"], mtu)
++
+     def test_pair_create_delete_tun(self):
+         """Create and delete TUN LCP pair on loopback"""
+         self.create_loopback_interfaces(1)
