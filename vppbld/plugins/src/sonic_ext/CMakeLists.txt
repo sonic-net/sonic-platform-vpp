@@ -13,8 +13,7 @@
 
 include_directories(${CMAKE_SOURCE_DIR})
 
-# for generated API headers (sonic_ext_copp.api.*, sonic_ext_trim.api.*,
-# sonic_ext_tunnel.api.*):
+# for generated API headers (sonic_ext_copp.api.*, sonic_ext_trim.api.*, sonic_ext_tunnel.api.*, sonic_ext_macsec.api.*):
 include_directories(${CMAKE_BINARY_DIR})
 
 add_vpp_plugin(sonic_ext
@@ -49,11 +48,17 @@ add_vpp_plugin(sonic_ext
   trim_admission_node.c
   trim_api.c
   trim_cli.c
+  macsec.c
+  macsec_api.c
+  macsec_cli.c
+  macsec_encrypt_node.c
+  macsec_decrypt_node.c
 
   API_FILES
   sonic_ext.api
   sonic_ext_copp.api
   sonic_ext_trim.api
+  sonic_ext_macsec.api
   sonic_ext_tunnel.api
 
   LINK_LIBRARIES

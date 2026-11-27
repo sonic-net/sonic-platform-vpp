@@ -62,13 +62,21 @@ $(eval $(call add_derived_package,$(VPPINFRA),$(VPP_DEV)))
 VPPDBG = vpp-dbg_$(VPP_VERSION_SONIC)_$(CONFIGURED_ARCH).deb
 $(eval $(call add_derived_package,$(VPPINFRA),$(VPPDBG)))
 
+# native_crypto_engine.so / openssl_crypto_engine.so. Not a plugin; VPP
+# auto-loads them from vpp_crypto_engines/. Required for MACsec AES-GCM.
+VPP_CRYPTO_ENGINES = vpp-crypto-engines_$(VPP_VERSION_SONIC)_$(CONFIGURED_ARCH).deb
+$(VPP_CRYPTO_ENGINES)_DEPENDS += $(VPP_MAIN)
+$(VPP_CRYPTO_ENGINES)_RDEPENDS += $(VPP_MAIN)
+$(eval $(call add_derived_package,$(VPPINFRA),$(VPP_CRYPTO_ENGINES)))
+
 # Add VPP build/runtime dependencies to sairedis packages
 ifeq ($(BLDENV),trixie)
 $(LIBSAIREDIS)_DEPENDS += $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK) \
 	$(VPP_PLUGIN_DEV) $(VPP_DEV) $(VPPINFRA_DEV) $(VPPDBG)
-$(LIBSAIVS)_RDEPENDS += $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK)
+$(LIBSAIVS)_RDEPENDS += $(VPP_MAIN) $(VPP_PLUGIN_CORE) $(VPP_PLUGIN_DPDK) \
+	$(VPP_CRYPTO_ENGINES)
 endif
 
 VPP_VERSION_FILE = vpp_$(VPP_VERSION_SONIC)_commit
 
-export VPP_MAIN VPPINFRA VPP_PLUGIN_CORE VPP_PLUGIN_DPDK VPP_PLUGIN_DEV VPP_DEV VPPINFRA_DEV VPPDBG VPP_VERSION_FILE
+export VPP_MAIN VPPINFRA VPP_PLUGIN_CORE VPP_PLUGIN_DPDK VPP_PLUGIN_DEV VPP_DEV VPPINFRA_DEV VPPDBG VPP_CRYPTO_ENGINES VPP_VERSION_FILE

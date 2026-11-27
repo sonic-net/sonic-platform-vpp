@@ -1,0 +1,132 @@
+/*
+ * Copyright (c) 2026 SONiC-VPP contributors
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at:
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/** \file
+    \brief SONiC-VPP MACsec SecY control API. SAK material is never logged.
+*/
+
+option version = "1.1.0";
+
+import "vnet/interface_types.api";
+
+/** \brief Create or destroy a MACsec SecY on one (port, direction).
+    @param sw_if_index - interface to protect
+    @param direction - 0 egress, 1 ingress
+    @param encrypt - 1 => confidentiality; stored, datapath currently always sets E=C=1
+    @param send_sci - 1 => include SCI in the SecTAG
+    @param replay_protect - 1 => drop late/duplicate XPNs on ingress
+    @param replay_window - sliding window size in packets; 0 = strict increase
+    @param is_add - true to create/enable, false to disable
+*/
+autoreply define sonic_ext_macsec_port_add_del
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u8 direction;
+  u8 encrypt;
+  u8 send_sci;
+  u8 replay_protect;
+  u32 replay_window;
+  bool is_add;
+};
+
+/** \brief Create or destroy a secure channel on a MACsec port.
+    @param sw_if_index - protected interface
+    @param direction - 0 egress, 1 ingress
+    @param sci - 8-octet SCI, network-order u64
+    @param cipher_suite - 0 GCM-AES-128, 1 GCM-AES-256, 2 XPN-128, 3 XPN-256
+    @param explicit_sci - stored; SecTAG SCI bit follows port send_sci
+    @param confidentiality_offset - must be 0
+    @param is_add - true to create, false to delete
+*/
+autoreply define sonic_ext_macsec_sc_add_del
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u8 direction;
+  u64 sci;
+  u8 cipher_suite;
+  u8 explicit_sci;
+  u8 confidentiality_offset;
+  bool is_add;
+};
+
+/** \brief Flip the egress encoding AN (rekey switchover). */
+autoreply define sonic_ext_macsec_sc_set_encoding_an
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u64 sci;
+  u8 an;
+};
+
+/** \brief Create or destroy a secure association.
+    @param sak - SAK bytes; only sak_len bytes are used. Never logged.
+    @param sak_len - 16 for GCM-AES-128/XPN-128; 32 for GCM-AES-256/XPN-256
+    @param salt - 12-byte XPN salt; unused when xpn_en is 0. Never logged.
+    @param ssci - XPN SSCI (host-order u32 on the call); unused when xpn_en is 0
+    @param xpn_en - 1 for XPN ciphers; must match cipher_suite
+    @param init_xpn - next PN; 0 is treated as 1
+    @param sa_index - VPP SA pool index on add (reply); ~0 on delete/failure
+*/
+define sonic_ext_macsec_sa_add_del
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u8 direction;
+  u64 sci;
+  u8 an;
+  u8 sak[32];
+  u8 sak_len;
+  u8 salt[12];
+  u32 ssci;
+  u8 xpn_en;
+  u64 init_xpn;
+  bool is_add;
+};
+
+define sonic_ext_macsec_sa_add_del_reply
+{
+  u32 context;
+  i32 retval;
+  u32 sa_index;
+};
+
+/** \brief Set CURRENT/configured XPN on an SA. */
+autoreply define sonic_ext_macsec_sa_set_xpn
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u8 direction;
+  u64 sci;
+  u8 an;
+  u64 xpn;
+};
+
+/** \brief Zero STAT_* simple counters for one SA. Does not change XPN. */
+autoreply define sonic_ext_macsec_sa_clear_stats
+{
+  u32 client_index;
+  u32 context;
+  vl_api_interface_index_t sw_if_index;
+  u8 direction;
+  u64 sci;
+  u8 an;
+};

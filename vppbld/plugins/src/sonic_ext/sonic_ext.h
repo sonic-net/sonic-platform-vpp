@@ -292,7 +292,8 @@ typedef enum
   _ (L2_TRAP_LEARN, l2_trap_learn, "l2-trap-learn", 1, SAIVPP)                \
   _ (L2_VLAN_FILTER, l2_vlan_filter, "l2-vlan-filter", 1, SAIVPP)             \
   _ (PBH, pbh, "pbh", 1, SAIVPP)                                              \
-  _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)             \
+  _ (IFACE_LOOPBACK, iface_loopback, "iface-loopback", 1, SAIVPP)              \
+  _ (MACSEC, macsec, "macsec", 1, SAIVPP)             \
   _ (DROP_REASON_STATS, drop_reason_stats, "drop-reason-stats", 1, VPP)       \
   _ (TUNNEL_ENCAP_TTL, tunnel_encap_ttl, "tunnel-encap-ttl", 1, SAIVPP)
 
@@ -454,6 +455,7 @@ typedef struct
   u16 copp_msg_id_base;   /* sonic_ext_copp binary API base id */
   u16 tunnel_msg_id_base; /* sonic_ext_tunnel binary API base id */
   u16 trim_msg_id_base;   /* binary API base id (setup_message_id_table) */
+  u16 macsec_msg_id_base; /* binary API base id (sonic_ext_macsec.api) */
   u8 trim_configured;     /* any global trim policy pushed yet */
 
   /* Global trim policy (SAI SWITCH_ATTR_PACKET_TRIM_*). */
@@ -619,6 +621,9 @@ clib_error_t *sonic_ext_trim_api_hookup (vlib_main_t *vm);
  * from sonic_ext_init(); sets sonic_ext_main.copp_msg_id_base. */
 clib_error_t *sonic_ext_copp_api_hookup (vlib_main_t *vm);
 
+/* Register the MACsec binary API message table.  Called from
+ * sonic_ext_init(); sets sonic_ext_main.macsec_msg_id_base. */
+clib_error_t *sonic_ext_macsec_api_hookup (vlib_main_t *vm);
 /* Register the compatibility-isolated tunnel binary API message table. Called
  * from sonic_ext_init(); sets sonic_ext_main.tunnel_msg_id_base. */
 clib_error_t *sonic_ext_tunnel_api_hookup (vlib_main_t *vm);
