@@ -11,6 +11,7 @@ features:
   - iface-loopback: drop and count routed hairpin packets (RIF loopback packet action) whose egress interface equals their ingress interface
   - drop-reason-stats: count drops per SAI drop reason and wire ingress port in /sonic-ext/drop-reason/<REASON>, backing SAI configurable (debug) drop counters
   - tunnel-encap-ttl: set a fixed, undecremented outer TTL / hop limit on the packets an L3 tunnel encapsulates (SAI pipe TTL model)
+  - isolation-group: SAI isolation groups; a frame received on an interface bound to a group is not bridged out of the group's members (MC-LAG peer-link isolation)
 description: "VPP extensions for SONiC features"
 state: experimental
 properties: [API, CLI]
