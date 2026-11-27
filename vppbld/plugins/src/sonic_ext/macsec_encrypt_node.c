@@ -263,10 +263,7 @@ VLIB_NODE_FN (sonic_ext_macsec_encrypt_node)
 	      dropped = 1;
 	      goto done0;
 	    }
-	  ops[n_enc].src = ops[n_enc].dst = ptd->scratch + scratch_used;
 	  ops[n_enc].len = secure_len;
-	  ops[n_enc].auth =
-	    ptd->scratch + scratch_used + secure_len;
 	  scratch_used += secure_len + SONIC_EXT_MACSEC_ICV_LEN;
 	}
 
@@ -300,6 +297,14 @@ VLIB_NODE_FN (sonic_ext_macsec_encrypt_node)
       next += 1;
       n_left_from -= 1;
     }
+
+  for (i = 0; i < n_enc; i++)
+    if (enc_linear[i])
+      {
+	u8 *p = ptd->scratch + enc_scratch_off[i];
+	ops[i].src = ops[i].dst = p;
+	ops[i].auth = p + ops[i].len;
+      }
 
   if (n_enc)
     vnet_crypto_process_ops (vm, ops, ptd->chunks, n_enc);

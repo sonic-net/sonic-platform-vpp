@@ -642,6 +642,36 @@ class TestSonicExtMacsec(SonicExtMacsecBase):
         self.assertRegex(sa_out, r"in-late 1")
 
     @unittest.skipUnless(HAVE_GCM, "no AES-GCM library to build replay frames")
+    def test_replay_duplicate_same_frame(self):
+        """two copies of the same PN in one vector: one ok, one late"""
+        pkt = self.data_pkt()
+        protected = macsec_protect(
+            raw(pkt), TEST_SAK, TEST_SCI, an=0, pn=1, send_sci=True
+        )
+        wire = self.wire_pkt(protected)
+        self.add_secy(
+            self.pg0.sw_if_index,
+            DIR_INGRESS,
+            replay_protect=1,
+            replay_window=0,
+        )
+        before = self.statistics.get_err_counter(
+            "/err/sonic-ext-macsec-decrypt/dropped: replay late"
+        )
+        rx = self.send_and_expect(self.pg0, [wire, wire], self.pg1, n_rx=1)
+        self.assertEqual(len(rx), 1)
+        self.assertEqual(raw(rx[0])[: len(raw(pkt))], raw(pkt))
+        self.assertEqual(
+            self.statistics.get_err_counter(
+                "/err/sonic-ext-macsec-decrypt/dropped: replay late"
+            ),
+            before + 1,
+        )
+        sa_out = self.vapi.cli("show macsec sa")
+        self.assertRegex(sa_out, r"in-late 1")
+        self.assertRegex(sa_out, r"in-ok 1")
+
+    @unittest.skipUnless(HAVE_GCM, "no AES-GCM library to build replay frames")
     def test_replay_forward_jump_and_window(self):
         """large forward PN jumps are accepted; out-of-window PNs are late"""
         pkt = self.data_pkt()
@@ -908,6 +938,25 @@ class TestSonicExtMacsec(SonicExtMacsecBase):
         )
         self.assertRegex(self.vapi.cli("show macsec sa"), r"out-enc 1")
 
+    def test_encrypt_two_jumbos_one_frame(self):
+        """two chained payloads in one vector still encrypt (scratch may grow)"""
+        self.add_secy(self.pg1.sw_if_index, DIR_EGRESS)
+        pkts = [self.jumbo_pkt(), self.jumbo_pkt()]
+        before = self.statistics.get_err_counter(
+            "/err/sonic-ext-macsec-encrypt/dropped: chained buffer"
+        )
+        rx = self.send_and_expect(self.pg0, pkts, self.pg1)
+        self.assertEqual(len(rx), 2)
+        for got in rx:
+            self.assertEqual(int.from_bytes(raw(got)[12:14], "big"), MACSEC_ETHERTYPE)
+        self.assertEqual(
+            self.statistics.get_err_counter(
+                "/err/sonic-ext-macsec-encrypt/dropped: chained buffer"
+            ),
+            before,
+        )
+        self.assertRegex(self.vapi.cli("show macsec sa"), r"out-enc 2")
+
     @unittest.skipUnless(HAVE_GCM, "no AES-GCM library to build a jumbo MACsec frame")
     def test_decrypt_jumbo_chained(self):
         """chained ciphertext decrypts instead of hitting the CHAINED drop"""
@@ -927,6 +976,55 @@ class TestSonicExtMacsec(SonicExtMacsecBase):
             ),
             before,
         )
+
+    @unittest.skipUnless(HAVE_GCM, "no AES-GCM library to build jumbo MACsec frames")
+    def test_decrypt_two_jumbos_one_frame(self):
+        """two chained ciphertexts in one vector still decrypt (scratch may grow)"""
+        pkt = self.jumbo_pkt()
+        frames = [
+            self.wire_pkt(
+                macsec_protect(raw(pkt), TEST_SAK, TEST_SCI, an=0, pn=pn, send_sci=True)
+            )
+            for pn in (1, 2)
+        ]
+        self.add_secy(self.pg0.sw_if_index, DIR_INGRESS)
+        before = self.statistics.get_err_counter(
+            "/err/sonic-ext-macsec-decrypt/dropped: chained buffer"
+        )
+        rx = self.send_and_expect(self.pg0, frames, self.pg1)
+        self.assertEqual(len(rx), 2)
+        for got in rx:
+            self.assertEqual(raw(got)[: len(raw(pkt))], raw(pkt))
+        self.assertEqual(
+            self.statistics.get_err_counter(
+                "/err/sonic-ext-macsec-decrypt/dropped: chained buffer"
+            ),
+            before,
+        )
+
+    def _l3_mtu(self, sw_if_index):
+        return next(
+            i.mtu[0]
+            for i in self.vapi.sw_interface_dump(sw_if_index=sw_if_index)
+            if i.sw_if_index == sw_if_index
+        )
+
+    def test_port_readd_restores_mtu(self):
+        """re-adding a port does not leak the MTU adjustment"""
+        sw = self.pg1.sw_if_index
+        orig = self._l3_mtu(sw)
+        args = dict(
+            sw_if_index=sw,
+            direction=DIR_EGRESS,
+            encrypt=1,
+            send_sci=1,
+            replay_protect=0,
+            replay_window=0,
+        )
+        self.vapi.sonic_ext_macsec_port_add_del(**args, is_add=True)
+        self.vapi.sonic_ext_macsec_port_add_del(**args, is_add=True)
+        self.vapi.sonic_ext_macsec_port_add_del(**args, is_add=False)
+        self.assertEqual(self._l3_mtu(sw), orig)
 
 
 if __name__ == "__main__":

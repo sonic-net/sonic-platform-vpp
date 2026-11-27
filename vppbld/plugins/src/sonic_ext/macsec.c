@@ -146,10 +146,7 @@ sonic_ext_macsec_clear_stats_all (void)
 sonic_ext_macsec_per_thread_t *
 sonic_ext_macsec_get_pt (vlib_main_t *vm)
 {
-  sonic_ext_macsec_main_t *mm = &sonic_ext_macsec_main;
-
-  vec_validate (mm->pt, vm->thread_index);
-  return vec_elt_at_index (mm->pt, vm->thread_index);
+  return vec_elt_at_index (sonic_ext_macsec_main.pt, vm->thread_index);
 }
 
 int
@@ -388,24 +385,26 @@ sonic_ext_macsec_sc_hash_unset (sonic_ext_macsec_sc_t *sc)
 }
 
 static int
-sonic_ext_macsec_mtu_adjust (u32 sw_if_index, int enable)
+sonic_ext_macsec_mtu_adjust (u32 sw_if_index, u8 direction, int enable)
 {
   sonic_ext_macsec_main_t *mm = &sonic_ext_macsec_main;
   vnet_main_t *vnm = vnet_get_main ();
   vnet_hw_interface_t *hw;
   vnet_sw_interface_t *si;
   clib_error_t *err;
-  u8 ref;
+  u8 old, new;
 
-  vec_validate (mm->mtu_refcount, sw_if_index);
+  vec_validate (mm->mtu_dirs, sw_if_index);
   vec_validate (mm->saved_mtu, sw_if_index);
   vec_validate (mm->mtu_is_hw, sw_if_index);
 
-  if (enable)
-    {
-      if (mm->mtu_refcount[sw_if_index]++)
-	return 0;
+  old = mm->mtu_dirs[sw_if_index];
+  new = enable ? (old | (u8) (1U << direction)) :
+		       (old & (u8) ~(1U << direction));
+  mm->mtu_dirs[sw_if_index] = new;
 
+  if (!old && new)
+    {
       hw = vnet_get_sup_hw_interface (vnm, sw_if_index);
       si = vnet_get_sw_interface (vnm, sw_if_index);
       err = vnet_hw_interface_set_max_frame_size (
@@ -424,26 +423,20 @@ sonic_ext_macsec_mtu_adjust (u32 sw_if_index, int enable)
 	  mm->saved_mtu[sw_if_index] = hw->max_frame_size - SONIC_EXT_MACSEC_MTU_OVERHEAD;
 	  mm->mtu_is_hw[sw_if_index] = 1;
 	}
-      return 0;
     }
-
-  ref = mm->mtu_refcount[sw_if_index];
-  if (ref == 0)
-    return 0;
-  mm->mtu_refcount[sw_if_index] = ref - 1;
-  if (ref > 1)
-    return 0;
-
-  if (mm->mtu_is_hw[sw_if_index])
+  else if (old && !new)
     {
-      hw = vnet_get_sup_hw_interface (vnm, sw_if_index);
-      err = vnet_hw_interface_set_max_frame_size (vnm, hw->hw_if_index,
-						  mm->saved_mtu[sw_if_index]);
-      if (err)
-	clib_error_free (err);
+      if (mm->mtu_is_hw[sw_if_index])
+	{
+	  hw = vnet_get_sup_hw_interface (vnm, sw_if_index);
+	  err = vnet_hw_interface_set_max_frame_size (vnm, hw->hw_if_index,
+						      mm->saved_mtu[sw_if_index]);
+	  if (err)
+	    clib_error_free (err);
+	}
+      else
+	vnet_sw_interface_set_mtu (vnm, sw_if_index, mm->saved_mtu[sw_if_index]);
     }
-  else
-    vnet_sw_interface_set_mtu (vnm, sw_if_index, mm->saved_mtu[sw_if_index]);
 
   return 0;
 }
@@ -548,7 +541,7 @@ sonic_ext_macsec_port_add_del (u32 sw_if_index, u8 direction, u8 encrypt,
 	  port->enabled = 0;
 	  return rv;
 	}
-      sonic_ext_macsec_mtu_adjust (sw_if_index, 1);
+      sonic_ext_macsec_mtu_adjust (sw_if_index, direction, 1);
       return 0;
     }
 
@@ -561,7 +554,7 @@ sonic_ext_macsec_port_add_del (u32 sw_if_index, u8 direction, u8 encrypt,
 
   rv = sonic_ext_macsec_feature_latch (port, 0);
   port->enabled = 0;
-  sonic_ext_macsec_mtu_adjust (sw_if_index, 0);
+  sonic_ext_macsec_mtu_adjust (sw_if_index, direction, 0);
   return rv;
 }
 
@@ -781,3 +774,18 @@ sonic_ext_macsec_init (vlib_main_t *vm)
 }
 
 VLIB_INIT_FUNCTION (sonic_ext_macsec_init);
+
+static clib_error_t *
+sonic_ext_macsec_main_loop_enter (vlib_main_t *vm)
+{
+  vlib_thread_main_t *tm = &vlib_thread_main;
+  u32 n = tm->n_vlib_mains;
+
+  (void) vm;
+  /* Workers exist only after main-loop enter; init-function time is too early. */
+  if (n)
+    vec_validate (sonic_ext_macsec_main.pt, n - 1);
+  return 0;
+}
+
+VLIB_MAIN_LOOP_ENTER_FUNCTION (sonic_ext_macsec_main_loop_enter);

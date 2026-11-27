@@ -296,10 +296,7 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	      dropped = 1;
 	      goto done0;
 	    }
-	  ops[n_dec].src = ops[n_dec].dst = ptd->scratch + scratch_used;
 	  ops[n_dec].len = secure_len;
-	  ops[n_dec].auth =
-	    ptd->scratch + scratch_used + secure_len;
 	  scratch_used += secure_len + SONIC_EXT_MACSEC_ICV_LEN;
 	}
 
@@ -336,6 +333,14 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
       n_left_from -= 1;
     }
 
+  for (i = 0; i < n_dec; i++)
+    if (dec_linear[i])
+      {
+	u8 *p = ptd->scratch + dec_scratch_off[i];
+	ops[i].src = ops[i].dst = p;
+	ops[i].auth = p + ops[i].len;
+      }
+
   if (n_dec)
     vnet_crypto_process_ops (vm, ops, ptd->chunks, n_dec);
 
@@ -371,13 +376,24 @@ VLIB_NODE_FN (sonic_ext_macsec_decrypt_node)
 	  continue;
 	}
 
+      port = sonic_ext_macsec_port_get (vnet_buffer (b0)->sw_if_index[VLIB_RX],
+				       SONIC_EXT_MACSEC_INGRESS);
+      if (PREDICT_FALSE (port && port->replay_protect &&
+			 sonic_ext_macsec_replay_is_late (
+			   sa, xpn, port->replay_window)))
+	{
+	  nexts[slot] = SONIC_EXT_MACSEC_DECRYPT_NEXT_DROP;
+	  b0->error = node->errors[SONIC_EXT_MACSEC_DECRYPT_ERROR_LATE];
+	  sonic_ext_macsec_sa_inc (thread_index, sa_idx,
+				   SONIC_EXT_MACSEC_STAT_IN_PKTS_LATE, 1);
+	  continue;
+	}
+
       p = vlib_buffer_get_current (b0);
       clib_memmove (p + sectag_len, p, 12);
       vlib_buffer_advance (b0, sectag_len);
       sonic_ext_macsec_chain_trim_end (vm, b0, SONIC_EXT_MACSEC_ICV_LEN);
 
-      port = sonic_ext_macsec_port_get (vnet_buffer (b0)->sw_if_index[VLIB_RX],
-				       SONIC_EXT_MACSEC_INGRESS);
       sonic_ext_macsec_replay_advance (
 	sa, xpn, port ? port->replay_window : 0);
       if (xpn + 1 > sa->next_xpn)

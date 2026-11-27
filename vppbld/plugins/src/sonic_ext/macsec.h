@@ -131,7 +131,8 @@ typedef struct
   sonic_ext_macsec_sc_t *scs;
   sonic_ext_macsec_sa_t *sas;
   uword *sc_by_key;
-  u8 *mtu_refcount;
+  /* bit 0 = egress, bit 1 = ingress: raise MTU on 0->nonzero, restore on last. */
+  u8 *mtu_dirs;
   u32 *saved_mtu;
   u8 *mtu_is_hw;
   u8 no_handler_logged;
